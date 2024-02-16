@@ -1,0 +1,34 @@
+[System]
+Name='blade_control_paper'
+Type='mamdani'
+Version=2.0
+NumInputs=1
+NumOutputs=1
+NumRules=3
+AndMethod='min'
+OrMethod='max'
+ImpMethod='min'
+AggMethod='max'
+DefuzzMethod='centroid'
+
+[Input1]
+Name='soil_thickness'
+Range=[0 1]
+NumMFs=3
+MF1='compact':'trapmf',[0 0 0.2 0.4]
+MF2='loose':'trapmf',[0.6 0.8 1 1]
+MF3='mixed':'trapmf',[0.2 0.4 0.6 0.8]
+
+[Output1]
+Name='blade_height'
+Range=[-0.33 0.33]
+NumMFs=4
+MF1='low':'trimf',[-0.23 -0.21 -0.19]
+MF2='lower':'trimf',[-0.27 -0.25 -0.23]
+MF3='lowest':'trimf',[-0.33 -0.31 -0.29]
+MF4='raised':'trimf',[-0.02 0 0.02]
+
+[Rules]
+1, 1 (1) : 1
+3, 2 (1) : 1
+2, 3 (1) : 1

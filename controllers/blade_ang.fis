@@ -1,0 +1,71 @@
+[System]
+Name='blade_ang'
+Type='mamdani'
+Version=2.0
+NumInputs=3
+NumOutputs=3
+NumRules=9
+AndMethod='min'
+OrMethod='max'
+ImpMethod='min'
+AggMethod='max'
+DefuzzMethod='centroid'
+
+[Input1]
+Name='yaw_error'
+Range=[-3.14159265358979 3.14159265358979]
+NumMFs=3
+MF1='neg':'trapmf',[-3.142 -3.142 -0.1 -0.01]
+MF2='zero':'trapmf',[-0.1 -0.01 0.01 0.1]
+MF3='pos':'trapmf',[0.01 0.1 3.142 3.142]
+
+[Input2]
+Name='pitch_error'
+Range=[-3.142 3.142]
+NumMFs=3
+MF1='neg':'trapmf',[-3.142 -3.142 -0.1 -0.01]
+MF2='zero':'trapmf',[-0.1 -0.01 0.01 0.1]
+MF3='pos':'trapmf',[0.01 0.1 3.142 3.142]
+
+[Input3]
+Name='roll_error'
+Range=[-3.142 3.142]
+NumMFs=3
+MF1='neg':'trapmf',[-3.142 -3.142 -0.1 -0.01]
+MF2='zero':'trapmf',[-0.1 -0.01 0.01 0.1]
+MF3='pos':'trapmf',[0.01 0.1 3.142 3.142]
+
+[Output1]
+Name='yaw_vel'
+Range=[-1.1 1.1]
+NumMFs=3
+MF1='down':'trimf',[-1.1 -1 -0.9]
+MF2='none':'trimf',[-0.1 0 0.1]
+MF3='up':'trimf',[0.9 1 1.1]
+
+[Output2]
+Name='pitch_vel'
+Range=[-1.1 1.1]
+NumMFs=3
+MF1='down':'trimf',[-1.1 -1 -0.9]
+MF2='none':'trimf',[-0.1 0 0.1]
+MF3='up':'trimf',[0.9 1 1.1]
+
+[Output3]
+Name='roll_vel'
+Range=[-1.1 1.1]
+NumMFs=3
+MF1='down':'trimf',[-1.1 -1 -0.9]
+MF2='none':'trimf',[-0.1 0 0.1]
+MF3='up':'trimf',[0.9 1 1.1]
+
+[Rules]
+1 0 0, 3 0 0 (1) : 1
+2 0 0, 2 0 0 (1) : 1
+3 0 0, 1 0 0 (1) : 1
+0 1 0, 0 3 0 (1) : 1
+0 2 0, 0 2 0 (1) : 1
+0 3 0, 0 1 0 (1) : 1
+0 0 1, 0 0 3 (1) : 1
+0 0 2, 0 0 2 (1) : 1
+0 0 3, 0 0 1 (1) : 1
