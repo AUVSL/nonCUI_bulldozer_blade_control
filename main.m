@@ -10,6 +10,9 @@ run("parameters.m") % run file with params
 des_yaw_mult = 0; % 0 or 1 prefered
 desired_pitch = 0.35;
 desired_roll = 0;
+bool_a = 0;
+bool_b = 1;
+bool_g = 0;
 
 % the set of inputs to the simulation
 padding = 0;       % padding since simulink drops the first value of input matrices
@@ -21,7 +24,8 @@ tau     = [80000; 80000]; % drive wheel torques for the left and right tracks
 bld_ang = [0; 0; 0]; % angle of blade about it local x, y, and z-axis
 
 % store the simulation inputs in a single array since the simulink simin
-% block only accepts a single variable
+% block only accepts a single variable, padded needed because MATLAB
+% deletes the first index for simIn blocks
 simin = [padding, tau(1), tau(2), q_dot(1), q_dot(2), q_dot(3), ...
     q_dot(4), q_dot(5), q_dot(6), q(1), q(2), q(3), q(4), q(5), ...
     q(6), x_ICR, v(1), v(2), bld_ang(1), bld_ang(2), bld_ang(3)];
@@ -40,4 +44,4 @@ initial_q = q;
 out = sim('simulation_3d').output.data;
 
 % plot errors
-plots(0, 1, 0, out);
+plots(bool_a, bool_b, bool_g, out);
