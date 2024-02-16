@@ -54,15 +54,15 @@ yaw_error   = reshape(yaw_error,   length(yaw_error)   ,1);
 pitch_error = reshape(pitch_error, length(pitch_error) ,1);
 roll_error  = reshape(roll_error,  length(roll_error)  ,1);
 
-plot(time, yaw_error, 'Color', [0 0 0], 'LineWidth', 2);
-xlabel('Time (s)'); ylabel('Yaw Error (rad)');
-[a_rmse, a_me] = courseErrors(yaw_error)
+% plot(time, yaw_error, 'Color', [0 0 0], 'LineWidth', 2);
+% xlabel('Time (s)'); ylabel('Yaw Error (rad)');
+% [a_rmse, a_me] = courseErrors(yaw_error)
 % hold off; figure;
 
-% plot(time, pitch_error, 'Color', [0 0 0], 'LineWidth', 2);
-% xlabel('Time (s)'); ylabel('Pitch Error (rad)');
-% [b_rmse, b_me] = courseErrors(pitch_error)
-% hold off; figure;
+plot(time, pitch_error, 'Color', [0 0 0], 'LineWidth', 2);
+xlabel('Time (s)'); ylabel('Pitch Error (rad)');
+[b_rmse, b_me] = courseErrors(pitch_error)
+hold off; figure;
 
 % plot(time, roll_error, 'Color', [0 0 0], 'LineWidth', 2);
 % xlabel('Time (s)'); ylabel('Roll Error (rad)');
