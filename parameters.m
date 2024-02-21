@@ -2,18 +2,15 @@
 grav       = 9.81; % gravity (m/s^2)
 pathlength = 10;   % a length used to trigger the stop condition
 
-% variables specific to the Cat D3, LGP 30 in track
-b = 1.7;   % track gauge (m) - the distance between the center of the tracks    
-w = 0.3;   % shoe width  (m)
-l = 2;     % track length (m)
-m = 1450;  % mass of vehicle (kg)
-r = 0.3;   % radius of drive wheel (m)
-
-% physical contstants
-B1 = 3.54; % dozer=s blade width (m)
-H  = 1.58; % dozer blade height (m)
+% variables specific to the John Deere 650K LGP bulldozer with a standard blade
+l = 2.337;     % track length (m)
+b = 1.75;  % track gauge (m) - the distance between the center of the tracks    
+r = 0.4;   % radius of drive wheel (m)
+B1 = 2.921; % dozer=s blade width (m)
+H  = 0.955; % dozer blade height (m)
 X = 0.01;  % dozer blade thickness (m)
-L = 1.00;  % dozer blade yaw arm length
+L = 1.4;  % dozer blade yaw arm length (m)
+m = 9355;  % mass of vehicle (kg)
 
 if(soil == 0)
     mu_l = 0.6;  % coefficient of longitudinal resistance (front/back of dozer)
