@@ -13,33 +13,35 @@ L = 1.4;  % dozer blade yaw arm length (m)
 m = 9355;  % mass of vehicle (kg)
 
 if(soil == 0)
-    mu_l = 0.6;  % coefficient of longitudinal resistance (front/back of dozer)
-    mu_t = 0.7;  % coefficient of lateral resistance (sides of dozer)
-    mu_ss = 1.0; % friction coefficient between soil and soil
-    mu_sb = 0.6; % friction coefficient between soil and blade
-    kb = 0.00003; % cutting resistance per unit area after blade pressed into the soil (Mpa)
-    km = 0.98;    % fullness degree coefficient of soil
-    ks = 1.02;    % loose degree coefficient of soil
-    ky = 0.00009; % cutting resistance per unit area (Mpa)
-    gamma_g = 1900 * 9.81; % gravity per cubic meter (N/m^3)
-    alpha0_deg = 30;       % natural slope angle of soil (degrees)
+    mu_l = 0.1;   % coefficient of longitudinal resistance (front/back of dozer)
+    mu_t = 0.8;   % coefficient of lateral resistance (sides of dozer)
+    mu_ss = 0.5;  % friction coefficient between soil and soil
+    mu_sb = 0.05; % friction coefficient between soil and blade
+    kb = 0.04;    % cutting resistance per unit area after blade pressed into the soil (Mpa)
+    ky = 0.04;    % cutting resistance per unit area (Mpa)
+    km = 0.94;    % fullness degree coefficient of soil
+    ks = 1.06;    % loose degree coefficient of soil
+    gamma_g = 1480 * 9.81; % gravity per cubic meter (N/m^3)
+    alpha0_deg = 38;       % natural slope angle of soil (degrees)
+
     alpha_deg = 0; % yaw angle of slope (degrees)
-    beta_deg = 0;  % pitch angle of slope (degrees)
+    beta_deg  = 0; % pitch angle of slope (degrees)
     gamma_deg = 0; % roll angle of the slope (degrees)
     type = 0.2;
 else
-    mu_l = 0.6;  % coefficient of longitudinal resistance (front/back of dozer)
-    mu_t = 0.8;  % coefficient of lateral resistance (sides of dozer)
-    mu_ss = 1.0; % friction coefficient between soil and soil
-    mu_sb = 0.5; % friction coefficient between soil and blade
-    kb = 0.00001; % cutting resistance per unit area after blade pressed into the soil (Mpa)
+    mu_l = 0.1;   % coefficient of longitudinal resistance (front/back of dozer)
+    mu_t = 0.8;   % coefficient of lateral resistance (sides of dozer)
+    mu_ss = 0.5;  % friction coefficient between soil and soil
+    mu_sb = 0.05; % friction coefficient between soil and blade
+    kb = 0.04;    % cutting resistance per unit area after blade pressed into the soil (Mpa)
+    ky = 0.04;    % cutting resistance per unit area (Mpa)
     km = 0.94;    % fullness degree coefficient of soil
     ks = 1.06;    % loose degree coefficient of soil
-    ky = 0.00006; % cutting resistance per unit area (Mpa)
-    gamma_g = 1840 * 9.81; % gravity per cubic meter (N/m^3)
-    alpha0_deg = 25;       % natural slope angle of soil (degrees)
+    gamma_g = 1270 * 9.81; % gravity per cubic meter (N/m^3)
+    alpha0_deg = 38;       % natural slope angle of soil (degrees)
+
     alpha_deg = 0; % yaw angle of slope (degrees)
-    beta_deg = 0;  % pitch angle of slope (degrees)
+    beta_deg  = 0; % pitch angle of slope (degrees)
     gamma_deg = 0; % roll angle of the slope (degrees)
     type = 0.9;
 end
