@@ -14,7 +14,7 @@ pitch_error = reshape(pitch_error, length(pitch_error), 1);
 roll_error  = reshape(roll_error,  length(roll_error),  1);
 if(yaw_bool == 1)
     plot(time, yaw_error, 'Color', [0 0 0], 'LineWidth', 2);
-    xlabel('Time (s)'); ylabel('Yaw Error (rad)');
+    xlabel('Time (s)'); ylabel('Depth (m)');
     [rmse, me] = courseErrors(yaw_error)
 end
 if(pitch_bool == 1)

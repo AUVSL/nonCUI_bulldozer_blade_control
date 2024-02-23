@@ -1,7 +1,7 @@
 % physical contstants
 grav       = 9.81; % gravity (m/s^2)
 pathlength = 10;   % a length used to trigger the stop condition
-%Tier 4 Final
+
 % variables specific to the John Deere 650K LGP bulldozer with a standard blade
 l = 2.349;       % track length (m)
 w = 0.7112;      % track width (m)
@@ -26,23 +26,14 @@ if(soil == 0)
     km = 0.94;       % fullness degree coefficient of soil
     ks = 1.06;       % loose degree coefficient of soil
     type = 0.2;
-    alpha_deg = 0; % yaw angle of slope (degrees)
-    beta_deg  = 0; % pitch angle of slope (degrees)
-    gamma_deg = 0; % roll angle of the slope (degrees)
 else
     gamma_g = 1270 * 9.81; % gravity per cubic meter (N/m^3)
     km = 0.90;       % fullness degree coefficient of soil
     ks = 1.1;       % loose degree coefficient of soil
     type = 0.9;
-    alpha_deg = 0; % yaw angle of slope (degrees)
-    beta_deg  = 0; % pitch angle of slope (degrees)
-    gamma_deg = 0; % roll angle of the slope (degrees)
 end
 
 % convert from deg to radians
 alpha0 = pi/180 * alpha0_deg;
-alpha = pi/180 * alpha_deg;
-beta = pi/180 * beta_deg;
-gamma = pi/180 * gamma_deg;
 
 max_torque = c + m*grav / (w*l) * tan(alpha0);
