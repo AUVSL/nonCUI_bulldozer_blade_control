@@ -1,9 +1,10 @@
 % physical contstants
 grav       = 9.81; % gravity (m/s^2)
 pathlength = 10;   % a length used to trigger the stop condition
-
+%Tier 4 Final
 % variables specific to the John Deere 650K LGP bulldozer with a standard blade
-l = 2.337;       % track length (m)
+l = 2.349;       % track length (m)
+w = 0.7112;      % track width (m)
 b = 1.75;        % track gauge (m) - the distance between the center of the tracks    
 r = 0.4;         % radius of drive wheel (m)
 B1 = 2.921;      % dozer=s blade width (m)
@@ -18,7 +19,8 @@ mu_sb = 0.05;    % friction coefficient between soil and blade
 kb = 0.04;       % cutting resistance per unit area after blade pressed into the soil (Mpa)
 ky = 0.04;       % cutting resistance per unit area (Mpa)
 alpha0_deg = 38; % natural slope angle of soil (degrees)
-
+c = 13000;       % hoehersion of soil (Pa)
+ 
 if(soil == 0)    
     gamma_g = 1480 * 9.81; % gravity per cubic meter (N/m^3)
     km = 0.94;       % fullness degree coefficient of soil
@@ -42,4 +44,5 @@ alpha0 = pi/180 * alpha0_deg;
 alpha = pi/180 * alpha_deg;
 beta = pi/180 * beta_deg;
 gamma = pi/180 * gamma_deg;
-    
+
+max_torque = c + m*grav / (w*l) * tan(alpha0);
