@@ -1,5 +1,5 @@
 [System]
-Name='blade_control_paper'
+Name='blade_height'
 Type='mamdani'
 Version=2.0
 NumInputs=1
@@ -22,11 +22,10 @@ MF3='mixed':'trapmf',[0.2 0.4 0.6 0.8]
 [Output1]
 Name='blade_height'
 Range=[-0.33 0.33]
-NumMFs=4
+NumMFs=3
 MF1='low':'trimf',[-0.23 -0.21 -0.19]
 MF2='lower':'trimf',[-0.27 -0.25 -0.23]
 MF3='lowest':'trimf',[-0.33 -0.31 -0.29]
-MF4='raised':'trimf',[-0.02 0 0.02]
 
 [Rules]
 1, 1 (1) : 1

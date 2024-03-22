@@ -3,14 +3,14 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers')
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\helper_functions'));
 
 % load in params
-soil = 0;           % select the soil paramters (0 compact, 1 loose)
+soil = 1;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
 % testing varaibles
-desired_abg = [1, 0, 0];   % [control pitch (1) or not (0), pitch (rad.), roll (rad.)]
-surface_abg = [0, 0, 0]; % the yaw, pitch, and roll of the surface (radians)
-bld_ang     = [0; 0; 0];    % angle of blade about it local x, y, and z-axis
-bool_abg    = [1, 0, 0];   % plot yaw, pitch, roll [1 = True, 0 = False]
+desired_abg = [0, 0, 0];   % [control pitch (1) or not (0), pitch (rad.), roll (rad.)]
+surface_abg = [0, 0, 0.35]; % the yaw, pitch, and roll of the surface (radians)
+bld_ang     = [0; 0; 0.35];    % angle of blade about it local x, y, and z-axis
+bool_abg    = [0, 0, 1];   % plot yaw, pitch, roll [1 = True, 0 = False]
 
 % the set of inputs to the simulation
 padding = 0;       % padding since simulink drops the first value of input matrices
