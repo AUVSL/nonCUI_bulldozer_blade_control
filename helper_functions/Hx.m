@@ -1,3 +1,3 @@
-function Hx = Hx(x, H3, H4, B1)
-    Hx = (H4 - H3)/B1 * x + H3;
+function Hx = Hx(yb, H3, H4, B1)
+    Hx = (-H3 + H4)/B1 * yb + (H3 + H4)/2;
 end
