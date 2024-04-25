@@ -37,4 +37,4 @@ end
 % convert from deg to radians
 beta0 = pi/180 * beta0_deg;
 
-max_torque = c + m*grav / (w*l) * tan(alpha0);
+max_torque = c + m*grav / (w*l) * tan(beta0);

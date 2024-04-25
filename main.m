@@ -33,7 +33,7 @@ soil_var = [padding, mu_t, mu_l, mu_ss, mu_sb, kb, km, ks, ky, gamma_g, ...
             beta0, surface_abg];
 desired_angles = [padding, desired_abg];
 bt_params = [padding, B1, H, X, L, b, l, m, grav];
-vd_params = [padding, m, b, l, r, grav];
+vd_params = [padding, m, h, b, l, r, grav];
 initial_v = v;
 initial_q = q;
 
