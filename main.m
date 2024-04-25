@@ -9,7 +9,7 @@ run("parameters.m") % run file with params
 % testing varaibles
 desired_abg = [0, 0, 0];   % [control pitch (1) or not (0), pitch (rad.), roll (rad.)]
 surface_abg = [0, 0, 0.35]; % the yaw, pitch, and roll of the surface (radians)
-bld_ang     = [0; 0; 0.35];    % angle of blade about it local x, y, and z-axis
+bld_ang     = [0; 0; 0];    % angle of blade about it local x, y, and z-axis
 bool_abg    = [0, 0, 1];   % plot yaw, pitch, roll [1 = True, 0 = False]
 
 % the set of inputs to the simulation
