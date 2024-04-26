@@ -10,7 +10,7 @@ run("parameters.m") % run file with params
 desired_abg = [1, 0, 0];   % [control pitch (1) or not (0), pitch (rad.), roll (rad.)]
 surface_abg = [0, 0, 0]; % the yaw, pitch, and roll of the surface (radians)
 bld_ang     = [0; 0; 0];    % angle of blade about it local x, y, and z-axis
-bool_abg    = [0, 0, 0];   % plot yaw, pitch, roll [1 = True, 0 = False]
+bool_abg    = [1, 0, 0];   % plot yaw, pitch, roll [1 = True, 0 = False]
 
 % the set of inputs to the simulation
 padding = 0;       % padding since simulink drops the first value of input matrices
@@ -25,14 +25,16 @@ tau     = [56000; 56000]; % drive wheel torques for the left and right tracks
 % deletes the first index for simIn blocks
 simin = [padding, tau(1), tau(2), q_dot(1), q_dot(2), q_dot(3), ...
     q_dot(4), q_dot(5), q_dot(6), q(1), q(2), q(3), q(4), q(5), ...
-    q(6), x_ICR, v(1), v(2), bld_ang(1), bld_ang(2), bld_ang(3)];
+    q(6), x_ICR, v(1), v(2), bld_ang(1), ...
+    bld_ang(2), bld_ang(3)];
 initial_states = [tau(1); tau(2); q_dot(1); q_dot(2); q_dot(3); ...
     q_dot(4); q_dot(5); q_dot(6); q(1); q(2); q(3); q(4); q(5); ...
-    q(6); x_ICR; v(1); v(2); bld_ang(1); bld_ang(2); bld_ang(3)];
-soil_var = [padding, mu_t, mu_l, mu_ss, mu_sb, kb, km, ks, ky, gamma_g, ...
+    q(6); x_ICR; v(1); v(2); bld_ang(1); ...
+    bld_ang(2); bld_ang(3)];
+soil_var = [padding, mu_t, mu_l, mu_ss, kb, km, ks, gamma_g, ...
             beta0, surface_abg];
 desired_angles = [padding, desired_abg];
-bt_params = [padding, B1, H, X, L, b, l, m, grav];
+bt_params = [padding, B1, H, L, b, l, m, grav];
 vd_params = [padding, m, h, b, l, r, grav];
 initial_v = v;
 initial_q = q;
