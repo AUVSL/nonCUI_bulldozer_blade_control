@@ -7,10 +7,15 @@ soil = 1;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
 % testing varaibles
-desired_abg = [1, 0, 0];   % [control pitch (1) or not (0), pitch (rad.), roll (rad.)]
-surface_abg = [0, 0, 0]; % the yaw, pitch, and roll of the surface (radians)
-bld_ang     = [0; 0; 0];    % angle of blade about it local x, y, and z-axis
-bool_abg    = [1, 0, 0];   % plot yaw, pitch, roll [1 = True, 0 = False]
+desired_abg = [-0.35, 0, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [0.35, 0, 0]; % the roll, pitch, yaw of the surface (radians)
+bld_ang     = [0; 0; 0]; % angle of blade about it local x, y, and z-axis
+bool_abg    = [1, 0, 0]; % plot roll, pitch, yaw [1 = True, 0 = False]
+
+% desired_abg = [-0.35, 0, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+% surface_abg = [0.35, 0, 0]; % the roll, pitch, yaw of the surface (radians)
+% bld_ang     = [0; 0; 0]; % angle of blade about it local x, y, and z-axis
+% bool_abg    = [1, 0, 0]; % plot roll, pitch, yaw [1 = True, 0 = False]
 
 % the set of inputs to the simulation
 padding = 0;       % padding since simulink drops the first value of input matrices
