@@ -3,7 +3,7 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers')
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\helper_functions'));
 
 % load in params
-soil = 0;           % select the soil paramters (0 compact, 1 loose)
+soil = 1;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
 % testing varaibles
