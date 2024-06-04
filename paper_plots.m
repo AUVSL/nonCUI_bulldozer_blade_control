@@ -14,20 +14,46 @@ roll_error2  = reshape(out2(:,4,:), length(out2(:,4,:)), 1);
 depth_error2 = reshape(out2(:,5,:), length(out2(:,5,:)), 1);
 yaw_error2   = reshape(out2(:,6,:), length(out2(:,6,:)), 1);
 
-tiledlayout(2,1)
+
+tiledlayout(5,1)
 ax1 = nexttile;
-plot(ax1, time1, depth_error1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
+plot(ax1, time1, roll_error1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
 hold on
-plot(ax1, time2, depth_error2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
+plot(ax1, time2, roll_error2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
+xlabel('Time (s)'); ylabel('Roll Error (rad)');
+hold off
+
+legend({'depth1','depth2'},...
+    'Location','northoutside', 'Orientation','horizontal', 'NumColumns', 3)
+
+ax2 = nexttile;
+plot(ax2, time1, depth_error1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
+hold on
+plot(ax2, time2, depth_error2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
 xlabel('Time (s)'); ylabel('Depth (m)');
 hold off
 
-ax2 = nexttile;
-plot(ax2, time1, yaw_error1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
+ax3 = nexttile;
+plot(ax3, time1, yaw_error1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
 hold on
-plot(ax2, time2, yaw_error2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
+plot(ax3, time2, yaw_error2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
 xlabel('Time (s)'); ylabel('Yaw Error (rad)');
 hold off
+
+ax4 = nexttile;
+plot(ax4, time1, roll_bdy1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
+hold on
+plot(ax4, time2, roll_bdy2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
+xlabel('Time (s)'); ylabel('Body Roll (rad)');
+hold off
+
+ax5 = nexttile;
+plot(ax5, time1, pitch_bdy1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
+hold on
+plot(ax5, time2, pitch_bdy2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
+xlabel('Time (s)'); ylabel('Body Pitch (rad)');
+hold off
+
 
 % time3        = reshape(out3(:,1,:), length(out3(:,1,:)), 1);
 % roll_bdy3    = reshape(out3(:,2,:), length(out3(:,2,:)), 1);
