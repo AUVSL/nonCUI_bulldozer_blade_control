@@ -1,0 +1,51 @@
+clc
+% function [rmse, me] = paper_plots(roll_bool, depth_bool, yaw_bool, out)
+time1        = reshape(out1(:,1,:), length(out1(:,1,:)), 1);
+roll_bdy1    = reshape(out1(:,2,:), length(out1(:,2,:)), 1);
+pitch_bdy1   = reshape(out1(:,3,:), length(out1(:,3,:)), 1);
+roll_error1  = reshape(out1(:,4,:), length(out1(:,4,:)), 1);
+depth_error1 = reshape(out1(:,5,:), length(out1(:,5,:)), 1);
+yaw_error1   = reshape(out1(:,6,:), length(out1(:,6,:)), 1);
+
+time2        = reshape(out2(:,1,:), length(out2(:,1,:)), 1);
+roll_bdy2    = reshape(out2(:,2,:), length(out2(:,2,:)), 1);
+pitch_bdy2   = reshape(out2(:,3,:), length(out2(:,3,:)), 1);
+roll_error2  = reshape(out2(:,4,:), length(out2(:,4,:)), 1);
+depth_error2 = reshape(out2(:,5,:), length(out2(:,5,:)), 1);
+yaw_error2   = reshape(out2(:,6,:), length(out2(:,6,:)), 1);
+
+tiledlayout(2,1)
+ax1 = nexttile;
+plot(ax1, time1, depth_error1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
+hold on
+plot(ax1, time2, depth_error2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
+xlabel('Time (s)'); ylabel('Depth (m)');
+hold off
+
+ax2 = nexttile;
+plot(ax2, time1, yaw_error1,  '--', 'Color', [0 0 0], 'LineWidth', 2);
+hold on
+plot(ax2, time2, yaw_error2,   ':', 'Color', [0 0 0], 'LineWidth', 2);
+xlabel('Time (s)'); ylabel('Yaw Error (rad)');
+hold off
+
+% time3        = reshape(out3(:,1,:), length(out3(:,1,:)), 1);
+% roll_bdy3    = reshape(out3(:,2,:), length(out3(:,2,:)), 1);
+% pitch_bdy3   = reshape(out3(:,3,:), length(out3(:,3,:)), 1);
+% roll_error3  = reshape(out3(:,4,:), length(out3(:,4,:)), 1);
+% depth_error3 = reshape(out3(:,5,:), length(out3(:,5,:)), 1);
+% yaw_error3   = reshape(out3(:,6,:), length(out3(:,6,:)), 1);
+% 
+% time4        = reshape(out4(:,1,:), length(out4(:,1,:)), 1);
+% roll_bdy4    = reshape(out4(:,2,:), length(out4(:,2,:)), 1);
+% pitch_bdy4   = reshape(out4(:,3,:), length(out4(:,3,:)), 1);
+% roll_error4  = reshape(out4(:,4,:), length(out4(:,4,:)), 1);
+% depth_error4 = reshape(out4(:,5,:), length(out4(:,5,:)), 1);
+% yaw_error4   = reshape(out4(:,6,:), length(out4(:,6,:)), 1);
+% 
+% time5        = reshape(out5(:,1,:), length(out5(:,1,:)), 1);
+% roll_bdy5    = reshape(out5(:,2,:), length(out5(:,2,:)), 1);
+% pitch_bdy5   = reshape(out5(:,3,:), length(out5(:,3,:)), 1);
+% roll_error5  = reshape(out5(:,4,:), length(out5(:,4,:)), 1);
+% depth_error5 = reshape(out5(:,5,:), length(out5(:,5,:)), 1);
+% yaw_error5   = reshape(out5(:,6,:), length(out5(:,6,:)), 1);
