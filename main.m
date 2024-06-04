@@ -3,15 +3,14 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers')
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\helper_functions'));
 
 % load in params
-soil = 0;           % select the soil paramters (0 compact, 1 loose)
+soil = 1;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
 % testing varaibles
-desired_abg = [0, 1, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [0, 0, 0]; % the roll, pitch, yaw of the surface (radians)
-bld_ang     = [0; 0; 0]; % angle of blade about it local x, y, and z-axis
-bool_abg    = [0, 1, 0]; % plot roll, pitch, yaw [1 = True, 0 = False]
-
+desired_abg = [-0.35, 0, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [ 0.35, 0, 0]; % the roll, pitch, yaw of the surface (radians)
+bld_ang     = [    0; 0; 0]; % angle of blade about it local x, y, and z-axis
+bool_abg    = [    1, 0, 0]; % plot roll, pitch, yaw [1 = True, 0 = False]
 % desired_abg = [-0.35, 0, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
 % surface_abg = [0.35, 0, 0]; % the roll, pitch, yaw of the surface (radians)
 % bld_ang     = [0; 0; 0]; % angle of blade about it local x, y, and z-axis
@@ -45,7 +44,7 @@ initial_v = v;
 initial_q = q;
 
 % run the simulation
-out1 = sim('simulation_3d').output.data;
+out3 = sim('simulation_3d').output.data;
 
 % plot errors
-% plots(bool_abg(1), bool_abg(2), bool_abg(3), out);
+plots(bool_abg(1), bool_abg(2), bool_abg(3), out3);
