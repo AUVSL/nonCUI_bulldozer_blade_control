@@ -11,10 +11,6 @@ desired_abg = [-0.35, 0, 0];  % [roll (rad.), control pitch (1) or not (0), yaw 
 surface_abg = [ 0.35, 0, 0]; % the roll, pitch, yaw of the surface (radians)
 bld_ang     = [    0; 0; 0]; % angle of blade about it local x, y, and z-axis
 bool_abg    = [    1, 0, 0]; % plot roll, pitch, yaw [1 = True, 0 = False]
-% desired_abg = [-0.35, 0, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-% surface_abg = [0.35, 0, 0]; % the roll, pitch, yaw of the surface (radians)
-% bld_ang     = [0; 0; 0]; % angle of blade about it local x, y, and z-axis
-% bool_abg    = [1, 0, 0]; % plot roll, pitch, yaw [1 = True, 0 = False]
 
 % the set of inputs to the simulation
 padding = 0;       % padding since simulink drops the first value of input matrices
