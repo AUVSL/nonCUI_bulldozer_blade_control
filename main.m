@@ -1,4 +1,4 @@
-close all; clc; format long
+close all; clc; format short
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\helper_functions'));
 
@@ -8,9 +8,8 @@ run("parameters.m") % run file with params
 
 % testing varaibles
 desired_abg = [-0.35, 0, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [ 0.35, 0, 0]; % the roll, pitch, yaw of the surface (radians)
-bld_ang     = [    0; 0; 0]; % angle of blade about it local x, y, and z-axis
-bool_abg    = [    1, 0, 0]; % plot roll, pitch, yaw [1 = True, 0 = False]
+surface_abg = [0.2, 0, 0]; % the roll, pitch, yaw of the surface (radians)
+bld_ang     = [0; 0; 0]; % angle of blade about it local x, y, and z-axis
 
 % the set of inputs to the simulation
 padding = 0;       % padding since simulink drops the first value of input matrices
@@ -35,12 +34,12 @@ soil_var       = [padding, mu_t, mu_l, mu_ss, kb, km, ks, gamma_g, ...
                   beta0, surface_abg];
 desired_angles = [padding, desired_abg];
 bt_params = [padding, B1, H, L, b, l, m, grav];
-vd_params = [padding, m, h, b, l, r, grav];
+vd_params = [padding,  m, h, b, l, r, grav];
 initial_v = v;
 initial_q = q;
 
 % run the simulation
-out3 = sim('simulation_3d').output.data;
+% out3 = sim('simulation_3d').output.data;
 
 % plot errors
-plots(bool_abg(1), bool_abg(2), bool_abg(3), out3);
+plots(out3);
