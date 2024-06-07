@@ -1,4 +1,4 @@
-function [rmse, me] = courseErrors(x)
+function [rmse, me] = errors(x)
     [n,~] = size(x);
     rmse = sqrt(sum(x.^2)/n);
     me = max(abs(x));
