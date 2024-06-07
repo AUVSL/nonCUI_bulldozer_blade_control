@@ -1,5 +1,5 @@
 # nonCUI_bulldozer_blade_control
-Code associated with a 3 degree of freedom (dof) bulldozer blade controller.
+Code associated with a 3D bulldozer blade controller and simulation.
 
 In order to run the code:
 1) ```git clone https://github.com/AUVSL/nonCUI_bulldozer_blade_control ```
