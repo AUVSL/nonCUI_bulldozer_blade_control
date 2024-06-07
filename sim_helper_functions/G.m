@@ -1,6 +1,6 @@
+% the force due to friction
 function out = G(F, f, dx)
     % determine whether the forward force overcomes static fricitions
-    
     if dx ~= 0
         out = -f*sign(dx); % moving so already overcame static friction
     elseif ((dx == 0) && (abs(F)<= f)) 

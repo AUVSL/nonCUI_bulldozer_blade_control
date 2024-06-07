@@ -1,6 +1,7 @@
 close all; clc; format short
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
-addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\helper_functions'));
+addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
+addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
 
 % load in params
 soil = 1;           % select the soil paramters (0 compact, 1 loose)
@@ -36,8 +37,8 @@ soil_var       = [padding, mu_t, mu_l, mu_ss, kb, km, ks, gamma_g, ...
 desired_angles = [padding, desired_abg];
 bt_params = [padding, B1, H, L, b, l, r, m, grav, velocity_limit, fill_distance];
 vd_params = [padding,  m, h, b, l, r, grav];
-initial_v = v;
-initial_q = q;
+initial_v = v; % needed for the track acceleration integrator
+initial_q = q; % needed for the global body velocity integrator
 
 % run the simulation
 out = sim('simulation_3d').output.data;
