@@ -18,7 +18,7 @@ Primary Files:
 Design Considerations:
 1) The varaible names are less desciptive than what is best best practise for most code. This choice was made to better reflect the equation in the paper assiated with this code.
 2) The PID in simulink resents the hyrolics and how they take time to hit a certain position. The was chosen arbitarly so the control plots in my paper looked nice for my stopping distance of 0.1 meters.
-3) The x coordinate was satured in line with "Path Tracking Control of Tracked Vehicles ~M. Ahmadi, V. Polotski, and R. Hurteau, 2000."
+3) The x coordinate of the Instantaneous Center of Rotation was satured in line with "Path Tracking Control of Tracked Vehicles ~M. Ahmadi, V. Polotski, and R. Hurteau, 2000."
 4) The code is written in accordance with the vehicle moving forward. If you make the vehicle backing up please make the blade force zero.
 5) The driving force is really low to the point the vehicle cannot turn. This was done to make the forces in line with the sandy loam soil parameters the author, Sam Dekhterman, found in the literature. You will need need to increase the torque commands by at least x10 the base values to effectly turn.
 6) The block strucure is a little odd. Partically how the track control and initalizaion are set at once in the 'track_control_and_stopping' block. Feel free to alter this structure when modifying/ porting the simulation code.
