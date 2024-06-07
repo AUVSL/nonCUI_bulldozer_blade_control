@@ -6,7 +6,7 @@ In order to run the code:
 2) run main.m
 
 Tool Boxes:
-1) Simulink R2023a
+1) Simulink R2023b
 2) Fuzzy (you can replace the fuzzy controllers and add PIDs or something else if you don't have this toolbox.)
 
 Primary Files:
