@@ -8,9 +8,9 @@ soil = 1;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
 % control varaibles
-desired_abg = [0, 1, 0];  % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [0, 0, 0];  % the roll, pitch, yaw of the surface (radians)
-bld_ang     = [0; 0; 0];  % angle of blade about it local x, y, and z-axis
+desired_abg = [0, 1, 0];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [0, 0, 0];      % the roll, pitch, yaw of the surface (radians)
+bld_ang     = [0; 0; 0];      % angle of blade about it local x, y, and z-axis
 tau         = [56000; 56000]; % drive wheel torques for the left and right tracks
 
 % initial State variables
