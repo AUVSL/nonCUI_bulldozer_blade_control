@@ -1,16 +1,16 @@
-close all; clc; format short
+close all; clc; format long
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
 
 % load in params
-soil = 1;           % select the soil paramters (0 compact, 1 loose)
+soil = 2;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
 % control varaibles
-desired_abg = [-0.35, 1, 0];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [0.35, 0, 0];      % the roll, pitch, yaw of the surface (radians)
-bld_ang     = [0; 0; 0];      % angle of blade about it local x, y, and z-axis
+desired_abg = [-0.2, 1, -0.2];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [ 0.2, 0,  0.2];      % the roll, pitch, yaw of the surface (radians)
+bld_ang     = [ 0; 0; 0];      % angle of blade about it local x, y, and z-axis
 tau         = [56000; 56000]; % drive wheel torques for the left and right tracks
 
 % initial State variables
@@ -39,7 +39,8 @@ initial_v = v; % needed for the track acceleration integrator
 initial_q = q; % needed for the global body velocity integrator
 
 % run the simulation
-out1 = sim('simulation_3d').output.data;
+out5 = sim('simulation_3d').output.data;
 
 % plots and errorserrors
-[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out1);
+[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out5);
+[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y]

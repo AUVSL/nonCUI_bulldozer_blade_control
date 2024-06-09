@@ -20,7 +20,7 @@ c         = 13000;  % cohesion of soil (Pa)
 % miscellaneous parameters
 grav          = 9.81;   % gravity (m/s^2)
 stop_distance = 0.3;    % a length used to trigger the stop condition
-gain          = 1/1800; % gain on the pid reprsenting the hydrolics    
+gain          = 1/350; % gain on the pid reprsenting the hydrolics    
 velocity_limit = 133.3; % the maximum speed the dozer can hit (m/s)
 fill_distance = 30;     % the distance traveled required to fill the pile
  
@@ -28,7 +28,12 @@ if(soil == 0)
     gamma_g = 1480 * 9.81 * 1000; % gravity per cubic meter (N/m^3)
     km      = 0.94;               % fullness degree coefficient of soil
     ks      = 1.06;               % loose degree coefficient of soil
-    type    = 0.2;                % "oberseved" soil type sent to controller
+    type    = 0.1;                % "oberseved" soil type sent to controller
+elseif (soil == 1)
+    gamma_g = 1375 * 9.81 * 1000; % gravity per cubic meter (N/m^3)
+    km      = 0.92;               % fullness degree coefficient of soil
+    ks      = 1.08;               % loose degree coefficient of soil
+    type    = 0.5;  
 else
     gamma_g = 1270 * 9.81 * 1000; % gravity per cubic meter (N/m^3)
     km      = 0.90;               % fullness degree coefficient of soil
