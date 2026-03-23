@@ -21,7 +21,7 @@ c         = 13000;  % cohesion of soil (Pa)
 grav          = 9.81;   % gravity (m/s^2)
 stop_distance = 0.3;    % a length used to trigger the stop condition
 gain          = 1/350; % gain on the pid reprsenting the hydrolics    
-velocity_limit = 133.3; % the maximum speed the dozer can hit (m/s)
+velocity_limit = 2.222; % the maximum speed the dozer can hit (m/s)
 fill_distance = 30;     % the distance traveled required to fill the pile
  
 if(soil == 0)    
