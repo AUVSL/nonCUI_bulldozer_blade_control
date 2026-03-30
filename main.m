@@ -12,7 +12,7 @@ compKd = 1/16;
 compKi = 5;
 
 % control varaibles
-desired_abg = [-0.2,   0, 0.0];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+desired_abg = [0.0,   1, 0.0];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
 surface_abg = [ 0.0,   0, 0.0];      % the roll, pitch, yaw of the surface (radians)
 bld_ang     = [ 0.0; 0.0; 0.0];      % angle of blade about it local x, y, and z-axis
 tau         = [56000; 56000]; % drive wheel torques for the left and right tracks
@@ -36,8 +36,7 @@ initial_states = [tau(1), tau(2), q_dot(1), q_dot(2), q_dot(3), q_dot(4), ...
                    x_ICR, v(1), v(2), bld_ang(1), bld_ang(2), bld_ang(3)];
 desired_angles = [padding, desired_abg];
 bt_params = [padding, B1, H, L, b, l, r, m, grav, velocity_limit,   ...
-             fill_distance, mu_t, mu_l, mu_ss, kb, km, ks, gamma_g, ...
-             beta0, surface_abg];
+             fill_distance, mu_t, mu_l, mu_ss, kb, gamma_g, beta0, surface_abg];
 vd_params = [padding,  m, h, b, l, r, grav];
 initial_v = v; % needed for the track acceleration integrator
 initial_q = q; % needed for the global body velocity integrator
