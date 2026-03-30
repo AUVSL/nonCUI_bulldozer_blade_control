@@ -1,31 +1,123 @@
-# Windows default autosave extension
+############################################
+# MATLAB / Simulink Core
+############################################
+
+# Autosave / backup files
 *.asv
-
-# OSX / *nix default autosave extension
 *.m~
+*.autosave
 
-# Compiled MEX binaries (all platforms)
-*.mex*
+# Simulink models autosave backups
+*.slx.autosave
+*.mdl.autosave
 
-# Packaged app and toolbox files
+# Simulink cache and build artifacts
+*.slxc
+*.slxp
+*.slxc.lock
+
+# Simulink Project metadata (optional: ignore if not collaborating via MATLAB Projects)
+*.prj
+*.prj.bak
+
+############################################
+# Code Generation (VERY IMPORTANT)
+############################################
+
+# Simulink Coder / Embedded Coder
+slprj/
+sccprj/
+codegen/
+
+# Rapid Accelerator / simulation cache
+*.rtw
+*.tmwinternal
+*.binfo
+*.d
+*.mk
+
+# Generated C/C++/object files
+*.o
+*.obj
+*.dll
+*.exe
+*.out
+
+############################################
+# MATLAB App Designer / Toolboxes
+############################################
+
 *.mlappinstall
 *.mltbx
 
-# Generated helpsearch folders
+############################################
+# MATLAB Path / Preferences (User-specific)
+############################################
+
+pathdef.m
+startup.m
+
+# MATLAB preferences folder (sometimes committed accidentally)
+prefdir/
+
+############################################
+# Help / Documentation Build Artifacts
+############################################
+
 helpsearch*/
 
-# Simulink code generation folders
-/slprj/
-/sccprj/
+############################################
+# OS-Specific Junk
+############################################
 
-# Matlab code generation folders
-codegen/
+# macOS
+.DS_Store
 
-# Simulink autosave extension
-*.autosave
+# Windows
+Thumbs.db
+desktop.ini
 
-# Simulink cache files
-*.slxc
+############################################
+# Octave (if mixed environments)
+############################################
 
-# Octave session info
 octave-workspace
+
+############################################
+# Logs / Temporary Files
+############################################
+
+*.log
+*.tmp
+
+############################################
+# Parallel Computing Toolbox
+############################################
+
+# Job storage location (can explode in size)
+parallel_cluster_jobs/
+
+############################################
+# Simulink Data Inspector / Simulation Outputs
+############################################
+
+*.mldatx
+*.dmr
+
+############################################
+# Coverage / Testing
+############################################
+
+coverage/
+*.cvdata
+
+############################################
+# Misc
+############################################
+
+*.bak
+*.old
+*.swp
+
+
+simulation_3d_grt_rtw/
