@@ -13,17 +13,19 @@ m  = 10156;  % mass of vehicle (kg)
 mu_l      = 0.1;      % coefficient of longitudinal resistance (front/back of dozer)
 mu_t      = 0.9;      % coefficient of lateral resistance (sides of dozer)
 mu_ss     = 0.5;      % friction coefficient between soil and soil
-kb        = 8*(10^10);% cutting resistance per unit area (Pa)
+kb        = 2.26*(10^7);% cutting resistance per unit area (Pa)
 beta0_deg = 38;       % natural slope angle of soil (degrees)
 c         = 13000;    % cohesion of soil (Pa)
 
 % miscellaneous parameters
 grav                      = 9.81;  % gravity (m/s^2)
 stop_distance             = 0.3;   % a length used to trigger the stop condition
-gain                      = 1/550;  % gain on the pid reprsenting the hydrolics    
+gain                      = 1/350;  % gain on the pid reprsenting the hydrolics    
 velocity_limit            = 2.222; % the maximum speed the dozer can hit (m/s)
-fill_distance             = 8;     % the distance traveled required to fill the pile
+fill_distance             = 8;     % the distance traveled required to fill the pile (m)
 derivative_filter_samples = 1;
+
+turn_vel_limit = 2*velocity_limit / b;
 
 if(soil == 0)    
     gamma_g = 1640 * 9.81; % gravity per cubic meter (N/m^3)

@@ -35,11 +35,12 @@ initial_states = [tau(1), tau(2), q_dot(1), q_dot(2), q_dot(3), q_dot(4), ...
                    q_dot(5), q_dot(6),q(1), q(2), q(3), q(4), q(5), q(6), ...
                    x_ICR, v(1), v(2), bld_ang(1), bld_ang(2), bld_ang(3)];
 desired_angles = [padding, desired_abg];
-bt_params = [padding, B1, H, L, b, l, r, m, grav, velocity_limit,   ...
-             fill_distance, mu_t, mu_l, mu_ss, kb, gamma_g, beta0, surface_abg];
-vd_params = [padding,  m, h, b, l, r, grav];
-initial_v = v; % needed for the track acceleration integrator
-initial_q = q; % needed for the global body velocity integrator
+bt_params      = [padding, B1, H, L, b, l, r, m, grav, velocity_limit,   ...
+                  fill_distance, mu_t, mu_l, mu_ss, kb, gamma_g, beta0, surface_abg];
+vd_params      = [padding,  m, h, b, l, r, grav];
+v_limit        = [velocity_limit, turn_vel_limit];
+initial_v      = v; % needed for the track acceleration integrator
+initial_q      = q; % needed for the global body velocity integrator
 
 % run the simulation
 out5 = sim('simulation_3d').output.data;
