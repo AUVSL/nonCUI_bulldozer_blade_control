@@ -7,15 +7,15 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'))
 soil = 0;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
-compKp = -20;
-compKd = 1/16;
-compKi = 5;
+compKp = 1;
+compKd = 1;
+compKi = 0;
 
 % control varaibles
-desired_abg = [0.0,   1, 0.0];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [ 0.0,   0, 0.0];      % the roll, pitch, yaw of the surface (radians)
+desired_abg = [-0.0001,   1, -0.0001];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [ 0.0001,   0, 0.0001];      % the roll, pitch, yaw of the surface (radians)
 bld_ang     = [ 0.0; 0.0; 0.0];      % angle of blade about it local x, y, and z-axis
-tau         = [56000; 56000]; % drive wheel torques for the left and right tracks
+tau         = [60000; 60000]; % drive wheel torques for the left and right tracks
 
 % initial State variables
 % an array of the global body [X; Y; Z; roll; pitch; yaw] 

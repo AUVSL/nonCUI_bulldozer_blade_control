@@ -21,11 +21,11 @@ MF3='mixed':'trapmf',[0.2 0.4 0.6 0.8]
 
 [Output1]
 Name='blade_height'
-Range=[-0.32 -0.001]
+Range=[-0.0031 -0.0009]
 NumMFs=3
-MF1='low':'trimf',[-0.011 -0.01 -0.009]
-MF2='lower':'trimf',[-0.013 -0.012 -0.011]
-MF3='lowest':'trimf',[-0.015 -0.014 -0.013]
+MF1='low':'trimf',[-0.0011 -0.001 -0.0009]
+MF2='lower':'trimf',[-0.0013 -0.0012 -0.0011]
+MF3='lowest':'trimf',[-0.0015 -0.0014 -0.0013]
 
 [Rules]
 1, 1 (1) : 1
