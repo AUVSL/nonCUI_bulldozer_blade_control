@@ -1,4 +1,4 @@
-close all; clc; format long
+close all; format long
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
@@ -7,13 +7,21 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'))
 soil = 0;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
-compKp = 1;
-compKd = 1;
-compKi = 0;
+% compKp = -7/10;
+% compKd = 0/10;
+% compKi = -22/10;
+
+% compKp = -7/10;
+% compKi = 50/10;
+
+compKp = 10/10;
+compKd = 10/10;
+compKi = 18/10;
+
 
 % control varaibles
-desired_abg = [-0.0001,   1, -0.0001];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [ 0.0001,   0, 0.0001];      % the roll, pitch, yaw of the surface (radians)
+desired_abg = [-0.0001,   0,  0];      % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [0.0001,   0, 0];      % the roll, pitch, yaw of the surface (radians)
 bld_ang     = [ 0.0; 0.0; 0.0];      % angle of blade about it local x, y, and z-axis
 tau         = [60000; 60000]; % drive wheel torques for the left and right tracks
 
@@ -33,7 +41,7 @@ simin          = [padding, tau(1), tau(2), q_dot(1), q_dot(2), q_dot(3), ...
                   q(5), q(6), x_ICR, v(1), v(2), bld_ang(1), bld_ang(2), bld_ang(3)];
 initial_states = [tau(1), tau(2), q_dot(1), q_dot(2), q_dot(3), q_dot(4), ...
                    q_dot(5), q_dot(6),q(1), q(2), q(3), q(4), q(5), q(6), ...
-                   x_ICR, v(1), v(2), bld_ang(1), bld_ang(2), bld_ang(3)];
+                   x_ICR, v(1), v(2), bld_ang(1), bld_ang(2), bld_ang(3)]';
 desired_angles = [padding, desired_abg];
 bt_params      = [padding, B1, H, L, b, l, r, m, grav, velocity_limit,   ...
                   fill_distance, mu_t, mu_l, mu_ss, kb, gamma_g, beta0, surface_abg];
@@ -47,4 +55,5 @@ out5 = sim('simulation_3d').output.data;
 
 % plots and errorserrors
 [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out5);
-[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y]
+% [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y]
+[rmse_r]*1000

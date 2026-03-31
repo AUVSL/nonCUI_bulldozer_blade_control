@@ -15,31 +15,31 @@ DefuzzMethod='centroid'
 Name='yaw_error'
 Range=[-3.14159265358979 3.14159265358979]
 NumMFs=3
-MF1='neg':'trapmf',[-3.142 -3.142 -0.25 0]
-MF2='zero':'trapmf',[-0.25 0 0 0.25]
-MF3='pos':'trapmf',[0 0.25 3.142 3.142]
+MF1='neg':'trapmf',[-3.142 -3.142 -5e-4 0]
+MF2='zero':'trapmf',[-5e-4 0 0 5e-4]
+MF3='pos':'trapmf',[0 5e-4 3.142 3.142]
 
 [Input2]
 Name='pitch_error'
 Range=[-3.142 3.142]
 NumMFs=3
-MF1='neg':'trapmf',[-3.142 -3.142 -0.25 0]
-MF2='zero':'trapmf',[-0.25 0 0 0.25]
-MF3='pos':'trapmf',[0 0.25 3.142 3.142]
+MF1='neg':'trapmf',[-3.142 -3.142 -5e-4 0]
+MF2='zero':'trapmf',[-5e-4 0 0 5e-4]
+MF3='pos':'trapmf',[0 5e-4 3.142 3.142]
 
 [Input3]
 Name='roll_error'
 Range=[-3.142 3.142]
 NumMFs=3
-MF1='neg':'trapmf',[-3.142 -3.142 -0.25 0]
-MF2='zero':'trapmf',[-0.25 0 0 0.25]
-MF3='pos':'trapmf',[0 0.25 3.142 3.142]
+MF1='neg':'trapmf',[-3.142 -3.142 -5e-4 0]
+MF2='zero':'trapmf',[-5e-4 0 0 5e-4]
+MF3='pos':'trapmf',[0 5e-4 3.142 3.142]
 
 [Output1]
 Name='yaw_vel'
 Range=[-1.1 1.1]
 NumMFs=3
-MF1='neg':'trimf',[-1.1 -1 -0.9]
+MF1='neg':'trimf',[0.9 1 1.1]
 MF2='zero':'trimf',[-0.1 0 0.1]
 MF3='pos':'trimf',[0.9 1 1.1]
 
@@ -47,7 +47,7 @@ MF3='pos':'trimf',[0.9 1 1.1]
 Name='pitch_vel'
 Range=[-1.1 1.1]
 NumMFs=3
-MF1='neg':'trimf',[-1.1 -1 -0.9]
+MF1='neg':'trimf',[0.9 1 1.1]
 MF2='zero':'trimf',[-0.1 0 0.1]
 MF3='pos':'trimf',[0.9 1 1.1]
 
@@ -55,7 +55,7 @@ MF3='pos':'trimf',[0.9 1 1.1]
 Name='roll_vel'
 Range=[-1.1 1.1]
 NumMFs=3
-MF1='neg':'trimf',[-1.1 -1 -0.9]
+MF1='neg':'trimf',[0.9 1 1.1]
 MF2='zero':'trimf',[-0.1 0 0.1]
 MF3='pos':'trimf',[0.9 1 1.1]
 
