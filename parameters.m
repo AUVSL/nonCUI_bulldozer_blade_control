@@ -13,7 +13,7 @@ m  = 10156;  % mass of vehicle (kg)
 mu_l      = 0.1;      % coefficient of longitudinal resistance (front/back of dozer)
 mu_t      = 0.9;      % coefficient of lateral resistance (sides of dozer)
 mu_ss     = 0.5;      % friction coefficient between soil and soil
-kb        = 2.26*(10^7);% cutting resistance per unit area (Pa)
+kb        = 0.734*(10^6);% cutting resistance per unit area (Pa)
 beta0_deg = 38;       % natural slope angle of soil (degrees)
 c         = 13000;    % cohesion of soil (Pa)
 
