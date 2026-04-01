@@ -11,12 +11,12 @@ run("parameters.m") % run file with params
 % compKd = 0/10;
 % compKi = -22/10;
 
-% compKp = -7/10;
-% compKi = 50/10;
+compKp = -7/10;
+compKi = 50/10;
 
-compKp = 10/10;
-compKd = 10/10;
-compKi = 18/10;
+% compKp = 10/10;
+% compKd = 10/10;
+% compKi = 18/10;
 
 
 % control varaibles
