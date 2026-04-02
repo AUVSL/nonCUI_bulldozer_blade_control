@@ -15,21 +15,21 @@ DefuzzMethod='centroid'
 Name='E'
 Range=[-3.14159265358979 3.14159265358979]
 NumMFs=5
-MF1='NB':'trapmf',[-3.142 -3.142 -1e-3 -5e-4]
-MF2='NS':'trimf',[-1e-3 -5e-4 0]
-MF3='Z':'trimf',[-5e-4 0 5e-4]
-MF4='PS':'trimf',[0 5e-4 1e-3]
-MF5='PB':'trapmf',[5e-4 1e-3 3.142 3.142]
+MF1='NB':'trapmf',[-3.142 -3.142 -2e1 -1e1]
+MF2='NS':'trimf',[-2e1 -1e1 0]
+MF3='Z':'trimf',[-1e1 0 1e1]
+MF4='PS':'trimf',[0 1e1 2e1]
+MF5='PB':'trapmf',[1e1 2e1 3.142 3.142]
 
 [Input2]
 Name='EC'
 Range=[-3.142 3.142]
 NumMFs=5
-MF1='NB':'trapmf',[-3.142 -3.142 -1e-3 -5e-4]
-MF2='NS':'trimf',[-1e-3 -5e-4 0]
-MF3='Z':'trimf',[-5e-4 0 5e-4]
-MF4='PS':'trimf',[0 5e-4 1e-3]
-MF5='PB':'trapmf',[5e-4 1e-3 3.142 3.142]
+MF1='NB':'trapmf',[-3.142 -3.142 -2e1 -1e1]
+MF2='NS':'trimf',[-2e1 -1e1 0]
+MF3='Z':'trimf',[-1e1 0 1e1]
+MF4='PS':'trimf',[0 1e1 2e1]
+MF5='PB':'trapmf',[1e1 2e1 3.142 3.142]
 
 [Output1]
 Name='Kp'

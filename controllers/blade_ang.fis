@@ -15,22 +15,22 @@ DefuzzMethod='centroid'
 Name='yaw_error'
 Range=[0 3.14159265358979]
 NumMFs=2
-MF1='zero':'trimf',[0 0 5e-4]
-MF2='nonZero':'trapmf',[0 5e-4 3.142 3.142]
+MF1='zero':'trimf',[0 0 7e-2]
+MF2='nonZero':'trapmf',[0 7e-2 3.142 3.142]
 
 [Input2]
 Name='pitch_error'
 Range=[0 3.14159265358979]
 NumMFs=2
-MF1='zero':'trimf',[0 0 5e-4]
-MF2='nonZero':'trapmf',[0 5e-4 3.142 3.142]
+MF1='zero':'trimf',[0 0 7e-2]
+MF2='nonZero':'trapmf',[0 7e-2 3.142 3.142]
 
 [Input3]
 Name='roll_error'
 Range=[0 3.14159265358979]
 NumMFs=2
-MF1='zero':'trimf',[0 0 5e-4]
-MF2='nonZero':'trapmf',[0 5e-4 3.142 3.142]
+MF1='zero':'trimf',[0 0 7e-2]
+MF2='nonZero':'trapmf',[0 7e-2 3.142 3.142]
 
 [Output1]
 Name='yaw_vel'
