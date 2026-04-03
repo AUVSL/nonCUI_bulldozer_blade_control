@@ -7,25 +7,25 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'))
 soil = 0;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
-% compKp = -13/10;
-% compKd = 0;
-% compKi = 0;
-% compKi = -23/10;
+controllerIndex1234 = 3;
 
-% compKp = -15/10;
-% compKi = 0;
-% compKi = 34/10;
+KpProp = -12;
+KiProp = -25;
+KdProp = 0;
 
-compKp = 36;
-compKd = 2;
-compKi = 2;
+KpKomatsu = -2.0;
+KiKomatsu = -4.1;
+KdKomatsu = -0.1;
 
+KpCong = 200;
+KdCong = 6;
+KiCong = 400;
 
 % control varaibles
-desired_abg = [0.000, 1, 0.000];     % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [0.000, 0,  0.000];      % the roll, pitch, yaw of the surface (radians)
-bld_ang     = [0.0; 0.0; 0.0]; % angle of blade about it local x, y, and z-axis
-tau         = [60000; 60000];   % drive wheel torques for the left and right tracks
+desired_abg = [-0.005, 1, -0.005]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [ 0.005, 0,  0.005]; % the roll, pitch, yaw of the surface (radians)
+bld_ang     = [0.0; 0.0; 0.0];     % angle of blade about it local x, y, and z-axis
+tau         = [60000; 60000];      % drive wheel torques for the left and right tracks
 
 % initial State variables
 % an array of the global body [X; Y; Z; roll; pitch; yaw] 
@@ -57,4 +57,4 @@ out5 = sim('simulation_3d').output.data;
 
 % plots and errorserrors
 [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out5);
-[rmse_y]*100
+[rmse_r, rmse_d, rmse_r + rmse_d]*1000

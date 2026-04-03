@@ -15,22 +15,8 @@ DefuzzMethod='centroid'
 Name='yaw_error'
 Range=[0 3.14159265358979]
 NumMFs=2
-MF1='zero':'trimf',[0 0 7e-2]
-MF2='nonZero':'trapmf',[0 7e-2 3.142 3.142]
-
-[Input2]
-Name='pitch_error'
-Range=[0 3.14159265358979]
-NumMFs=2
-MF1='zero':'trimf',[0 0 7e-2]
-MF2='nonZero':'trapmf',[0 7e-2 3.142 3.142]
-
-[Input3]
-Name='roll_error'
-Range=[0 3.14159265358979]
-NumMFs=2
-MF1='zero':'trimf',[0 0 7e-2]
-MF2='nonZero':'trapmf',[0 7e-2 3.142 3.142]
+MF1='zero':'trimf',[0 0 2e-1]
+MF2='nonZero':'trapmf',[0 2e-1 3.142 3.142]
 
 [Output1]
 Name='yaw_vel'
@@ -39,24 +25,6 @@ NumMFs=2
 MF1='zero':'trimf',[-0.1 0 0.1]
 MF2='nonZero':'trimf',[0.9 1 1.1]
 
-[Output2]
-Name='pitch_vel'
-Range=[-0.1 1.1]
-NumMFs=2
-MF1='zero':'trimf',[-0.1 0 0.1]
-MF2='nonZero':'trimf',[0.9 1 1.1]
-
-[Output3]
-Name='roll_vel'
-Range=[-0.1 1.1]
-NumMFs=2
-MF1='zero':'trimf',[-0.1 0 0.1]
-MF2='nonZero':'trimf',[0.9 1 1.1]
-
 [Rules]
-1 0 0, 1 0 0 (1) : 1
-2 0 0, 2 0 0 (1) : 1
-0 1 0, 0 1 0 (1) : 1
-0 2 0, 0 2 0 (1) : 1
-0 0 1, 0 0 1 (1) : 1
-0 0 2, 0 0 2 (1) : 1
+1, 1 (1) : 1
+2, 2 (1) : 1

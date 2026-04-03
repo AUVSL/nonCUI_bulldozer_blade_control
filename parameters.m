@@ -25,17 +25,20 @@ velocity_limit            = 2.222; % the maximum speed the dozer can hit (m/s)
 fill_distance             = 8;     % the distance traveled required to fill the pile (m)
 derivative_filter_samples = 1;
 
+% controller gains
+
+
 turn_vel_limit = 2*velocity_limit / b;
 
 if(soil == 0)    
-    gamma_g = 1640 * 9.81; % gravity per cubic meter (N/m^3)
-    type    = 0.1;                % "oberseved" soil type sent to controller
+    gamma_g = 1640 * 9.81; % weight per cubic meter (N/m^3)
+    type    = 0.1;         % "oberseved" soil type sent to controller
 elseif (soil == 1)
-    gamma_g = 1480 * 9.81; % gravity per cubic meter (N/m^3)
+    gamma_g = 1480 * 9.81; % weight per cubic meter (N/m^3)
     type    = 0.5;  
 else
-    gamma_g = 1270 * 9.81; % gravity per cubic meter (N/m^3)
-    type    = 0.9;                % "oberseved" soil type sent to controller
+    gamma_g = 1270 * 9.81; % weight per cubic meter (N/m^3)
+    type    = 0.9;         % "oberseved" soil type sent to controller
 end
 
 % convert from deg to radians
