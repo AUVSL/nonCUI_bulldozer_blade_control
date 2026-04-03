@@ -1,13 +1,13 @@
-close all; format long; clc
+close all; format long; clc;
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
 
 % load in params
-soil = 0;           % select the soil paramters (0 compact, 1 loose)
+soil        = 0;           % select the soil paramters (0 compact, 1 loose)
+% noise_power = 2e-7;
+noise_power = 0.0;
 run("parameters.m") % run file with params
-
-controllerIndex123456 = 4;
 
 % control varaibles
 desired_abg = [-0.005, 1, -0.005]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
@@ -40,9 +40,12 @@ v_limit        = [velocity_limit, turn_vel_limit];
 initial_v      = v; % needed for the track acceleration integrator
 initial_q      = q; % needed for the global body velocity integrator
 
+
+controllerIndex1234 = 4;
+
 % run the simulation
-out5 = sim('simulation_3d').output.data;
+out8 = sim('simulation_3d').output.data;
 
 % plots and errorserrors
-[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out5);
+[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out8);
 [rmse_r, rmse_d, rmse_y]*1000
