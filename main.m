@@ -1,4 +1,4 @@
-close all; format long;
+close all; format long; clc
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
@@ -7,19 +7,7 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'))
 soil = 0;           % select the soil paramters (0 compact, 1 loose)
 run("parameters.m") % run file with params
 
-controllerIndex1234 = 3;
-
-KpProp = -12;
-KiProp = -25;
-KdProp = 0;
-
-KpKomatsu = -2.0;
-KiKomatsu = -4.1;
-KdKomatsu = -0.1;
-
-KpCong = 200;
-KdCong = 6;
-KiCong = 400;
+controllerIndex123456 = 4;
 
 % control varaibles
 desired_abg = [-0.005, 1, -0.005]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
@@ -57,4 +45,4 @@ out5 = sim('simulation_3d').output.data;
 
 % plots and errorserrors
 [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out5);
-[rmse_r, rmse_d, rmse_r + rmse_d]*1000
+[rmse_r, rmse_d, rmse_y]*1000
