@@ -1,14 +1,15 @@
-%% Plot controller error comparisons (3x2, column-wise, version-safe)
+%% Plot controller error comparisons (3x3, column-wise, version-safe)
 clc; close all;
 
 % =======================
 % INPUT DATA
 % =======================
 outsLeft  = {out1, out2, out3, out4};
+outsMid   = {out9, out10, out11, out12};
 outsRight = {out5, out6, out7, out8};
 
-groups = {outsLeft, outsRight};
-nGroups = 2;
+groups  = {outsLeft, outsMid, outsRight};
+nGroups = numel(groups);
 nCtrl   = numel(outsLeft);
 
 % =======================
@@ -25,28 +26,26 @@ lineWidth = 2;
 
 legendLabels = {'P','PI','Fzy PID','Fzy (Prop.)'};
 
-yLabels = {'Depth (m)','Roll Error (rad)','Yaw Error (rad)'};
+yLabels = {'Dp Er (m)','Rl Er (rad)','Yw Er (rad)'};
 cols    = [9 8 10];   % depth, roll, yaw columns
 
 % =======================
 % FIGURE & LAYOUT
 % =======================
 figure('Units','inches','Position',[1 1 10 5],'Color','w');
-t = tiledlayout(3,2,'Padding','compact','TileSpacing','compact');
+t = tiledlayout(3,3,'Padding','compact','TileSpacing','compact');
 
-% Column-wise tile indices
-
-% Correct column-wise tile indices for a 3x2 layout
+% Column-wise tile indices (TOP → BOTTOM)
 tileMap = {
-    [1 3 5];  % left column (top → bottom)
-    [2 4 6];  % right column (top → bottom)
+    [1 4 7];   % left column
+    [2 5 8];   % middle column
+    [3 6 9];   % right column
 };
-
 
 % =======================
 % PLOTTING (COLUMN-FILL)
 % =======================
-for g = 1:2                      % 1 = left column, 2 = right column
+for g = 1:nGroups
     outs = groups{g};
 
     % Extract data
@@ -59,39 +58,44 @@ for g = 1:2                      % 1 = left column, 2 = right column
 
     % Place tiles TOP → DOWN per column
     for r = 1:3
-
         ax = nexttile(tileMap{g}(r));
         hold(ax,'on')
 
+        % Capture legend handles once
         if g == 1 && r == 1
-            h = gobjects(1, nCtrl);
+            h = gobjects(1,nCtrl);
         end
-        
+
         for k = 1:nCtrl
             if g == 1 && r == 1
-                h(k) = plot(ax, time{k}, err{r,k}, ...
-                    lineStyles{k}, ...
-                    'Color', colors{k}, ...
-                    'LineWidth', lineWidth);
+                h(k) = plot(ax,time{k},err{r,k}, ...
+                    lineStyles{k},'Color',colors{k}, ...
+                    'LineWidth',lineWidth);
             else
-                plot(ax, time{k}, err{r,k}, ...
-                    lineStyles{k}, ...
-                    'Color', colors{k}, ...
-                    'LineWidth', lineWidth);
+                plot(ax,time{k},err{r,k}, ...
+                    lineStyles{k},'Color',colors{k}, ...
+                    'LineWidth',lineWidth);
             end
         end
-        
-        ylabel(ax, yLabels{r}, 'FontSize', 12)
+
+        if g == 1
+            ylabel(ax,yLabels{r},'FontSize',12)   % first column only
+        else
+            ax.YTickLabel = [];                  % remove y‑tick text
+        end
+
         set(ax,'FontSize',12)
     end
 end
 
-lgd = legend(h, legendLabels, ...
+% =======================
+% LEGEND & LABELS
+% =======================
+lgd = legend(h,legendLabels, ...
     'Orientation','horizontal', ...
-    'NumColumns', nCtrl, ...
-    'FontSize', 12);
+    'NumColumns',nCtrl, ...
+    'FontSize',14);
 
-lgd.Layout.Tile = 'north';   % 💡 centers legend across entire layout
-
-
+lgd.Layout.Tile = 'north';   % centered across entire layout
 xlabel(t,'Time (s)','FontSize',12)
+saveas(gcf,'paper_prep/results.svg')
