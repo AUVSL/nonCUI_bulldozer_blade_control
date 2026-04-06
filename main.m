@@ -5,13 +5,12 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'))
 
 % load in params
 soil        = 1;           % select the soil paramters (0 compact, 1 loose)
-noise_power = 2e-7;
 % noise_power = 0.0;
 run("parameters.m") % run file with params
 
 % control varaibles
-desired_abg = [-0.004, 1, -0.004]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg = [ 0.004, 0,  0.004]; % the roll, pitch, yaw of the surface (radians)
+desired_abg = [-0.01, 1, -0.01]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg = [ 0.01, 0,  0.01]; % the roll, pitch, yaw of the surface (radians)
 bld_ang     = [0.0; 0.0; 0.0];     % angle of blade about it local x, y, and z-axis
 tau         = [60000; 60000];      % drive wheel torques for the left and right tracks
 
@@ -43,7 +42,7 @@ initial_q      = q; % needed for the global body velocity integrator
 controllerIndex1234 = 4;
 
 % run the simulation
-% out12 = sim('simulation_3d').output.data;
+out12 = sim('simulation_3d').output.data;
 
 % plots and errorserrors
 [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out12);
