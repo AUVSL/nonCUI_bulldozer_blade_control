@@ -118,6 +118,7 @@ coverage/
 *.bak
 *.old
 *.swp
-
+*.json
 
 simulation_3d_grt_rtw/
+

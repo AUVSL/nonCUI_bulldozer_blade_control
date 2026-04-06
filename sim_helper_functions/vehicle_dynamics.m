@@ -5,7 +5,7 @@ function v_dot = vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb, q, q_dot, x_ICR, 
     a = q(4); B = q(5); g = q(6); 
     
     % unpack the body velocities  (roll_vel, pitch_vel, yaw_vel)
-    Ad = q_dot(5); Bd = q_dot(5); Gd = q_dot(6); 
+    Ad = q_dot(4); Bd = q_dot(5); Gd = q_dot(6); 
     
     % unpack function parameters
     m = vd_parmas(1); h = vd_parmas(2); b = vd_parmas(3); l = vd_parmas(4); 
