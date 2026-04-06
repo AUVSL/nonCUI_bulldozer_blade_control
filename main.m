@@ -1,4 +1,4 @@
-close all; format long; clc;
+close all; format long; clc; clear
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
