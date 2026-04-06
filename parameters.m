@@ -30,17 +30,6 @@ KpP = -3.0;
 
 turn_vel_limit = 2*velocity_limit / b;
 
-if(soil == 0)    
-    gamma_g = 1640 * 9.81; % weight per cubic meter (N/m^3)
-    type    = 0.1;         % "oberseved" soil type sent to controller
-elseif (soil == 1)
-    gamma_g = 1480 * 9.81; % weight per cubic meter (N/m^3)
-    type    = 0.5;  
-else
-    gamma_g = 1270 * 9.81; % weight per cubic meter (N/m^3)
-    type    = 0.9;         % "oberseved" soil type sent to controller
-end
-
 % convert from deg to radians
 beta0 = pi/180 * beta0_deg;
 
