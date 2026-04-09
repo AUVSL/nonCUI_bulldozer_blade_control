@@ -85,7 +85,6 @@ function v_dot = vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb, q, q_dot, x_ICR, 
     S_31 = (ca*sg - sa*sB*cg)*Ad + ca*cB*cg*Bd + (sa*cg - ca*sB*sg)*Gd;
     S_12 = -sB*sg*Bd + cB*cg*Gd;
     S_22 = (ca*sB*sg - sa*cg)*Ad + sa*cB*sg*Bd + (sa*sB*cg - ca*sg)*Gd;
-
     S_32 = -(sa*sB*sg + ca*cg)*Ad + ca*cB*sg*Bd + (ca*sB*cg + sa*sg)*Gd;
     S_42 = cB*x_ICR^(-1)*Bd - sB*x_ICR^(-2)*x_ICR_dot;
     S_52 = -ca*cB*x_ICR^(-1)*Ad + sa*sB*x_ICR^(-1)*Bd + sa*cB*x_ICR^(-2)*x_ICR_dot;

@@ -18,7 +18,6 @@ NOTE — information that could NOT be recovered from the .m files alone
   6. Track torque scheduling — F_track is held constant here; the Simulink
      model may have varied it.
 """
-
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
@@ -297,10 +296,10 @@ def hydraulics(bld_ang, bld_ang_vel, gain):
     return bld_ang + gain * bld_ang_vel
 
 
-def controller_errors(bld_ang, depth, des_ang, L):
+def controller_errors(bld_ang, desired_depth, des_ang, L):
     roll, pitch, yaw = bld_ang
     desired_roll, des_pitch_mult, desired_yaw = des_ang
-    desired_pitch = des_pitch_mult * np.arcsin(np.clip(depth / L, -1, 1))
+    desired_pitch = des_pitch_mult * np.arcsin(np.clip(desired_depth / L, -1, 1))
     errors = np.array([roll - desired_roll,
                         pitch - desired_pitch,
                         yaw - desired_yaw])
@@ -398,8 +397,7 @@ for step in range(n_steps):
             bld_ang[i] = (bld_ang[i] + np.pi) % (2 * np.pi) - np.pi
 
     # ── controller: compute errors ────────────────────────────────────────
-    depth = q[2]   # Z position used as cutting depth proxy
-    errors, plot_errors = controller_errors(bld_ang, depth, desired_abg, L)
+    errors, plot_errors = controller_errors(bld_ang, desired_depth, desired_abg, L)
 
     # ── controller: blade angular velocity command (proportional only) ───
     # NOTE: The actual PID structure lives in the .slx file and is unknown.
@@ -494,5 +492,5 @@ axes[2, 0].set_xlabel('Time (s)'); axes[2, 0].set_ylabel('Depth Error (m)')
 axes[2, 1].plot(time, yaw_error, '-k', linewidth=2)
 axes[2, 1].set_xlabel('Time (s)'); axes[2, 1].set_ylabel('Yaw Error (rad)')
 
-plt.savefig('/mnt/user-data/outputs/simulation_results.png', dpi=150)
+plt.savefig('simulation_results.png', dpi=150)
 print("Plot saved to simulation_results.png")
