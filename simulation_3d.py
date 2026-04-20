@@ -380,16 +380,15 @@ for step in range(n_steps):
 
     # ── controller: compute errors ────────────────────────────────────────
     errors, plot_errors = controller_errors(bld_ang, desired_depth, desired_abg, L)
-
+    # print(plot_errors)
     # ── controller: blade angular velocity command (proportional only) ───
     # NOTE: The actual PID structure lives in the .slx file and is unknown.
     bld_ang_vel = np.array([KpR * errors[0],
                              KpP * errors[1],
                              KpY * errors[2]])
-
+    
     # ── hydraulics: update blade angles ──────────────────────────────────
     bld_ang = hydraulics(bld_ang, bld_ang_vel, gain)
-
     # ── instantaneous centre of rotation ─────────────────────────────────
     x_ICR_prev = x_ICR
     x_ICR = get_x_icr(q, q_dot, l)
@@ -407,10 +406,11 @@ for step in range(n_steps):
     # ── forward-Euler integration: v ─────────────────────────────────────
     v = v + dt * v_dot
     v = vel_limiter(v, v_limit)
-
+    # print(v)
+    
     # ── kinematics: q_dot from v ──────────────────────────────────────────
     q_dot = v_to_q_dot(q, x_ICR, v)
-
+    
     # ── forward-Euler integration: q ─────────────────────────────────────
     q = q + dt * q_dot
 
