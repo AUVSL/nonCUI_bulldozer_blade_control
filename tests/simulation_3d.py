@@ -33,14 +33,14 @@ def G(F, f, dx):
     """Friction force model."""
     if dx != 0:
         return -f * np.sign(dx)
-    elif abs(F) <= f:
+    elif ((dx == 0) and (abs(F) <= f)):
         return -F
     else:
         return -f * np.sign(F)
 
 def yc(D1, D2, B1):
     """Centroid of a trapezoid."""
-    if D1 == 0 and D2 == 0:
+    if (D1 == 0 and D2 == 0):
         return 0.0
     return (D1 + 2 * D2) / (3 * (D1 + D2)) * B1 - B1 / 2
 

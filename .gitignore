@@ -119,6 +119,7 @@ coverage/
 *.old
 *.swp
 *.json
+*.pyc
 
 simulation_3d_grt_rtw/
 
