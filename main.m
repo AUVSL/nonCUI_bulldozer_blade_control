@@ -11,7 +11,7 @@ padding = 0; % padding since simulink drops the first value of input matrices
 % control varaibles
 desired_depth = [padding, -0.03];
 desired_abg   = [-0.005, 1, -0.005]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg   = [ 0.05, 0,  0.05];   % the roll, pitch, yaw of the surface (radians)
+surface_abg   = [ 0.005, 0,  0.005];   % the roll, pitch, yaw of the surface (radians)
 bld_ang       = [0.0; 0.0; 0.0];     % angle of blade about it local x, y, and z-axis
 F_track       = [60000; 60000];      % drive wheel torques for the left and right tracks
 
