@@ -23,14 +23,11 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")   # headless; remove if running interactively
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Helper utilities
 # ──────────────────────────────────────────────────────────────────────────────
-
 def saturation(value, limit):
     return float(np.clip(value, -limit, limit))
-
 
 def G(F, f, dx):
     """Friction force model."""
@@ -41,26 +38,21 @@ def G(F, f, dx):
     else:
         return -f * np.sign(F)
 
-
 def yc(D1, D2, B1):
     """Centroid of a trapezoid."""
     if D1 == 0 and D2 == 0:
         return 0.0
     return (D1 + 2 * D2) / (3 * (D1 + D2)) * B1 - B1 / 2
 
-
 def Hx(yb, H3, H4, B1):
     return (-H3 + H4) / B1 * yb + (H3 + H4) / 2
-
 
 def Dx(yb, beta_0, H3, H4, B1):
     return Hx(yb, H3, H4, B1) / np.tan(beta_0)
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Physics functions
 # ──────────────────────────────────────────────────────────────────────────────
-
 def blade_terrain_interaction(hp, kb, gamma_g, mu_ss, a_s, beta0,
                                a_b, B1, H, fill_percent):
     a_rel = a_s - a_b
@@ -86,7 +78,6 @@ def blade_terrain_interaction(hp, kb, gamma_g, mu_ss, a_s, beta0,
     yc2 = yc(H2, H1 + H2, B1)
     Mb = yc1 * F1 + yc2 * F2
     return FT, Mb
-
 
 def blade_and_track(F_track, q, q_dot, x_ICR, new_bld_ang, bt_params):
     a, B, g = q[3], q[4], q[5]
@@ -136,7 +127,6 @@ def blade_and_track(F_track, q, q_dot, x_ICR, new_bld_ang, bt_params):
 
     return Rl, Fy, Mr, Fb, Mb
 
-
 def get_x_icr(q, q_dot, l):
     a, B, g = q[3], q[4], q[5]
     X_dot, Y_dot, Z_dot = q_dot[0], q_dot[1], q_dot[2]
@@ -158,7 +148,6 @@ def get_x_icr(q, q_dot, l):
     if abs(daBg[2]) < 0.001:
         return 0.0
     return float(np.clip(dxyz[1] / daBg[2], -l / 2, l / 2))
-
 
 def v_to_q_dot(q, x_ICR, v):
     a, B, g = q[3], q[4], q[5]
@@ -184,7 +173,6 @@ def v_to_q_dot(q, x_ICR, v):
     S[3:6, 1] = R_lg_z * (-1.0 / x_ICR)
 
     return S @ v
-
 
 def vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb,
                      q, q_dot, x_ICR, x_ICR_dot, v, new_bld_ang, vd_params):
@@ -285,16 +273,13 @@ def vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb,
     v_dot = np.linalg.solve(Mt, Bt @ F_track + Ct2 - Et @ v - Pt)
     return v_dot
 
-
 def vel_limiter(v, v_limit):
     v_temp = np.sign(v) * np.minimum(np.abs(v), v_limit)
     v_temp[0] = max(v_temp[0], 0.0)   # no reversing
     return v_temp
 
-
 def hydraulics(bld_ang, bld_ang_vel, gain):
     return bld_ang + gain * bld_ang_vel
-
 
 def controller_errors(bld_ang, desired_depth, des_ang, L):
     roll, pitch, yaw = bld_ang
@@ -305,7 +290,6 @@ def controller_errors(bld_ang, desired_depth, des_ang, L):
                         yaw - desired_yaw])
     plot_out = np.array([errors[0], np.sin(errors[1]) * L, errors[2]])
     return errors, plot_out
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Parameters  (from parameters.m)
@@ -343,10 +327,8 @@ KpP = -3.0   # pitch proportional gain (from parameters.m)
 KpR = KpP
 KpY = KpP
 # ───────────────────────────────────────────────────────────────────────────
-
 turn_vel_limit = 2 * velocity_limit / b
-beta0 = np.radians(beta0_deg)
-max_torque = c_soil + m * grav / (w * l) * np.tan(beta0)
+beta0          = np.radians(beta0_deg)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Initial conditions  (from main.m)
@@ -463,9 +445,9 @@ rmse_r, me_r = rmse_me(roll_error)
 rmse_d, me_d = rmse_me(depth_error)
 rmse_y, me_y = rmse_me(yaw_error)
 
-print(f"RMSE  roll={rmse_r*1000:.4f} mm·rad  "
+print(f"RMSE  roll={rmse_r*1000:.4f} mrad  "
       f"depth={rmse_d*1000:.4f} mm  "
-      f"yaw={rmse_y*1000:.4f} mm·rad")
+      f"yaw={rmse_y*1000:.4f} mrad")
 print(f"Max-E roll={me_r*1000:.4f}        "
       f"depth={me_d*1000:.4f}       "
       f"yaw={me_y*1000:.4f}")
