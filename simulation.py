@@ -139,7 +139,7 @@ def v_to_q_dot(q, x_ICR, v):
     sB, cB = np.sin(B), np.cos(B)
     sg, cg = np.sin(g), np.cos(g)
 
-    if abs(x_ICR) < 0.001:
+    if abs(x_ICR) < 1e-3:
         x_ICR = np.finfo(float).max
 
     R_lg_x = np.array([cB * cg,  cB * sg, -sB])
@@ -166,7 +166,7 @@ def vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb,
 
     m, h, b, l, r, grav = vd_params
 
-    if x_ICR == 0:
+    if abs(x_ICR) < 1e-3:
         x_ICR = np.finfo(float).max
 
     sa, ca = np.sin(a), np.cos(a)
@@ -380,7 +380,7 @@ class BulldozerSimulation:
                 self.F_track, self.q, self.q_dot,
                 self.x_ICR, self.bld_ang, self.bt_params
             )
-
+            # print([Rl, Fy, Mr])
             v_dot = vehicle_dynamics(
                 self.F_track, Rl, Fy, Mr, Fb, Mb,
                 self.q, self.q_dot, self.x_ICR, x_dot,
