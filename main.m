@@ -1,4 +1,4 @@
-close all; format long; clc; clear
+close all; format longG; clc; clear
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
@@ -10,8 +10,8 @@ padding = 0; % padding since simulink drops the first value of input matrices
 
 % control varaibles
 desired_depth = [padding, -0.03];
-desired_abg   = [-0.005, 1, -0.005]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg   = [ 0.005, 0,  0.005];   % the roll, pitch, yaw of the surface (radians)
+desired_abg   = [-0.05, 1, -0.05]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg   = [ 0.05, 0,  0.05];   % the roll, pitch, yaw of the surface (radians)
 bld_ang       = [0.0; 0.0; 0.0];     % angle of blade about it local x, y, and z-axis
 F_track       = [60000; 60000];      % drive wheel torques for the left and right tracks
 

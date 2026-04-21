@@ -10,11 +10,11 @@ function v_dot = vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb, q, q_dot, x_ICR, 
     % unpack function parameters
     m = vd_parmas(1); h = vd_parmas(2); b = vd_parmas(3); l = vd_parmas(4); 
     r = vd_parmas(5); grav = vd_parmas(6); 
-
+        
     if x_ICR == 0
         x_ICR = realmax;
     end
-
+ 
     sa = sin(a); ca = cos(a); sB = sin(B); cB = cos(B); sg = sin(g); cg = cos(g);
     
     ab = new_bld_ang(1); Bb = new_bld_ang(2); gb = new_bld_ang(3);

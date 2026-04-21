@@ -8,6 +8,8 @@ function [Rl, Fy, Mr, Fb, Mb] = blade_and_track(F_track, q, q_dot, x_ICR, new_bl
     X_dot = q_dot(1); Y_dot = q_dot(2); Z_dot = q_dot(3); a_dot = q_dot(4); 
     B_dot = q_dot(5); g_dot = q_dot(6);
     
+    q, q_dot
+
     % unpack function parameters
     B1 = bt_params(1); H = bt_params(2); L = bt_params(3); b = bt_params(4); 
     l = bt_params(5); r = bt_params(6); m = bt_params(7); grav = bt_params(8); 

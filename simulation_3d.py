@@ -31,9 +31,9 @@ def saturation(value, limit):
 
 def G(F, f, dx):
     """Friction force model."""
-    if dx != 0:
+    if (abs(dx) > 1e-10):
         return -f * np.sign(dx)
-    elif ((dx == 0) and (abs(F) <= f)):
+    elif abs(F) <= f:
         return -F
     else:
         return -f * np.sign(F)
@@ -73,8 +73,7 @@ def blade_terrain_interaction(hp, kb, gamma_g, mu_ss, a_s, beta0,
     F2 = Gt * mu_ss
     FT = -F1 - F2
 
-    yc1 = yc(Dx(-B1 / 2, beta0, H3, H4, B1),
-              Dx(B1 / 2,  beta0, H3, H4, B1), B1)
+    yc1 = yc(Dx(-B1 / 2, beta0, H3, H4, B1), Dx(B1 / 2,  beta0, H3, H4, B1), B1)
     yc2 = yc(H2, H1 + H2, B1)
     Mb = yc1 * F1 + yc2 * F2
     return FT, Mb
@@ -178,6 +177,7 @@ def vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb,
                      q, q_dot, x_ICR, x_ICR_dot, v, new_bld_ang, vd_params):
     a, B, g = q[3], q[4], q[5]
     Ad, Bd, Gd = q_dot[3], q_dot[4], q_dot[5]   # note: original MATLAB has a typo (Ad=Bd)
+
 
     m, h, b, l, r, grav = vd_params
 
@@ -334,8 +334,8 @@ beta0          = np.radians(beta0_deg)
 # Initial conditions  (from main.m)
 # ──────────────────────────────────────────────────────────────────────────────
 desired_depth = -0.03
-desired_abg   = np.array([-0.005, 1.0, -0.005])
-surface_abg   = np.array([ 0.005, 0.0,  0.005])
+desired_abg   = np.array([-0.05, 1.0, -0.05])
+surface_abg   = np.array([ 0.05, 0.0,  0.05])
 
 bld_ang = np.array([0.0, 0.0, 0.0])
 F_track = np.array([60000.0, 60000.0])
