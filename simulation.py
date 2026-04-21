@@ -276,188 +276,184 @@ def controller_errors(bld_ang, desired_depth, des_ang, L):
     plot_out = np.array([errors[0], np.sin(errors[1]) * L, errors[2]])
     return errors, plot_out
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Parameters  (from parameters.m)
-# ──────────────────────────────────────────────────────────────────────────────
-h  = 2.762
-l  = 2.349
-w  = 0.7112
-b  = 1.75
-r  = 0.4
-B1 = 2.921
-H  = 0.955
-L  = 1.2
-m  = 10156.0
+class BulldozerSimulation:
+    def __init__(self):
+        # ───────────────── Parameters ─────────────────
+        self.h  = 2.762
+        self.l  = 2.349
+        self.w  = 0.7112
+        self.b  = 1.75
+        self.r  = 0.4
+        self.B1 = 2.921
+        self.H  = 0.955
+        self.L  = 1.2
+        self.m  = 10156.0
 
-mu_l      = 0.1
-mu_t      = 0.9
-mu_ss     = 0.5
-kb        = 0.734e6
-beta0_deg = 38.0
-c_soil    = 13000.0
+        self.mu_l  = 0.1
+        self.mu_t  = 0.9
+        self.mu_ss = 0.5
+        self.kb    = 0.734e6
 
-grav             = 9.81
-stop_distance    = 0.3
-gain             = 1 / 40
-velocity_limit   = 2.222
-fill_distance    = 8.0
-gamma_g          = 1640 * 9.81
-dt               = 0.001
-stop_time        = 2.0
+        self.beta0 = np.radians(38.0)
+        self.grav  = 9.81
 
-KpP = -3.0   # pitch proportional gain (from parameters.m)
-# ── UNKNOWN from .slx ──────────────────────────────────────────────────────
-# Roll and yaw PID gains are not in any .m file.
-# Using the same proportional-only gain as pitch as a placeholder.
-KpR = KpP
-KpY = KpP
-# ───────────────────────────────────────────────────────────────────────────
-turn_vel_limit = 2 * velocity_limit / b
-beta0          = np.radians(beta0_deg)
+        self.stop_distance  = 0.3
+        self.gain           = 1 / 40
+        self.velocity_limit = 2.222
+        self.turn_vel_limit = 2 * self.velocity_limit / self.b
+        self.fill_distance  = 8.0
+        self.gamma_g        = 1640 * 9.81
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Initial conditions  (from main.m)
-# ──────────────────────────────────────────────────────────────────────────────
-desired_depth = -0.03
-desired_abg   = np.array([-0.05, 1.0, -0.05])
-surface_abg   = np.array([ 0.05, 0.0,  0.05])
+        self.dt        = 0.001
+        self.stop_time = 2.0
 
-bld_ang = np.array([0.0, 0.0, 0.0])
-F_track = np.array([60000.0, 60000.0])
+        # Controller (proportional placeholders)
+        self.KpP = -3.0
+        self.KpR = self.KpP
+        self.KpY = self.KpP
 
-q     = np.array([0.0, 0.0, 0.0,
-                   surface_abg[0], surface_abg[1], surface_abg[2]])
-q_dot = np.zeros(6)
-x_ICR = 0.0
-v     = np.zeros(2)
+        # ───────────────── Initial Conditions ─────────────────
+        self.desired_depth = -0.03
+        self.desired_abg   = np.array([-0.05, 1.0, -0.05])
+        self.surface_abg   = np.array([ 0.00, 0.0,  0.00])
 
-bt_params = (B1, H, L, b, l, r, m, grav, velocity_limit, fill_distance,
-             mu_t, mu_l, mu_ss, kb, gamma_g, beta0,
-             surface_abg[0], surface_abg[1], surface_abg[2])
+        self.bld_ang = np.zeros(3)
+        self.F_track = np.array([60000.0, 60000.0])
 
-vd_params = (m, h, b, l, r, grav)
+        self.q = np.array([
+            0.0, 0.0, 0.0,
+            self.surface_abg[0],
+            self.surface_abg[1],
+            self.surface_abg[2]
+        ])
+        self.q_dot = np.zeros(6)
 
-v_limit = np.array([velocity_limit, turn_vel_limit])
+        self.v = np.zeros(2)
+        self.x_ICR = 0.0
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Storage for logging  (mirrors errors_and_plots.m column ordering)
-# col:  time, X, Y, Z, roll, pitch, yaw, roll_err, depth_err, yaw_err
-# ──────────────────────────────────────────────────────────────────────────────
-log = []
+        # ───────────────── Params Bundles ─────────────────
+        self.bt_params = (
+            self.B1, self.H, self.L, self.b, self.l, self.r,
+            self.m, self.grav, self.velocity_limit, self.fill_distance,
+            self.mu_t, self.mu_l, self.mu_ss, self.kb,
+            self.gamma_g, self.beta0,
+            *self.surface_abg
+        )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Main forward-Euler loop
-# ──────────────────────────────────────────────────────────────────────────────
-t = 0.0
-n_steps = int(stop_time / dt)
+        self.vd_params = (self.m, self.h, self.b, self.l, self.r, self.grav)
+        self.v_limit   = np.array([self.velocity_limit, self.turn_vel_limit])
 
-for step in range(n_steps):
+        # ───────────────── Logs ─────────────────
+        self.log = []
+        self.v_log = []
 
-    # ── stop condition (mirrors simulation_stopping_and_state_loading.m) ──
-    if abs(q[0]) + abs(q[1]) > stop_distance:
-        print(f"Stop condition triggered at t={t:.4f} s")
-        break
+    # ───────────────── Main Integration Loop ─────────────────
+    def run(self):
+        t = 0.0
+        n_steps = int(self.stop_time / self.dt)
 
-    # ── blade angle wrapping to [-pi, pi] ────────────────────────────────
-    for i in range(3):
-        if bld_ang[i] < -np.pi or bld_ang[i] > np.pi:
-            bld_ang[i] = (bld_ang[i] + np.pi) % (2 * np.pi) - np.pi
+        for _ in range(n_steps):
+            if abs(self.q[0]) + abs(self.q[1]) > self.stop_distance:
+                break
 
-    # ── controller: compute errors ────────────────────────────────────────
-    errors, plot_errors = controller_errors(bld_ang, desired_depth, desired_abg, L)
-    # print(plot_errors)
-    # ── controller: blade angular velocity command (proportional only) ───
-    # NOTE: The actual PID structure lives in the .slx file and is unknown.
-    bld_ang_vel = np.array([KpR * errors[0],
-                             KpP * errors[1],
-                             KpY * errors[2]])
-    
-    # ── hydraulics: update blade angles ──────────────────────────────────
-    bld_ang = hydraulics(bld_ang, bld_ang_vel, gain)
-    # ── instantaneous centre of rotation ─────────────────────────────────
-    x_ICR_prev = x_ICR
-    x_ICR = get_x_icr(q, q_dot, l)
-    x_ICR_dot = (x_ICR - x_ICR_prev) / dt
+            for i in range(3):
+                if abs(self.bld_ang[i]) > np.pi:
+                    self.bld_ang[i] = (self.bld_ang[i] + np.pi) % (2 * np.pi) - np.pi
 
-    # ── blade & track forces ──────────────────────────────────────────────
-    Rl, Fy, Mr, Fb, Mb = blade_and_track(
-        F_track, q, q_dot, x_ICR, bld_ang, bt_params)
+            errors, plot_err = controller_errors(
+                self.bld_ang, self.desired_depth, self.desired_abg, self.L
+            )
 
-    # ── vehicle dynamics → v_dot ──────────────────────────────────────────
-    v_dot = vehicle_dynamics(
-        F_track, Rl, Fy, Mr, Fb, Mb,
-        q, q_dot, x_ICR, x_ICR_dot, v, bld_ang, vd_params)
+            bld_ang_vel = np.array([
+                self.KpR * errors[0],
+                self.KpP * errors[1],
+                self.KpY * errors[2],
+            ])
 
-    # ── forward-Euler integration: v ─────────────────────────────────────
-    v = v + dt * v_dot
-    v = vel_limiter(v, v_limit)
-    # print(v)
-    
-    # ── kinematics: q_dot from v ──────────────────────────────────────────
-    q_dot = v_to_q_dot(q, x_ICR, v)
-    
-    # ── forward-Euler integration: q ─────────────────────────────────────
-    q = q + dt * q_dot
+            self.bld_ang = hydraulics(self.bld_ang, bld_ang_vel, self.gain)
 
-    # ── log ───────────────────────────────────────────────────────────────
-    log.append([t, q[0], q[1], q[2],
-                 q[3], q[4], q[5],
-                 plot_errors[0], plot_errors[1], plot_errors[2]])
+            x_prev = self.x_ICR
+            self.x_ICR = get_x_icr(self.q, self.q_dot, self.l)
+            x_dot = (self.x_ICR - x_prev) / self.dt
 
-    t += dt
+            Rl, Fy, Mr, Fb, Mb = blade_and_track(
+                self.F_track, self.q, self.q_dot,
+                self.x_ICR, self.bld_ang, self.bt_params
+            )
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Post-processing  (mirrors errors_and_plots.m)
-# ──────────────────────────────────────────────────────────────────────────────
-data = np.array(log)
-time        = data[:, 0]
-body_x      = data[:, 1]
-body_y      = data[:, 2]
-body_roll   = data[:, 4]
-body_yaw    = data[:, 6]
-roll_error  = data[:, 7]
-depth_error = data[:, 8]
-yaw_error   = data[:, 9]
+            v_dot = vehicle_dynamics(
+                self.F_track, Rl, Fy, Mr, Fb, Mb,
+                self.q, self.q_dot, self.x_ICR, x_dot,
+                self.v, self.bld_ang, self.vd_params
+            )
+
+            self.v += self.dt * v_dot
+            self.v = vel_limiter(self.v, self.v_limit)
+            self.v_log.append(self.v.copy())
+
+            self.q_dot = v_to_q_dot(self.q, self.x_ICR, self.v)
+            self.q += self.dt * self.q_dot
+
+            self.log.append([
+                t, *self.q,
+                plot_err[0], plot_err[1], plot_err[2]
+            ])
+
+            t += self.dt
+
+    def post_process_and_plot(self):
+        data = np.array(self.log)
+        time = data[:, 0]
+
+        roll_error  = data[:, 7]
+        depth_error = data[:, 8]
+        yaw_error   = data[:, 9]
+
+        def rmse_me(x):
+            rmse = np.sqrt(np.mean(x ** 2))
+            me   = np.max(np.abs(x))
+            return rmse, me
+
+        rmse_r, me_r = rmse_me(roll_error)
+        rmse_d, me_d = rmse_me(depth_error)
+        rmse_y, me_y = rmse_me(yaw_error)
+
+        print(f"RMSE  roll={rmse_r*1000:.4f} mrad  "
+              f"depth={rmse_d*1000:.4f} mm  "
+              f"yaw={rmse_y*1000:.4f} mrad")
+        print(f"Max-E roll={me_r*1000:.4f}        "
+              f"depth={me_d*1000:.4f}       "
+              f"yaw={me_y*1000:.4f}")
+
+        fig, axes = plt.subplots(3, 2, figsize=(10, 10))
+        fig.tight_layout(pad=3.0)
+
+        axes[0, 0].plot(data[:,1], data[:,2])
+        axes[0, 0].set_xlabel("Body X (m)")
+        axes[0, 0].set_ylabel("Body Y (m)")
+
+        axes[0, 1].plot(time, data[:,4])
+        axes[0, 1].set_ylabel("Roll (rad)")
+
+        axes[1, 0].plot(time, data[:,6])
+        axes[1, 0].set_ylabel("Yaw (rad)")
+
+        axes[1, 1].plot(time, roll_error)
+        axes[1, 1].set_ylabel("Roll Error (rad)")
+
+        axes[2, 0].plot(time, depth_error)
+        axes[2, 0].set_ylabel("Depth Error (m)")
+
+        axes[2, 1].plot(time, yaw_error)
+        axes[2, 1].set_ylabel("Yaw Error (rad)")
+
+        plt.savefig("simulation_results.png", dpi=150)
+
+def main():
+    sim = BulldozerSimulation()
+    sim.run()
+    sim.post_process_and_plot()
 
 
-def rmse_me(x):
-    rmse = np.sqrt(np.mean(x ** 2))
-    me   = np.max(np.abs(x))
-    return rmse, me
-
-
-rmse_r, me_r = rmse_me(roll_error)
-rmse_d, me_d = rmse_me(depth_error)
-rmse_y, me_y = rmse_me(yaw_error)
-
-print(f"RMSE  roll={rmse_r*1000:.4f} mrad  "
-      f"depth={rmse_d*1000:.4f} mm  "
-      f"yaw={rmse_y*1000:.4f} mrad")
-print(f"Max-E roll={me_r*1000:.4f}        "
-      f"depth={me_d*1000:.4f}       "
-      f"yaw={me_y*1000:.4f}")
-
-# ── plots ─────────────────────────────────────────────────────────────────────
-fig, axes = plt.subplots(3, 2, figsize=(10, 10))
-fig.tight_layout(pad=3.0)
-
-axes[0, 0].plot(body_x, body_y, '-k', linewidth=2)
-axes[0, 0].set_xlabel('Body X (m)'); axes[0, 0].set_ylabel('Body Y (m)')
-
-axes[0, 1].plot(time, body_roll, '-k', linewidth=2)
-axes[0, 1].set_xlabel('Time (s)'); axes[0, 1].set_ylabel('Body Roll (rad)')
-
-axes[1, 0].plot(time, body_yaw, '-k', linewidth=2)
-axes[1, 0].set_xlabel('Time (s)'); axes[1, 0].set_ylabel('Body Yaw (rad)')
-
-axes[1, 1].plot(time, roll_error, '-k', linewidth=2)
-axes[1, 1].set_xlabel('Time (s)'); axes[1, 1].set_ylabel('Roll Error (rad)')
-
-axes[2, 0].plot(time, depth_error, '-k', linewidth=2)
-axes[2, 0].set_xlabel('Time (s)'); axes[2, 0].set_ylabel('Depth Error (m)')
-
-axes[2, 1].plot(time, yaw_error, '-k', linewidth=2)
-axes[2, 1].set_xlabel('Time (s)'); axes[2, 1].set_ylabel('Yaw Error (rad)')
-
-plt.savefig('simulation_results.png', dpi=150)
-print("Plot saved to simulation_results.png")
+if __name__ == "__main__":
+    main()
