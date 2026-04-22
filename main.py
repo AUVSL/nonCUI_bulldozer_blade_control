@@ -11,7 +11,10 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
-        self.h  = 2.762
+        grav = 9.81
+        m    = 10156.0
+        h    = 2.762
+
         self.l  = 2.349
         self.w  = 0.7112
         self.b  = 1.75
@@ -19,30 +22,38 @@ class BulldozerSimulation:
         self.B1 = 2.921
         self.H  = 0.955
         self.L  = 1.2
-        self.m  = 10156.0
-
+        
         self.mu_l  = 0.1
         self.mu_t  = 0.9
         self.mu_ss = 0.5
         self.kb    = 0.734e6
 
         self.beta0 = np.radians(38.0)
-        self.grav  = 9.81
 
         self.stop_distance  = 0.3
         self.gain           = 1 / 40
         self.velocity_limit = 2.222
         self.turn_vel_limit = 2 * self.velocity_limit / self.b
         self.fill_distance  = 8.0
-        self.gamma_g        = 1640 * 9.81
+        self.gamma_g        = 1640 * grav
+        self.elim      = np.diag([1, 1, 1, 0, 0, 1])
 
         self.dt        = 0.001
         self.stop_time = 2.0
 
+
+        # Dynamic motion parameters
+        self.rl = self.mu_l * m * grav / 2
+        self.fy = self.mu_t * m * grav / self.l
+
+        Ix     = m * (self.b**2 +      h**2) / 12
+        Iy     = m * (     h**2 + self.l**2) / 12
+        Iz     = m * (self.b**2 + self.l**2) / 12
+        self.M = np.diag([m, m, m, Ix, Iy, Iz])
+        self.P = np.array([0, 0, m * grav, 0, 0, 0])
+
         # Controller (proportional placeholders)
-        self.KpP = -3.0
-        self.KpR = self.KpP
-        self.KpY = self.KpP
+        self.Kp = -3.0
 
         # ───────────────── Initial Conditions ─────────────────
         self.desired_depth = -0.03
@@ -50,6 +61,8 @@ class BulldozerSimulation:
         self.surface_abg   = np.array([ 0.00, 0.0,  0.00])
 
         self.bld_ang = np.zeros(3)
+        self.dxyz    = np.zeros(3)
+        self.daBg    = np.zeros(3)
         self.F_track = np.array([60000.0, 60000.0])
 
         self.q = np.array([
@@ -60,12 +73,12 @@ class BulldozerSimulation:
         ])
         self.q_dot = np.zeros(6)
 
-        self.v = np.zeros(2)
+        self.v     = np.zeros(2)
         self.x_ICR = 0.0
+        self.R_lg  = self.rotation_lg(self.q[3], self.q[4], self.q[5])
 
         # Logs
         self.log = []
-        self.v_log = []
 
     # ───────────────── Helpers ─────────────────
     @staticmethod
@@ -91,6 +104,7 @@ class BulldozerSimulation:
     # ───────────────── Kinematics ─────────────────
     def rotation_gl(self, a, B, g):
         """Rotation matrix: global → local frame"""
+        # change to accept input array
         sa, ca = np.sin(a), np.cos(a)
         sB, cB = np.sin(B), np.cos(B)
         sg, cg = np.sin(g), np.cos(g)
@@ -112,41 +126,30 @@ class BulldozerSimulation:
 
         Maps v = [v_forward, v_turn] to q_dot.
         """
-        a, B, g = self.q[3:6]
-
-        # Handle straight-line case robustly
-        if abs(self.x_ICR) < 1e-3:
-            x = np.finfo(float).max
-        else:
-            x = self.x_ICR
-
-        R_lg = self.rotation_lg(a, B, g)
+        x = self.safe_division_x_icr()
 
         S = np.zeros((6, 2))
-        S[0:3, 0] = R_lg[:, 0]            # forward velocity
-        S[0:3, 1] = R_lg[:, 1]            # lateral/turning velocity
-        S[3:6, 1] = R_lg[:, 2] * (-1.0/x) # yaw contribution
+        S[0:3, 0] = self.R_lg[:, 0]            # forward velocity
+        S[0:3, 1] = self.R_lg[:, 1]            # lateral/turning velocity
+        S[3:6, 1] = self.R_lg[:, 2] * (-1.0/x) # yaw contribution
 
         return S
 
-    def get_x_icr(self):
-        _, _, _, a, B, g = self.q
-
-        R = self.rotation_gl(a, B, g)
-        dxyz = R @ self.q_dot[0:3]
-        daBg = R @ self.q_dot[3:6]
-
-        if abs(daBg[2]) < 1e-3:
+    def get_x_icr(self, eps: float = 1e-3):
+        if abs(self.daBg[2]) < eps:
             return 0.0
-        return float(np.clip(dxyz[1] / daBg[2], -self.l / 2, self.l / 2))
-
-    def v_to_q_dot(self):
-        S = self.S_matrix()
-        self.q_dot = S @ self.v
+        return float(np.clip(self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
+    
+    def safe_division_x_icr(self, eps: float = 1e-3):
+        if abs(self.x_ICR) < eps:
+            return np.finfo(float).max
+        return self.x_ICR
 
     # ───────────────── Dynamics ─────────────────
-    def blade_terrain_interaction(self, hp, a_b, fill_percent):
-        a_rel = self.surface_abg[0] - a_b
+    def blade_terrain_interaction(self):
+        a_rel = self.surface_abg[0] - self.bld_ang[0]
+        hp    = abs(self.L * np.sin(self.bld_ang[1]))
+
         H1 = self.B1 * np.tan(abs(a_rel))
         H2 = hp / np.cos(a_rel)
         H3 = self.H - H2 + np.sign(a_rel) * H1 / 2 - H1 / 2
@@ -158,6 +161,8 @@ class BulldozerSimulation:
             1 / 12 * a_val ** 2 * self.B1 ** 3 + c_val ** 2 * self.B1
         )
 
+        # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
+        fill_percent = np.linalg.norm(self.q[:3]) / self.fill_distance
         Gt = V * self.gamma_g * fill_percent
 
         hyp = self.B1 / np.cos(abs(a_rel))
@@ -172,21 +177,38 @@ class BulldozerSimulation:
 
         return Fb, Mb
 
+    def blade_and_track(self):
+        Fb, Mb = self.blade_terrain_interaction()
+
+        vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
+        vtR = self.saturation(self.dxyz[0] + self.b / 2 * self.daBg[2], self.velocity_limit)
+
+        FtL, FtR = self.F_track[0], self.F_track[1]
+        
+        RlL = self.G(FtL, self.rl, vtL)
+        RlR = self.G(FtR, self.rl, vtR)
+        Rl = np.array([RlL, RlR])
+        
+        Fy = -2 * np.sign(self.dxyz[1]) * self.fy * abs(self.x_ICR)
+
+        M  = ((FtR + RlR) - (FtL + RlL)) * self.b / 2
+        mr = 2 * self.fy * ((self.l ** 2) / 4 - self.x_ICR ** 2)
+        Mr = self.G(M, mr, self.daBg[2])
+
+        return Rl, Fy, Mr, Fb, Mb
+
     def Sd_matrix(self, x_ICR_dot):
         """
         Time derivative of the S matrix.
         """
-        a, B, g = self.q[3], self.q[4], self.q[5]
-        Ad, Bd, Gd = self.q_dot[3], self.q_dot[4], self.q_dot[5]
+        a, B, g    = self.q[3:6]
+        Ad, Bd, Gd = self.q_dot[3:6]
 
         sa, ca = np.sin(a), np.cos(a)
         sB, cB = np.sin(B), np.cos(B)
         sg, cg = np.sin(g), np.cos(g)
 
-        if abs(self.x_ICR) < 1e-3:
-            x  = np.finfo(float).max
-        else:
-            x = self.x_ICR
+        x = self.safe_division_x_icr()
 
         # Time-derivative of S (Sd)
         S_11 = -sB * cg * Bd - cB * sg * Gd
@@ -211,29 +233,17 @@ class BulldozerSimulation:
         return Sd
 
     def vehicle_dynamics(self, Rl, Fy, Mr, Fb, Mb, x_ICR_dot):
-        
-        # move to initialize these once in __init__ if they are constant
-        m, b, l, h = self.m, self.b, self.l, self.h
-        Ix = m * (b**2 + h**2) / 12
-        Iy = m * (h**2 + l**2) / 12
-        Iz = m * (b**2 + l**2) / 12
-
-
         a, B, g = self.q[3:6]
-        R_lg = self.rotation_lg(a, B, g)
 
-        R_lg_x = R_lg[:, 0]
-
-        #UPDATE: when changeing the rotation angle convention
+        #UPDATE: when changing the rotation angle convention
         ca, cB = np.cos(a),  np.cos(B)
         B_mat = np.zeros((6, 2))
-        B_mat[0:3, 0] = R_lg_x
-        B_mat[0:3, 1] = R_lg_x
-        B_mat[5, 0]   = -ca * cB * b / 2
-        B_mat[5, 1]   =  ca * cB * b / 2
+        B_mat[0:3, 0] = self.R_lg[:, 0]
+        B_mat[0:3, 1] = self.R_lg[:, 0]
+        B_mat[5, 0]   = -ca * cB * self.b / 2
+        B_mat[5, 1]   =  ca * cB * self.b / 2
 
-        elim = np.diag([1, 1, 1, 0, 0, 1])
-
+        #UPDATE: when changing the rotation angle convention
         ab, Bb, gb = self.bld_ang
         R_blade = self.rotation_lg(ab, Bb, gb)
 
@@ -243,28 +253,24 @@ class BulldozerSimulation:
         Ct_vec = np.array([
             Rl.sum(), Fy, 0,
             0, 0,
-            Mr + (Rl[1] - Rl[0]) * b / 2
+            Mr + (Rl[1] - Rl[0]) * self.b / 2
         ])
         blade_vec = np.array([Fb, 0.0, 0.0, 0.0, 0.0, Mb])
-        Cb_vec = elim @ R6 @ blade_vec
+        Cb_vec = self.elim @ R6 @ blade_vec
 
         R6_lg = np.zeros((6, 6))
-        R6_lg[0:3, 0:3] = R_lg
-        R6_lg[3:6, 3:6] = R_lg
+        R6_lg[0:3, 0:3] = self.R_lg
+        R6_lg[3:6, 3:6] = self.R_lg
         C = R6_lg @ (Ct_vec + Cb_vec)
-
-        # move to initialize these once in __init__ if they are constant
-        M = np.diag([m, m, m, Ix, Iy, Iz])
-        P = np.array([0, 0, m * self.grav, 0, 0, 0])
 
         S  = self.S_matrix()
         Sd = self.Sd_matrix(x_ICR_dot)
 
         Bt = S.T @ B_mat
-        Mt = S.T @ M @ S
+        Mt = S.T @ self.M @ S
         Ct = S.T @ C
-        Pt = S.T @ P
-        Et = S.T @ M @ Sd
+        Pt = S.T @ self.P
+        Et = S.T @ self.M @ Sd
 
         v_dot = np.linalg.solve(Mt, Bt @ self.F_track + Ct - Et @ self.v - Pt)
         return v_dot
@@ -312,31 +318,29 @@ class BulldozerSimulation:
 
             errors, plot_err = self.controller_errors()
 
-            self.bld_ang += self.gain * np.array([
-                self.KpR * errors[0],
-                self.KpP * errors[1],
-                self.KpY * errors[2]
-            ])
+            self.bld_ang += self.gain * self.Kp * errors
 
-            prev = self.x_ICR
+            prev       = self.x_ICR
             self.x_ICR = self.get_x_icr()
-            x_ICR_dot = (self.x_ICR - prev) / self.dt
+            x_ICR_dot  = (self.x_ICR - prev) / self.dt
 
-            fill = np.linalg.norm(self.q[:3]) / self.fill_distance
-            hp = abs(self.L * np.sin(self.bld_ang[1]))
-            Fb, Mb = self.blade_terrain_interaction(hp, self.bld_ang[0], fill)
+            Rl, Fy, Mr, Fb, Mb = self.blade_and_track()
 
-            Rl = np.array([-4981.518, -4981.518])
-            v_dot = self.vehicle_dynamics(Rl, 0.0, 0.0, Fb, Mb, x_ICR_dot)
+            v_dot = self.vehicle_dynamics(Rl, Fy, Mr, Fb, Mb, x_ICR_dot)
 
             self.v += self.dt * v_dot
             self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
 
-            self.v_to_q_dot()
-            self.q += self.dt * self.q_dot
+            self.q_dot = self.S_matrix() @ self.v
+            self.q    += self.dt * self.q_dot
+
+            a, B, g   = self.q[3:6]
+            self.R_lg = self.rotation_lg(a, B, g)
+            R_gl      = self.rotation_gl(a, B, g)
+            self.dxyz = R_gl @ self.q_dot[0:3]
+            self.daBg = R_gl @ self.q_dot[3:6]
 
             self.log.append([t, *self.q, *plot_err])
-            self.v_log.append(self.v.copy())
             t += self.dt
 
     def post_process_and_plot(self):
