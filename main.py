@@ -36,10 +36,9 @@ class BulldozerSimulation:
         self.turn_vel_limit = 2 * self.velocity_limit / self.b
         self.fill_distance  = 8.0
         self.gamma_g        = 1640 * grav
-        self.elim      = np.diag([1, 1, 1, 0, 0, 1])
-
-        self.dt        = 0.001
-        self.stop_time = 2.0
+        self.elim           = np.diag([1, 1, 1, 0, 0, 1])
+        self.dt             = 0.001
+        self.stop_time      = 2.0
 
 
         # Dynamic motion parameters
@@ -76,6 +75,7 @@ class BulldozerSimulation:
         self.v     = np.zeros(2)
         self.x_ICR = 0.0
         self.R_lg  = self.rotation_lg(self.q[3], self.q[4], self.q[5])
+        _, self.J_lg = self.rotation_derivatives(self.q[3], self.q[4])
 
         self.x_ICR_dot = 0.0
         self.Fb       = 0.0
@@ -117,11 +117,31 @@ class BulldozerSimulation:
         sg, cg = np.sin(g), np.cos(g)
 
         return np.array([
-            [cB * cg,          sa * sB * cg - ca * sg, ca * sB * cg + sa * sg],
-            [cB * sg,          sa * sB * sg + ca * cg, ca * sB * sg - sa * cg],
-            [-sB,              sa * cB,                ca * cB]
+            [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
+            [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
+            [-sB,                      sa * cB,                  ca * cB]
         ]).T
-        
+    
+    def rotation_derivatives(self, a, B):
+        """Rotation derivative matrices"""
+        # change to accept input array
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB, tB = np.sin(B), np.cos(B), np.tan(B)
+
+        J_gl = np.array([
+            [1, sa * tB, ca * tB],
+            [0,      ca,    - sa],
+            [0, sa / cB,  ca / cB]
+        ])
+
+        J_lg = np.array([
+            [1,   0,     -sB],
+            [0,  ca, sa * cB],
+            [0, -sa, ca * cB]
+        ])
+
+        return J_gl, J_lg
+
     def rotation_lg(self, a, B, g):
         """Rotation matrix: local → global frame"""
         return self.rotation_gl(a, B, g).T
@@ -137,8 +157,8 @@ class BulldozerSimulation:
 
         S = np.zeros((6, 2))
         S[0:3, 0] = self.R_lg[:, 0]            # forward velocity
-        S[0:3, 1] = self.R_lg[:, 1]            # lateral/turning velocity
-        S[3:6, 1] = self.R_lg[:, 2] * (-1.0/x) # yaw contribution
+        S[0:3, 1] = self.R_lg[:, 1] * (-1.0/x) # lateral/turning velocity
+        S[3:6, 1] = self.J_lg[:, 2]  # yaw contribution
 
         return S
 
@@ -209,18 +229,19 @@ class BulldozerSimulation:
         sB, cB = np.sin(B), np.cos(B)
         sg, cg = np.sin(g), np.cos(g)
 
-        x = self.safe_division_x_icr()
-
         # Time-derivative of S (Sd)
-        S_11 = -sB * cg * Bd - cB * sg * Gd
+        # TODO: derive a matrix form for this instead of hardcoding each element (using R_gl since many of the values are already stored there)
+        S_11 =                                     -sB * cg * Bd                  - cB * sg * Gd
         S_21 = (ca * sB * cg + sa * sg) * Ad + sa * cB * cg * Bd - (sa * sB * sg + ca * cg) * Gd
         S_31 = (ca * sg - sa * sB * cg) * Ad + ca * cB * cg * Bd + (sa * cg - ca * sB * sg) * Gd
-        S_12 = -sB * sg * Bd + cB * cg * Gd
-        S_22 = (ca * sB * sg - sa * cg) * Ad + sa * cB * sg * Bd + (sa * sB * cg - ca * sg) * Gd
-        S_32 = -(sa * sB * sg + ca * cg) * Ad + ca * cB * sg * Bd + (ca * sB * cg + sa * sg) * Gd
-        S_42 =  cB * x ** (-1) * Bd - sB * x ** (-2) * self.x_ICR_dot
-        S_52 = -ca * cB * x ** (-1) * Ad + sa * sB * x ** (-1) * Bd + sa * cB * x ** (-2) * self.x_ICR_dot
-        S_62 =  sa * cB * x ** (-1) * Ad + ca * sB * x ** (-1) * Bd + ca * cB * x ** (-2) * self.x_ICR_dot
+
+        S_12 = -self.x_ICR * (-sB * sg * Bd + cB * cg * Gd)                                                       - self.x_ICR_dot * (cB * sg)
+        S_22 = -self.x_ICR * ((ca * sB * sg - sa * cg) * Ad + sa * cB * sg * Bd + (sa * sB * cg - ca * sg) * Gd)  - self.x_ICR_dot * (sa * sB * sg + ca * cg)
+        S_32 = -self.x_ICR * (-(sa * sB * sg + ca * cg) * Ad + ca * cB * sg * Bd + (ca * sB * cg + sa * sg) * Gd) - self.x_ICR_dot * (ca * sB * sg - sa * cg)
+
+        S_42 = -cB * Bd
+        S_52 =  ca * cB * Ad - sa * sB * Bd
+        S_62 = -sa * cB * Ad - ca * sB * Bd
 
         Sd = np.array([
             [S_11, S_12],
@@ -238,7 +259,7 @@ class BulldozerSimulation:
         self.blade_terrain_interaction()
         self.track_terrain_interaction()
 
-        a, B, g = self.q[3:6]
+        a, B, _ = self.q[3:6]
 
         #UPDATE: when changing the rotation angle convention
         ca, cB = np.cos(a),  np.cos(B)
@@ -325,6 +346,7 @@ class BulldozerSimulation:
 
             self.bld_ang += self.gain * self.Kp * errors
 
+            # TODO: might need to move this after the dynamics update
             prev           = self.x_ICR
             self.x_ICR     = self.get_x_icr()
             self.x_ICR_dot = (self.x_ICR - prev) / self.dt
@@ -333,15 +355,18 @@ class BulldozerSimulation:
 
             self.v += self.dt * v_dot
             self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
-
             self.q_dot = self.S_matrix() @ self.v
-            self.q    += self.dt * self.q_dot
 
-            a, B, g   = self.q[3:6]
-            self.R_lg = self.rotation_lg(a, B, g)
-            R_gl      = self.rotation_gl(a, B, g)
+            # update global/local positions and orientations for next time step
+            self.q   += self.dt * self.q_dot
+            # TODO: pass just q[3:6] directly to the rotation functions
+            a, B, g         = self.q[3:6]
+            self.R_lg       = self.rotation_lg(a, B, g)
+            R_gl            = self.rotation_gl(a, B, g)
+            J_gl, self.J_lg = self.rotation_derivatives(a, B)
+            
             self.dxyz = R_gl @ self.q_dot[0:3]
-            self.daBg = R_gl @ self.q_dot[3:6]
+            self.daBg = J_gl @ self.q_dot[3:6]
 
             self.log.append([t, *self.q, *plot_err])
             t += self.dt
