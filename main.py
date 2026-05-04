@@ -56,7 +56,7 @@ class BulldozerSimulation:
 
         # ───────────────── Initial Conditions ─────────────────
         self.desired_depth = -0.03
-        self.desired_abg   = np.array([-0.05, 1.0, -0.05])
+        self.desired_abg   = np.array([-0.005, 1.0, -0.005])
         self.surface_abg   = np.array([ 0.00, 0.0,  0.00])
 
         self.bld_ang = np.zeros(3)
@@ -266,8 +266,8 @@ class BulldozerSimulation:
         B_mat = np.zeros((6, 2))
         B_mat[0:3, 0] = self.R_lg[:, 0]
         B_mat[0:3, 1] = self.R_lg[:, 0]
-        B_mat[5, 0]   = -ca * cB * self.b / 2
-        B_mat[5, 1]   =  ca * cB * self.b / 2
+        B_mat[3:6, 0]   = -self.R_lg[:, 2] * self.b / 2
+        B_mat[3:6, 1]   =  self.R_lg[:, 2] * self.b / 2
 
         #UPDATE: when changing the rotation angle convention
         ab, Bb, gb = self.bld_ang
