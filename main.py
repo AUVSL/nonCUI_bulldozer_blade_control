@@ -39,8 +39,6 @@ class BulldozerSimulation:
         self.gamma_g        = 1640 * grav
         self.elim           = np.diag([1, 1, 1, 0, 0, 1])
 
-
-
         # Dynamic motion parameters
         self.rl = self.mu_l * m * grav / 2
         self.fy = self.mu_t * m * grav / self.l
@@ -77,12 +75,6 @@ class BulldozerSimulation:
         self.R_lg  = self.rotation_lg(self.q[3], self.q[4], self.q[5])
         _, self.J_lg = self.rotation_derivatives(self.q[3], self.q[4])
 
-        self.x_ICR_dot  = 0.0
-        self.x_ICR_pm1  = 0.0
-        self.x_ICR_pm2  = 0.0
-        self.v_dot_prev = None
-        self.q_dot_prev = None
-        self._step      = 0
         self.Fb       = 0.0
         self.Mb       = 0.0
         self.Rl       = np.zeros(2)
@@ -230,7 +222,7 @@ class BulldozerSimulation:
         M       = ((FtR + RlR) - (FtL + RlL)) * self.b / 2
         mr      = 2 * self.fy * ((self.l ** 2) / 4 - self.x_ICR ** 2)
         self.Mr = self.G(M, mr, self.daBg[2])
-        print(f"dxyz1={self.dxyz[1]:.4f}  x_ICR={self.x_ICR:.4f}  Fy={self.Fy:.2f}  mr={mr:.2f} self.daBg[2]={self.daBg[2]:.4f}  Mr={self.Mr:.2f}")
+        # print(f"dxyz1={self.dxyz[1]:.4f}  x_ICR={self.x_ICR:.4f}  Fy={self.Fy:.2f}  mr={mr:.2f} self.daBg[2]={self.daBg[2]:.4f}  Mr={self.Mr:.2f}")
 
     def Sd_matrix(self):
         """
@@ -352,7 +344,6 @@ class BulldozerSimulation:
             if abs(self.q[0]) + abs(self.q[1]) > self.stop_distance:
                 break
 
-
             errors, plot_err = self.controller_errors()
 
             self.bld_ang += self.gain * self.Kp * errors
@@ -371,47 +362,14 @@ class BulldozerSimulation:
             R_gl            = self.rotation_gl(a, B, g)
             J_gl, self.J_lg = self.rotation_derivatives(a, B)
             
+
             self.dxyz = R_gl @ self.q_dot[0:3]
             self.daBg = J_gl @ self.q_dot[3:6]
             
             prev           = self.x_ICR
             self.x_ICR     = self.get_x_icr()
             self.x_ICR_dot = (self.x_ICR - prev) / self.dt
-            # if self.v_dot_prev is None:
-            #     self.v += self.dt * v_dot
-            # else:
-            #     self.v += self.dt * (1.5 * v_dot - 0.5 * self.v_dot_prev)
-            # self.v_dot_prev = v_dot.copy()
-            # self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
-            # self.v[1] = np.clip(self.v[1], -self.turn_vel_limit, self.turn_vel_limit)
-            # self.q_dot = self.S_matrix() @ self.v
 
-            # # update global/local positions and orientations for next time step
-            # if self.q_dot_prev is None:
-            #     self.q += self.dt * self.q_dot
-            # else:
-            #     self.q += self.dt * (1.5 * self.q_dot - 0.5 * self.q_dot_prev)
-            # self.q_dot_prev = self.q_dot.copy()
-            # self.q[3:6]    = self.wrap_angles(self.q[3:6])
-
-            # # TODO: pass just q[3:6] directly to the rotation functions
-            # a, B, g         = self.q[3:6]
-            # self.R_lg       = self.rotation_lg(a, B, g)
-            # R_gl            = self.rotation_gl(a, B, g)
-            # J_gl, self.J_lg = self.rotation_derivatives(a, B)
-            
-            # self.dxyz = R_gl @ self.q_dot[0:3]
-            # self.daBg = J_gl @ self.q_dot[3:6]
-            
-            # self.x_ICR_pm2 = self.x_ICR_pm1
-            # self.x_ICR_pm1 = self.x_ICR
-            # self.x_ICR     = self.get_x_icr()
-            # if self._step < 2:
-            #     self.x_ICR_dot = (self.x_ICR - self.x_ICR_pm1) / self.dt
-            # else:
-            #     self.x_ICR_dot = (3*self.x_ICR - 4*self.x_ICR_pm1 + self.x_ICR_pm2) / (2*self.dt)
-            # self._step += 1
-            
             self.log.append([t, *self.q, *plot_err,
                              self.dxyz[0], self.dxyz[1], self.daBg[2], self.x_ICR,
                              self.vtL, self.vtR,
