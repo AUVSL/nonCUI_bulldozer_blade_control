@@ -57,7 +57,7 @@ class BulldozerSimulation:
         self.desired_abg   = np.array([-0.00, 0, 0.000])
         self.surface_abg   = np.array([ 0.00, 0.0,  0.00])
         self.F_track       = np.array([60000.0, 10000.0])
-
+        self.x_ICR_dot  = 0.0
         self.bld_ang = np.zeros(3)
         self.dxyz    = np.zeros(3)
         self.daBg    = np.zeros(3)
@@ -352,6 +352,7 @@ class BulldozerSimulation:
 
             self.v += self.dt * v_dot
             self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
+            self.v[1] = np.clip(self.v[1], -self.turn_vel_limit, self.turn_vel_limit)
             self.q_dot = self.S_matrix() @ self.v
 
             # update global/local positions and orientations for next time step
@@ -378,6 +379,7 @@ class BulldozerSimulation:
                              self.Fy, self.Mr,
                              self.v[0], self.v[1]])
             t += self.dt
+            # print(f"t={t:.2f} s  q0={self.q[0]:.4f}  q1={self.q[1]:.4f}  q5={self.q[5]:.4f}  dxyz0={self.dxyz[0]:.4f}  dxyz1={self.dxyz[1]:.4f}  daBg={self.daBg[2]:.4f}  x_ICR={self.x_ICR:.4f} m")
 
     def post_process_and_plot(self):
         data = np.array(self.log)
