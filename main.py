@@ -13,12 +13,9 @@ class BulldozerSimulation:
         # ───────────────── Parameters ─────────────────
         grav = 9.81
         m    = 10156.0
-        h    = 2.762
-
+        h       = 2.762
         self.l  = 2.349
-        self.w  = 0.7112
         self.b  = 1.75
-        self.r  = 0.4
         self.B1 = 2.921
         self.H  = 0.955
         self.L  = 1.2
@@ -37,8 +34,8 @@ class BulldozerSimulation:
         self.fill_distance  = 8.0
         self.gamma_g        = 1640 * grav
         self.elim           = np.diag([1, 1, 1, 0, 0, 1])
-        self.dt             = 0.001
-        self.stop_time      = 2.0
+        self.dt             = 1/100
+        self.stop_time      = 100.0
 
 
         # Dynamic motion parameters
@@ -55,14 +52,14 @@ class BulldozerSimulation:
         self.Kp = -3.0
 
         # ───────────────── Initial Conditions ─────────────────
-        self.desired_depth = -0.03
-        self.desired_abg   = np.array([-0.005, 1.0, -0.005])
+        self.desired_depth = -0.4
+        self.desired_abg   = np.array([-0.00, 0, 0.000])
         self.surface_abg   = np.array([ 0.00, 0.0,  0.00])
+        self.F_track       = np.array([60000.0, 10000.0])
 
         self.bld_ang = np.zeros(3)
         self.dxyz    = np.zeros(3)
         self.daBg    = np.zeros(3)
-        self.F_track = np.array([60000.0, 60000.0])
 
         self.q = np.array([
             0.0, 0.0, 0.0,
@@ -83,6 +80,8 @@ class BulldozerSimulation:
         self.Rl       = np.zeros(2)
         self.Fy       = 0.0
         self.Mr       = 0.0
+        self.vtL      = 0.0
+        self.vtR      = 0.0
 
         # Logs
         self.log = []
@@ -162,7 +161,7 @@ class BulldozerSimulation:
 
         return S
 
-    def get_x_icr(self, eps: float = 1e-3):
+    def get_x_icr(self, eps: float = 1e-6):
         if abs(self.daBg[2]) < eps:
             return 0.0
         return float(np.clip(self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
@@ -205,6 +204,8 @@ class BulldozerSimulation:
     def track_terrain_interaction(self):
         vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
         vtR = self.saturation(self.dxyz[0] + self.b / 2 * self.daBg[2], self.velocity_limit)
+        self.vtL = vtL
+        self.vtR = vtR
 
         FtL, FtR = self.F_track[0], self.F_track[1]
         
@@ -259,15 +260,11 @@ class BulldozerSimulation:
         self.blade_terrain_interaction()
         self.track_terrain_interaction()
 
-        a, B, _ = self.q[3:6]
-
-        #UPDATE: when changing the rotation angle convention
-        ca, cB = np.cos(a),  np.cos(B)
         B_mat = np.zeros((6, 2))
         B_mat[0:3, 0] = self.R_lg[:, 0]
         B_mat[0:3, 1] = self.R_lg[:, 0]
-        B_mat[3:6, 0]   = -self.R_lg[:, 2] * self.b / 2
-        B_mat[3:6, 1]   =  self.R_lg[:, 2] * self.b / 2
+        B_mat[3:6, 0] = -self.R_lg[:, 2] * self.b / 2
+        B_mat[3:6, 1] =  self.R_lg[:, 2] * self.b / 2
 
         #UPDATE: when changing the rotation angle convention
         ab, Bb, gb = self.bld_ang
@@ -279,7 +276,7 @@ class BulldozerSimulation:
         Ct_vec = np.array([
             self.Rl.sum(), self.Fy, 0,
             0, 0,
-            self.Mr + (self.Rl[1] - self.Rl[0]) * self.b / 2
+            self.Mr
         ])
         blade_vec = np.array([self.Fb, 0.0, 0.0, 0.0, 0.0, self.Mb])
         Cb_vec = self.elim @ R6 @ blade_vec
@@ -293,14 +290,13 @@ class BulldozerSimulation:
         Sd = self.Sd_matrix()
 
         Bt = S.T @ B_mat
-        Mt = S.T @ self.M @ S
         Ct = S.T @ C
-        Pt = S.T @ self.P
-        Et = S.T @ self.M @ Sd
 
+        Pt = S.T @ self.P
+        Mt = S.T @ self.M @ S
+        Et = S.T @ self.M @ Sd
         v_dot = np.linalg.solve(Mt, Bt @ self.F_track + Ct - Et @ self.v - Pt)
         return v_dot
-
     # ───────────────── Controller ─────────────────
     def controller_errors(self):
         """
@@ -346,11 +342,6 @@ class BulldozerSimulation:
 
             self.bld_ang += self.gain * self.Kp * errors
 
-            # TODO: might need to move this after the dynamics update
-            prev           = self.x_ICR
-            self.x_ICR     = self.get_x_icr()
-            self.x_ICR_dot = (self.x_ICR - prev) / self.dt
-
             v_dot = self.vehicle_dynamics()
 
             self.v += self.dt * v_dot
@@ -367,8 +358,18 @@ class BulldozerSimulation:
             
             self.dxyz = R_gl @ self.q_dot[0:3]
             self.daBg = J_gl @ self.q_dot[3:6]
+            
+            prev           = self.x_ICR
+            self.x_ICR     = self.get_x_icr()
+            self.x_ICR_dot = (self.x_ICR - prev) / self.dt
 
-            self.log.append([t, *self.q, *plot_err])
+            self.log.append([t, *self.q, *plot_err,
+                             self.dxyz[0], self.dxyz[1], self.daBg[2], self.x_ICR,
+                             self.vtL, self.vtR,
+                             self.F_track[0], self.F_track[1],
+                             self.Rl[0], self.Rl[1],
+                             self.Fy, self.Mr,
+                             self.v[0], self.v[1]])
             t += self.dt
 
     def post_process_and_plot(self):
@@ -418,6 +419,49 @@ class BulldozerSimulation:
         axes[2, 1].set_ylabel("Yaw Error (rad)")
 
         plt.savefig("simulation_results.png", dpi=150)
+
+        # ── Track-terrain interaction debug plot ──
+        # log columns 10-23: dxyz[0], dxyz[1], daBg[2], x_ICR,
+        #                     vtL, vtR, FtL, FtR, RlL, RlR, Fy, Mr, v[0], v[1]
+        dxyz0  = data[:, 10]
+        dxyz1  = data[:, 11]
+        daBg2  = data[:, 12]
+        x_icr  = data[:, 13]
+        vtL    = data[:, 14]
+        vtR    = data[:, 15]
+        FtL    = data[:, 16]
+        FtR    = data[:, 17]
+        RlL    = data[:, 18]
+        RlR    = data[:, 19]
+        Fy     = data[:, 20]
+        Mr     = data[:, 21]
+        v0     = data[:, 22]
+        v1     = data[:, 23]
+
+        fig2, ax2 = plt.subplots(7, 2, figsize=(12, 21))
+        fig2.suptitle("Track-Terrain Interaction Variables vs Time")
+        fig2.tight_layout(pad=3.0)
+
+        ax2[0, 0].plot(time, dxyz0);  ax2[0, 0].set_ylabel("dxyz[0] fwd vel (m/s)")
+        ax2[0, 1].plot(time, dxyz1);  ax2[0, 1].set_ylabel("dxyz[1] lat vel (m/s)")
+        ax2[1, 0].plot(time, daBg2);  ax2[1, 0].set_ylabel("daBg[2] yaw rate (rad/s)")
+        ax2[1, 1].plot(time, x_icr);  ax2[1, 1].set_ylabel("x_ICR (m)")
+        ax2[2, 0].plot(time, vtL);    ax2[2, 0].set_ylabel("vtL sat fwd vel (m/s)")
+        ax2[2, 1].plot(time, vtR);    ax2[2, 1].set_ylabel("vtR sat fwd vel (m/s)")
+        ax2[3, 0].plot(time, FtL);    ax2[3, 0].set_ylabel("F_track L (N)")
+        ax2[3, 1].plot(time, FtR);    ax2[3, 1].set_ylabel("F_track R (N)")
+        ax2[4, 0].plot(time, RlL);    ax2[4, 0].set_ylabel("Rl L resist (N)")
+        ax2[4, 1].plot(time, RlR);    ax2[4, 1].set_ylabel("Rl R resist (N)")
+        ax2[5, 0].plot(time, Fy);     ax2[5, 0].set_ylabel("Fy lateral (N)")
+        ax2[5, 1].plot(time, Mr);     ax2[5, 1].set_ylabel("Mr yaw moment (N·m)")
+        ax2[6, 0].plot(time, v0);     ax2[6, 0].set_ylabel("v[0] fwd generalized (m/s)")
+        ax2[6, 1].plot(time, v1);     ax2[6, 1].set_ylabel("v[1] turn generalized (rad/s)")
+
+        for row in ax2:
+            for a in row:
+                a.set_xlabel("Time (s)")
+
+        fig2.savefig("track_terrain_debug.png", dpi=150)
 
 def main():
     sim = BulldozerSimulation()
