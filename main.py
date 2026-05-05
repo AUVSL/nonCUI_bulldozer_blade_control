@@ -11,8 +11,12 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
-        grav = 9.81
-        m    = 10156.0
+        m                   = 10156.0 /10
+        self.dt             = 1/100
+        self.stop_distance  = 10
+        self.stop_time      = 2.3
+
+        grav    = 9.81
         h       = 2.762
         self.l  = 2.349
         self.b  = 1.75
@@ -27,15 +31,14 @@ class BulldozerSimulation:
 
         self.beta0 = np.radians(38.0)
 
-        self.stop_distance  = 0.3
+
         self.gain           = 1 / 40
         self.velocity_limit = 2.222
         self.turn_vel_limit = 2 * self.velocity_limit / self.b
         self.fill_distance  = 8.0
         self.gamma_g        = 1640 * grav
         self.elim           = np.diag([1, 1, 1, 0, 0, 1])
-        self.dt             = 1/100
-        self.stop_time      = 100.0
+
 
 
         # Dynamic motion parameters
@@ -74,7 +77,12 @@ class BulldozerSimulation:
         self.R_lg  = self.rotation_lg(self.q[3], self.q[4], self.q[5])
         _, self.J_lg = self.rotation_derivatives(self.q[3], self.q[4])
 
-        self.x_ICR_dot = 0.0
+        self.x_ICR_dot  = 0.0
+        self.x_ICR_pm1  = 0.0
+        self.x_ICR_pm2  = 0.0
+        self.v_dot_prev = None
+        self.q_dot_prev = None
+        self._step      = 0
         self.Fb       = 0.0
         self.Mb       = 0.0
         self.Rl       = np.zeros(2)
@@ -90,6 +98,10 @@ class BulldozerSimulation:
     @staticmethod
     def saturation(value, limit):
         return float(np.clip(value, -limit, limit))
+
+    @staticmethod
+    def wrap_angles(angles):
+        return (angles + np.pi) % (2 * np.pi) - np.pi
 
     @staticmethod
     def G(F, f, dx):
@@ -161,7 +173,7 @@ class BulldozerSimulation:
 
         return S
 
-    def get_x_icr(self, eps: float = 1e-6):
+    def get_x_icr(self, eps: float = 1e-3):
         if abs(self.daBg[2]) < eps:
             return 0.0
         return float(np.clip(self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
@@ -218,6 +230,7 @@ class BulldozerSimulation:
         M       = ((FtR + RlR) - (FtL + RlL)) * self.b / 2
         mr      = 2 * self.fy * ((self.l ** 2) / 4 - self.x_ICR ** 2)
         self.Mr = self.G(M, mr, self.daBg[2])
+        print(f"dxyz1={self.dxyz[1]:.4f}  x_ICR={self.x_ICR:.4f}  Fy={self.Fy:.2f}  mr={mr:.2f} self.daBg[2]={self.daBg[2]:.4f}  Mr={self.Mr:.2f}")
 
     def Sd_matrix(self):
         """
@@ -276,7 +289,7 @@ class BulldozerSimulation:
         Ct_vec = np.array([
             self.Rl.sum(), self.Fy, 0,
             0, 0,
-            self.Mr
+            self.Mr + (self.Rl[1] - self.Rl[0]) * self.b / 2
         ])
         blade_vec = np.array([self.Fb, 0.0, 0.0, 0.0, 0.0, self.Mb])
         Cb_vec = self.elim @ R6 @ blade_vec
@@ -335,8 +348,10 @@ class BulldozerSimulation:
     def run(self):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
+            #TODO: replace this with a distance traveled stopping condition in addition to time and
             if abs(self.q[0]) + abs(self.q[1]) > self.stop_distance:
                 break
+
 
             errors, plot_err = self.controller_errors()
 
@@ -362,7 +377,41 @@ class BulldozerSimulation:
             prev           = self.x_ICR
             self.x_ICR     = self.get_x_icr()
             self.x_ICR_dot = (self.x_ICR - prev) / self.dt
+            # if self.v_dot_prev is None:
+            #     self.v += self.dt * v_dot
+            # else:
+            #     self.v += self.dt * (1.5 * v_dot - 0.5 * self.v_dot_prev)
+            # self.v_dot_prev = v_dot.copy()
+            # self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
+            # self.v[1] = np.clip(self.v[1], -self.turn_vel_limit, self.turn_vel_limit)
+            # self.q_dot = self.S_matrix() @ self.v
 
+            # # update global/local positions and orientations for next time step
+            # if self.q_dot_prev is None:
+            #     self.q += self.dt * self.q_dot
+            # else:
+            #     self.q += self.dt * (1.5 * self.q_dot - 0.5 * self.q_dot_prev)
+            # self.q_dot_prev = self.q_dot.copy()
+            # self.q[3:6]    = self.wrap_angles(self.q[3:6])
+
+            # # TODO: pass just q[3:6] directly to the rotation functions
+            # a, B, g         = self.q[3:6]
+            # self.R_lg       = self.rotation_lg(a, B, g)
+            # R_gl            = self.rotation_gl(a, B, g)
+            # J_gl, self.J_lg = self.rotation_derivatives(a, B)
+            
+            # self.dxyz = R_gl @ self.q_dot[0:3]
+            # self.daBg = J_gl @ self.q_dot[3:6]
+            
+            # self.x_ICR_pm2 = self.x_ICR_pm1
+            # self.x_ICR_pm1 = self.x_ICR
+            # self.x_ICR     = self.get_x_icr()
+            # if self._step < 2:
+            #     self.x_ICR_dot = (self.x_ICR - self.x_ICR_pm1) / self.dt
+            # else:
+            #     self.x_ICR_dot = (3*self.x_ICR - 4*self.x_ICR_pm1 + self.x_ICR_pm2) / (2*self.dt)
+            # self._step += 1
+            
             self.log.append([t, *self.q, *plot_err,
                              self.dxyz[0], self.dxyz[1], self.daBg[2], self.x_ICR,
                              self.vtL, self.vtR,
