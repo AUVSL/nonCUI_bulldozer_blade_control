@@ -122,4 +122,5 @@ coverage/
 *.pyc
 *.png
 simulation_3d_grt_rtw/
+*.gif
 

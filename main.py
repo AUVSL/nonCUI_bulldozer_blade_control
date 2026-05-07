@@ -6,6 +6,7 @@ forward-Euler integration loop.
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
+import matplotlib.animation as animation
 matplotlib.use("Agg")   # headless; remove if running interactively
 
 class BulldozerSimulation:
@@ -13,11 +14,12 @@ class BulldozerSimulation:
         # ───────────────── Parameters ─────────────────
         m                   = 10156.0 /10
         self.dt             = 1/100
-        self.stop_distance  = 10
-        self.stop_time      = 2.3
+        self.stop_distance  = 5
+        self.stop_time      = 10
 
         grav    = 9.81
         h       = 2.762
+        self.h  = h
         self.l  = 2.349
         self.b  = 1.75
         self.B1 = 2.921
@@ -70,9 +72,9 @@ class BulldozerSimulation:
         ])
         self.q_dot = np.zeros(6)
 
-        self.v     = np.zeros(2)
-        self.x_ICR = 0.0
-        self.R_lg  = self.rotation_lg(self.q[3], self.q[4], self.q[5])
+        self.v       = np.zeros(2)
+        self.x_ICR   = 0.0
+        self.R_lg    = self.rotation_lg(self.q[3], self.q[4], self.q[5])
         _, self.J_lg = self.rotation_derivatives(self.q[3], self.q[4])
 
         self.Fb       = 0.0
@@ -408,77 +410,135 @@ class BulldozerSimulation:
               f"depth={me_d*1000:.4f}       "
               f"yaw={me_y*1000:.4f}")
 
-        fig, axes = plt.subplots(3, 2, figsize=(10, 10))
-        fig.tight_layout(pad=3.0)
+        fig = plt.figure(figsize=(14, 6))
+        gs = fig.add_gridspec(2, 2, width_ratios=[2, 1], hspace=0.4, wspace=0.35)
+        ax3d = fig.add_subplot(gs[:, 0], projection='3d')
 
-        axes[0, 0].plot(data[:,1], data[:,2])
-        axes[0, 0].set_xlabel("Body X (m)")
-        axes[0, 0].set_ylabel("Body Y (m)")
+        # Surface plane: normal is col 2 of R_lg = rotation_lg(surface_abg)
+        a, B, g = self.surface_abg
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB = np.sin(B), np.cos(B)
+        sg, cg = np.sin(g), np.cos(g)
+        nx, ny, nz = ca*sB*cg + sa*sg, ca*sB*sg - sa*cg, ca*cB
+        margin = 1.0
+        cx = (data[:,1].max() + data[:,1].min()) / 2
+        cy = (data[:,2].max() + data[:,2].min()) / 2
+        cz = (data[:,3].max() + data[:,3].min()) / 2
+        half_s = max(data[:,1].max() - data[:,1].min(),
+                     data[:,2].max() - data[:,2].min(),
+                     data[:,3].max() - data[:,3].min()) / 2 + margin
+        xs = np.linspace(cx - half_s, cx + half_s, 30)
+        ys = np.linspace(cy - half_s, cy + half_s, 30)
+        Xs, Ys = np.meshgrid(xs, ys)
+        Zs = -(nx * Xs + ny * Ys) / nz
+        ax3d.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan')
+    
+        ax3d.plot(data[:,1], data[:,2], data[:,3],
+                  color='blue', linewidth=2)
+        print(data[:,1].min(), data[:,1].max())
+        ax3d.set_xlim(cx - half_s, cx + half_s)
+        ax3d.set_ylim(cy - half_s, cy + half_s)
+        ax3d.set_zlim(cz - half_s, cz + half_s)
+        ax3d.set_xlabel("X (m)")
+        ax3d.set_ylabel("Y (m)")
+        ax3d.set_zlabel("Z (m)")
 
-        axes[0, 1].plot(time, data[:,4])
-        axes[0, 1].set_ylabel("Roll (rad)")
+        ax_roll = fig.add_subplot(gs[0, 1])
+        ax_roll.plot(time, data[:,4])
+        ax_roll.set_ylabel("Roll (rad)")
 
-        axes[1, 0].plot(time, data[:,6])
-        axes[1, 0].set_ylabel("Yaw (rad)")
-
-        axes[1, 1].plot(time, roll_error)
-        axes[1, 1].set_ylabel("Roll Error (rad)")
-
-        axes[2, 0].plot(time, depth_error)
-        axes[2, 0].set_ylabel("Depth Error (m)")
-
-        axes[2, 1].plot(time, yaw_error)
-        axes[2, 1].set_ylabel("Yaw Error (rad)")
-
+        ax_yaw = fig.add_subplot(gs[1, 1])
+        ax_yaw.plot(time, data[:,6])
+        ax_yaw.set_ylabel("Yaw (rad)")
         plt.savefig("simulation_results.png", dpi=150)
 
-        # ── Track-terrain interaction debug plot ──
-        # log columns 10-23: dxyz[0], dxyz[1], daBg[2], x_ICR,
-        #                     vtL, vtR, FtL, FtR, RlL, RlR, Fy, Mr, v[0], v[1]
-        dxyz0  = data[:, 10]
-        dxyz1  = data[:, 11]
-        daBg2  = data[:, 12]
-        x_icr  = data[:, 13]
-        vtL    = data[:, 14]
-        vtR    = data[:, 15]
-        FtL    = data[:, 16]
-        FtR    = data[:, 17]
-        RlL    = data[:, 18]
-        RlR    = data[:, 19]
-        Fy     = data[:, 20]
-        Mr     = data[:, 21]
-        v0     = data[:, 22]
-        v1     = data[:, 23]
+        
+    def make_position_gif(self):
+        data = np.array(self.log)[::5]
 
-        fig2, ax2 = plt.subplots(7, 2, figsize=(12, 21))
-        fig2.suptitle("Track-Terrain Interaction Variables vs Time")
-        fig2.tight_layout(pad=3.0)
+        fig = plt.figure(figsize=(7, 7))
+        ax  = fig.add_subplot(111, projection='3d')
 
-        ax2[0, 0].plot(time, dxyz0);  ax2[0, 0].set_ylabel("dxyz[0] fwd vel (m/s)")
-        ax2[0, 1].plot(time, dxyz1);  ax2[0, 1].set_ylabel("dxyz[1] lat vel (m/s)")
-        ax2[1, 0].plot(time, daBg2);  ax2[1, 0].set_ylabel("daBg[2] yaw rate (rad/s)")
-        ax2[1, 1].plot(time, x_icr);  ax2[1, 1].set_ylabel("x_ICR (m)")
-        ax2[2, 0].plot(time, vtL);    ax2[2, 0].set_ylabel("vtL sat fwd vel (m/s)")
-        ax2[2, 1].plot(time, vtR);    ax2[2, 1].set_ylabel("vtR sat fwd vel (m/s)")
-        ax2[3, 0].plot(time, FtL);    ax2[3, 0].set_ylabel("F_track L (N)")
-        ax2[3, 1].plot(time, FtR);    ax2[3, 1].set_ylabel("F_track R (N)")
-        ax2[4, 0].plot(time, RlL);    ax2[4, 0].set_ylabel("Rl L resist (N)")
-        ax2[4, 1].plot(time, RlR);    ax2[4, 1].set_ylabel("Rl R resist (N)")
-        ax2[5, 0].plot(time, Fy);     ax2[5, 0].set_ylabel("Fy lateral (N)")
-        ax2[5, 1].plot(time, Mr);     ax2[5, 1].set_ylabel("Mr yaw moment (N·m)")
-        ax2[6, 0].plot(time, v0);     ax2[6, 0].set_ylabel("v[0] fwd generalized (m/s)")
-        ax2[6, 1].plot(time, v1);     ax2[6, 1].set_ylabel("v[1] turn generalized (rad/s)")
+        # Surface plane (same normal derivation as post_process_and_plot)
+        a, B, g = self.surface_abg
+        sa, ca  = np.sin(a), np.cos(a)
+        sB, cB  = np.sin(B), np.cos(B)
+        sg, cg  = np.sin(g), np.cos(g)
+        nx = ca*sB*cg + sa*sg
+        ny = ca*sB*sg - sa*cg
+        nz = ca*cB
+        margin = 1.0
+        cx = (data[:,1].max() + data[:,1].min()) / 2
+        cy = (data[:,2].max() + data[:,2].min()) / 2
+        cz = (data[:,3].max() + data[:,3].min()) / 2
+        half = max(data[:,1].max() - data[:,1].min(),
+                   data[:,2].max() - data[:,2].min(),
+                   data[:,3].max() - data[:,3].min()) / 2 + margin
+        xs = np.linspace(cx - half, cx + half, 30)
+        ys = np.linspace(cy - half, cy + half, 30)
+        Xs, Ys = np.meshgrid(xs, ys)
+        Zs = -(nx * Xs + ny * Ys) / nz
+        ax.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan', zorder=0)
+        ax.set_xlim(cx - half, cx + half)
+        ax.set_ylim(cy - half, cy + half)
+        ax.set_zlim(cz - half, cz + half)
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_zlabel("Z (m)")
 
-        for row in ax2:
-            for a in row:
-                a.set_xlabel("Time (s)")
+        # Box corners in local frame, origin = bottom centre
+        hl, hb = self.l / 2, self.b / 2
+        c_local = np.array([
+            [-hl, -hb,          0],  # 0 bottom rear-left
+            [+hl, -hb,          0],  # 1 bottom front-left
+            [+hl, +hb,          0],  # 2 bottom front-right
+            [-hl, +hb,          0],  # 3 bottom rear-right
+            [-hl, -hb, self.h], # 4 top rear-left
+            [+hl, -hb, self.h], # 5 top front-left
+            [+hl, +hb, self.h], # 6 top front-right
+            [-hl, +hb, self.h], # 7 top rear-right
+        ])
+        box_edges = [(0,1),(1,2),(2,3),(3,0),
+                     (4,5),(5,6),(6,7),(7,4),
+                     (0,4),(1,5),(2,6),(3,7)]
+        box_lines = [None] * 12
 
-        fig2.savefig("track_terrain_debug.png", dpi=150)
+        trail, = ax.plot([], [], [], 'b-', linewidth=1.5)
+
+        def update(i):
+            trail.set_data(data[:i+1, 1], data[:i+1, 2])
+            trail.set_3d_properties(data[:i+1, 3])
+
+            for line in box_lines:
+                if line is not None:
+                    line.remove()
+
+            R   = self.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
+            pos = data[i, 1:4]
+            c_g = pos + (R @ c_local.T).T  # (8, 3) corners in global frame
+
+            for j, (a, b) in enumerate(box_edges):
+                p1, p2 = c_g[a], c_g[b]
+                box_lines[j], = ax.plot(
+                    [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                    color='red', linewidth=1.5
+                )
+
+            ax.set_title(f"t = {data[i, 0]:.2f} s")
+            return trail,
+
+        anim = animation.FuncAnimation(
+            fig, update, frames=len(data), blit=False, interval=50
+        )
+        anim.save("position_3d.gif", writer=animation.PillowWriter(fps=20))
+        plt.close(fig)
+        print("Saved position_3d.gif")
 
 def main():
     sim = BulldozerSimulation()
     sim.run()
     sim.post_process_and_plot()
+    sim.make_position_gif()
 
 
 if __name__ == "__main__":
