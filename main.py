@@ -111,6 +111,9 @@ class BulldozerSimulation:
             return 0.0
         return (D1 + 2 * D2) / (3 * (D1 + D2)) * B1 - B1 / 2
 
+    @staticmethod
+    def wrap_angles(angles):
+        return (angles + np.pi) % (2 * np.pi) - np.pi
     # ───────────────── Kinematics ─────────────────
     def rotation_gl(self, a, B, g):
         """Rotation matrix: global → local frame"""
@@ -170,7 +173,7 @@ class BulldozerSimulation:
             return 0.0
         return float(np.clip(self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
     
-    def safe_division_x_icr(self, eps: float = 1e-3):
+    def safe_division_x_icr(self, eps: float = 1e-1):
         if abs(self.x_ICR) < eps:
             return np.finfo(float).max
         return self.x_ICR
@@ -222,8 +225,7 @@ class BulldozerSimulation:
         M       = ((FtR + RlR) - (FtL + RlL)) * self.b / 2
         mr      = 2 * self.fy * ((self.l ** 2) / 4 - self.x_ICR ** 2)
         self.Mr = self.G(M, mr, self.daBg[2])
-        # print(f"dxyz1={self.dxyz[1]:.4f}  x_ICR={self.x_ICR:.4f}  Fy={self.Fy:.2f}  mr={mr:.2f} self.daBg[2]={self.daBg[2]:.4f}  Mr={self.Mr:.2f}")
-
+        
     def Sd_matrix(self):
         """
         Time derivative of the S matrix.
@@ -283,6 +285,7 @@ class BulldozerSimulation:
             0, 0,
             self.Mr + (self.Rl[1] - self.Rl[0]) * self.b / 2
         ])
+
         blade_vec = np.array([self.Fb, 0.0, 0.0, 0.0, 0.0, self.Mb])
         Cb_vec = self.elim @ R6 @ blade_vec
 
@@ -357,6 +360,7 @@ class BulldozerSimulation:
 
             # update global/local positions and orientations for next time step
             self.q   += self.dt * self.q_dot
+            self.q[3:6]    = self.wrap_angles(self.q[3:6])
             # TODO: pass just q[3:6] directly to the rotation functions
             a, B, g         = self.q[3:6]
             self.R_lg       = self.rotation_lg(a, B, g)
@@ -379,8 +383,7 @@ class BulldozerSimulation:
                              self.Fy, self.Mr,
                              self.v[0], self.v[1]])
             t += self.dt
-            # print(f"t={t:.2f} s  q0={self.q[0]:.4f}  q1={self.q[1]:.4f}  q5={self.q[5]:.4f}  dxyz0={self.dxyz[0]:.4f}  dxyz1={self.dxyz[1]:.4f}  daBg={self.daBg[2]:.4f}  x_ICR={self.x_ICR:.4f} m")
-
+            
     def post_process_and_plot(self):
         data = np.array(self.log)
         time = data[:, 0]
