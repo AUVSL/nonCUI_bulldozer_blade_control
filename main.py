@@ -14,8 +14,7 @@ class BulldozerSimulation:
         # ───────────────── Parameters ─────────────────
         m                   = 10156.0 /10
         self.dt             = 1/100
-        self.stop_distance  = 5
-        self.stop_time      = 10
+        self.stop_time      = 8
 
         grav    = 9.81
         h       = 2.762
@@ -52,12 +51,14 @@ class BulldozerSimulation:
         self.P = np.array([0, 0, m * grav, 0, 0, 0])
 
         # Controller (proportional placeholders)
-        self.Kp = -3.0
+        self.Kp      = -3.0
+        self.Kp_path = 8000.0   # N/m  — track-force gain for cross-track error
 
         # ───────────────── Initial Conditions ─────────────────
         self.desired_depth = -0.4
         self.desired_abg   = np.array([-0.00, 0, 0.000])
-        self.surface_abg   = np.array([ 0.00, 0.0,  0.00])
+        self.surface_abg   = np.array([ 0.0, 0.5,  0.00])
+        self.F_track_base  = 60000.0
         self.F_track       = np.array([60000.0, 10000.0])
         self.x_ICR_dot  = 0.0
         self.bld_ang = np.zeros(3)
@@ -76,6 +77,9 @@ class BulldozerSimulation:
         self.x_ICR   = 0.0
         self.R_lg    = self.rotation_lg(self.q[3], self.q[4], self.q[5])
         _, self.J_lg = self.rotation_derivatives(self.q[3], self.q[4])
+
+        self.cross_track_err = 0.0
+        self.path_points     = self.figure8_path(A=5.0, B=2.5)
 
         self.Fb       = 0.0
         self.Mb       = 0.0
@@ -175,7 +179,7 @@ class BulldozerSimulation:
             return 0.0
         return float(np.clip(self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
     
-    def safe_division_x_icr(self, eps: float = 1e-1):
+    def safe_division_x_icr(self, eps: float = 5e-2):
         if abs(self.x_ICR) < eps:
             return np.finfo(float).max
         return self.x_ICR
@@ -341,14 +345,44 @@ class BulldozerSimulation:
 
         return errors, plot_out
 
+    # ───────────────── Figure-8 Path & Tracker ─────────────────
+    def figure8_path(self, A=5.0, B=2.5, n_points=2000):
+        """Dense (x, y) waypoints for a figure-8: x=A·sin(t), y=B·sin(2t)."""
+        t = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
+        return np.column_stack([A * np.sin(t), B * np.sin(2 * t)])
+
+    def signed_cross_track_error(self, pos_xy):
+        """Signed perpendicular distance from pos_xy to self.path_points.
+        Positive when the vehicle is to the left of the path tangent direction."""
+        diffs = self.path_points - pos_xy
+        idx   = int(np.argmin(np.linalg.norm(diffs, axis=1)))
+        next_idx = (idx + 1) % len(self.path_points)
+        tangent  = self.path_points[next_idx] - self.path_points[idx]
+        norm     = np.linalg.norm(tangent)
+        if norm < 1e-10:
+            return 0.0
+        tangent /= norm
+        left_normal = np.array([-tangent[1], tangent[0]])  # CCW 90° of tangent
+        return float(np.dot(pos_xy - self.path_points[idx], left_normal))
+
+    def path_controller(self):
+        """Proportional controller: differential track forces to reduce cross-track error.
+
+        Sign convention: left_normal points left of the path direction.
+        e > 0  → vehicle is left  → increase F_left  → turn right toward path.
+        e < 0  → vehicle is right → increase F_right → turn left toward path.
+        """
+        self.cross_track_err = self.signed_cross_track_error(self.q[:2])
+        delta         = self.Kp_path * self.cross_track_err
+        F_max         = 2* self.F_track_base
+        self.F_track[0] = float(np.clip(self.F_track_base + delta, 0.0, F_max))
+        self.F_track[1] = float(np.clip(self.F_track_base - delta, 0.0, F_max))
+
     # ───────────────── Main Integration Loop ─────────────────
     def run(self):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
-            #TODO: replace this with a distance traveled stopping condition in addition to time and
-            if abs(self.q[0]) + abs(self.q[1]) > self.stop_distance:
-                break
-
+            # self.path_controller()
             errors, plot_err = self.controller_errors()
 
             self.bld_ang += self.gain * self.Kp * errors
@@ -383,7 +417,8 @@ class BulldozerSimulation:
                              self.F_track[0], self.F_track[1],
                              self.Rl[0], self.Rl[1],
                              self.Fy, self.Mr,
-                             self.v[0], self.v[1]])
+                             self.v[0], self.v[1],
+                             self.cross_track_err])
             t += self.dt
             
     def post_process_and_plot(self):
@@ -452,7 +487,38 @@ class BulldozerSimulation:
         ax_yaw.set_ylabel("Yaw (rad)")
         plt.savefig("simulation_results.png", dpi=150)
 
-        
+
+    def plot_path_tracking(self):
+        data  = np.array(self.log)
+        time  = data[:, 0]
+        x_traj, y_traj = data[:, 1], data[:, 2]
+        cross_track     = data[:, 24]   # col added by path_controller
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        ax1.plot(self.path_points[:, 0], self.path_points[:, 1],
+                 'g--', linewidth=1.5, label='Figure-8 reference')
+        ax1.plot(x_traj, y_traj, 'b-', linewidth=1.5, label='Vehicle')
+        ax1.plot(x_traj[0], y_traj[0], 'ko', markersize=7, label='Start')
+        ax1.set_xlabel("X (m)")
+        ax1.set_ylabel("Y (m)")
+        ax1.set_title("Top-down path tracking")
+        ax1.legend()
+        ax1.set_aspect('equal')
+        ax1.grid(True)
+
+        ax2.plot(time, cross_track, 'r-', linewidth=1.2)
+        ax2.axhline(0, color='k', linestyle='--', linewidth=0.8)
+        ax2.set_xlabel("Time (s)")
+        ax2.set_ylabel("Cross-track error (m)")
+        ax2.set_title("Perpendicular path error")
+        ax2.grid(True)
+
+        plt.tight_layout()
+        plt.savefig("path_tracking.png", dpi=150)
+        plt.close(fig)
+        print("Saved path_tracking.png")
+
     def make_position_gif(self):
         data = np.array(self.log)[::5]
 
@@ -467,7 +533,7 @@ class BulldozerSimulation:
         nx = ca*sB*cg + sa*sg
         ny = ca*sB*sg - sa*cg
         nz = ca*cB
-        margin = 1.0
+        margin = 2.0
         cx = (data[:,1].max() + data[:,1].min()) / 2
         cy = (data[:,2].max() + data[:,2].min()) / 2
         cz = (data[:,3].max() + data[:,3].min()) / 2
@@ -503,6 +569,8 @@ class BulldozerSimulation:
                      (0,4),(1,5),(2,6),(3,7)]
         box_lines = [None] * 12
 
+        ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
+
         trail, = ax.plot([], [], [], 'b-', linewidth=1.5)
 
         def update(i):
@@ -537,7 +605,8 @@ class BulldozerSimulation:
 def main():
     sim = BulldozerSimulation()
     sim.run()
-    sim.post_process_and_plot()
+    # sim.post_process_and_plot()
+    # sim.plot_path_tracking()
     sim.make_position_gif()
 
 
