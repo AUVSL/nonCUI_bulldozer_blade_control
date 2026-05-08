@@ -720,18 +720,368 @@ def fit_angle_functions(threshold=0.498, n_samples=60):
     print("Saved angle_fit.png")
 
 
+def fit_torque_from_angle(threshold=0.498, n_samples=60):
+    """
+    Inverse mapping: given desired final yaw angle, predict the required fraction.
+    T = threshold - fraction is the output (force imbalance needed).
+    |yaw| is the input.
+    Candidates fit T = A * basis(|yaw|); fraction = threshold - T.
+    """
+    fractions = np.linspace(0.0, threshold, n_samples)
+    yaws = []
+    for frac in fractions:
+        sim = BulldozerSimulation()
+        sim.F_track[0] = sim.F_track_base
+        sim.F_track[1] = frac * sim.F_track_base
+        sim.run()
+        yaws.append(np.array(sim.log)[-1, 6])
+    yaws = np.array(yaws)
+
+    T = threshold - fractions        # target output: force imbalance
+    ang = np.abs(yaws)               # input: magnitude of final yaw
+
+    def _b(x, name):
+        return {
+            "ang^0.25":             x ** 0.25,
+            "ang^0.5":              x ** 0.5,
+            "ang^(2/3)":            x ** (2.0/3.0),
+            "ang^0.75":             x ** 0.75,
+            "ang^1":                x,
+            "ang^1.25":             x ** 1.25,
+            "ang^1.5":              x ** 1.5,
+            "ang^(5/3)":            x ** (5.0/3.0),
+            "ang^2":                x ** 2,
+            "ang^2.5":              x ** 2.5,
+            "ang^3":                x ** 3,
+            "log(ang+1)":           np.log(x + 1),
+            "log(ang+1)^2":         np.log(x + 1) ** 2,
+            "ang*log(ang+1)":       x * np.log(x + 1),
+            "ang^2*log(ang+1)":     x ** 2 * np.log(x + 1),
+            "ang/log(ang+2)":       x / np.log(x + 2),
+            # --- exponential family ---
+            "exp(ang)-1":           np.exp(x) - 1,
+            "exp(ang)-1-ang":       np.exp(x) - 1 - x,
+            "exp(ang^0.5)-1":       np.exp(x ** 0.5) - 1,
+            "exp(ang^0.75)-1":      np.exp(x ** 0.75) - 1,
+            "exp(ang^1.25)-1":      np.exp(x ** 1.25) - 1,
+            "exp(ang^1.5)-1":       np.exp(x ** 1.5) - 1,
+            "exp(ang^2)-1":         np.exp(x ** 2) - 1,
+            "(exp(ang)-1)^0.5":     np.sqrt(np.exp(x) - 1),
+            "(exp(ang)-1)^1.5":     (np.exp(x) - 1) ** 1.5,
+            "(exp(ang)-1)^2":       (np.exp(x) - 1) ** 2,
+            "ang*exp(ang)":         x * np.exp(x),
+            "ang^2*exp(ang)":       x ** 2 * np.exp(x),
+            # --- sinh / cosh family ---
+            "sinh(ang)":            np.sinh(x),
+            "sinh(ang^0.5)":        np.sinh(x ** 0.5),
+            "sinh(ang^0.75)":       np.sinh(x ** 0.75),
+            "sinh(ang^1.5)":        np.sinh(x ** 1.5),
+            "sinh(ang^2)":          np.sinh(x ** 2),
+            "cosh(ang)-1":          np.cosh(x) - 1,
+            "cosh(ang^0.5)-1":      np.cosh(x ** 0.5) - 1,
+            "sinh(ang)*ang":        np.sinh(x) * x,
+            # --- tanh-based ---
+            "tanh(ang)":            np.tanh(x),
+            "ang/tanh(ang+1e-9)-1": x / np.tanh(x + 1e-9) - 1,
+            "1-cos(ang)":           1 - np.cos(x),
+        }[name]
+
+    all_names = [
+        "ang^0.25","ang^0.5","ang^(2/3)","ang^0.75","ang^1",
+        "ang^1.25","ang^1.5","ang^(5/3)","ang^2","ang^2.5","ang^3",
+        "log(ang+1)","log(ang+1)^2","ang*log(ang+1)","ang^2*log(ang+1)","ang/log(ang+2)",
+        "exp(ang)-1","exp(ang)-1-ang",
+        "exp(ang^0.5)-1","exp(ang^0.75)-1","exp(ang^1.25)-1","exp(ang^1.5)-1","exp(ang^2)-1",
+        "(exp(ang)-1)^0.5","(exp(ang)-1)^1.5","(exp(ang)-1)^2",
+        "ang*exp(ang)","ang^2*exp(ang)",
+        "sinh(ang)","sinh(ang^0.5)","sinh(ang^0.75)","sinh(ang^1.5)","sinh(ang^2)",
+        "cosh(ang)-1","cosh(ang^0.5)-1","sinh(ang)*ang",
+        "tanh(ang)","ang/tanh(ang+1e-9)-1","1-cos(ang)",
+    ]
+    candidates = {n: _b(ang, n) for n in all_names}
+
+    print(f"\n{'Function':<24}  {'A':>12}  {'RMSE':>10}  {'Mean |err|':>12}")
+    print("-" * 64)
+    results = {}
+    for name, basis in candidates.items():
+        denom = np.dot(basis, basis)
+        A = np.dot(basis, T) / denom if denom > 0 else 0.0
+        residuals = T - A * basis
+        rmse = np.sqrt(np.mean(residuals ** 2))
+        mae  = np.mean(np.abs(residuals))
+        results[name] = (A, rmse, mae)
+        print(f"{name:<24}  {A:>12.6f}  {rmse:>10.6f}  {mae:>12.6f}")
+
+    best = min(results, key=lambda k: results[k][1])
+    print(f"\nBest fit: {best}  (lowest RMSE)")
+    A_best = results[best][0]
+    print(f"  fraction(yaw) = {threshold:.4f} - {A_best:.6f} * ({best})")
+
+    # Plot: angle → fraction — only top 6 by RMSE to keep plot readable
+    ranked = sorted(results, key=lambda k: results[k][1])
+    print(f"\n--- Top 10 ---")
+    for r in ranked[:10]:
+        A, rmse, mae = results[r]
+        print(f"  {r:<28}  A={A:.6f}  RMSE={rmse:.6f}  MAE={mae:.6f}")
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(ang, fractions, color='black', s=20, zorder=5, label='simulation data')
+    ang_dense = np.linspace(1e-9, ang.max(), 300)
+
+    colors_top = plt.cm.tab10(np.linspace(0, 1, 10))
+    for i, name in enumerate(ranked[:10]):
+        A = results[name][0]
+        frac_pred = threshold - A * _b(ang_dense, name)
+        ax.plot(ang_dense, frac_pred, linewidth=1.5,
+                linestyle='-' if name == best else '--',
+                color=colors_top[i],
+                label=f"{name}  ({results[name][1]:.4f})")
+
+    ax.axhline(threshold, color='grey', linestyle=':', linewidth=1, label=f'threshold={threshold}')
+    ax.set_xlabel("|Final yaw angle| (rad)")
+    ax.set_ylabel("Required fraction  (F_right / F_base)")
+    ax.set_title("Required torque fraction from desired yaw angle")
+    ax.legend(fontsize=8)
+    ax.grid(True)
+    plt.tight_layout()
+    plt.savefig("torque_from_angle.png", dpi=150)
+    plt.close(fig)
+    print("Saved torque_from_angle.png")
+
+
+def fit_torque_piecewise(threshold=0.498, n_samples=60):
+    """
+    Piecewise fits for angle → torque fraction.
+    Uses hinge/ReLU basis so each segment is continuous at the knot.
+    Multi-param fits via lstsq; RMSE reported for fair comparison.
+    """
+    fractions = np.linspace(0.0, threshold, n_samples)
+    yaws = []
+    for frac in fractions:
+        sim = BulldozerSimulation()
+        sim.F_track[0] = sim.F_track_base
+        sim.F_track[1] = frac * sim.F_track_base
+        sim.run()
+        yaws.append(np.array(sim.log)[-1, 6])
+    yaws = np.array(yaws)
+
+    T   = threshold - fractions
+    ang = np.abs(yaws)
+
+    def H(x, k):
+        return np.maximum(x - k, 0)
+
+    # Knot locations to sweep
+    knots = {
+        'q10': np.percentile(ang, 10),
+        'q25': np.percentile(ang, 25),
+        'q33': np.percentile(ang, 33),
+        'q50': np.percentile(ang, 50),
+        'q67': np.percentile(ang, 67),
+        'q75': np.percentile(ang, 75),
+        'q90': np.percentile(ang, 90),
+    }
+
+    results = {}
+
+    def fit(_, X):
+        c, _, _, _ = np.linalg.lstsq(X, T, rcond=None)
+        r = T - X @ c
+        return c, np.sqrt(np.mean(r**2)), np.mean(np.abs(r))
+
+    for kn, k in knots.items():
+        # 2-piece linear (different slopes, continuous)
+        c, rmse, mae = fit(f"2PL-{kn}", np.c_[ang, H(ang, k)])
+        results[f"2PL-{kn}"] = (c, rmse, mae, '2PL', k)
+
+        # 2-piece: ang^2 base + quadratic hinge
+        c, rmse, mae = fit(f"PQ2-{kn}", np.c_[ang**2, H(ang, k)**2])
+        results[f"PQ2-{kn}"] = (c, rmse, mae, 'PQ2', k)
+
+        # linear base + quadratic hinge
+        c, rmse, mae = fit(f"L+Q-{kn}", np.c_[ang, H(ang, k)**2])
+        results[f"L+Q-{kn}"] = (c, rmse, mae, 'LQ', k)
+
+        # ang^1.5 base + linear hinge
+        c, rmse, mae = fit(f"P1.5+PL-{kn}", np.c_[ang**1.5, H(ang, k)])
+        results[f"P1.5+PL-{kn}"] = (c, rmse, mae, 'P15L', k)
+
+        # ang^2 base + linear hinge
+        c, rmse, mae = fit(f"P2+PL-{kn}", np.c_[ang**2, H(ang, k)])
+        results[f"P2+PL-{kn}"] = (c, rmse, mae, 'P2L', k)
+
+        # sinh base + linear hinge
+        c, rmse, mae = fit(f"sinh+PL-{kn}", np.c_[np.sinh(ang), H(ang, k)])
+        results[f"sinh+PL-{kn}"] = (c, rmse, mae, 'sinhL', k)
+
+        # exp base + linear hinge
+        c, rmse, mae = fit(f"exp+PL-{kn}", np.c_[np.exp(ang) - 1, H(ang, k)])
+        results[f"exp+PL-{kn}"] = (c, rmse, mae, 'expL', k)
+
+    # 3-piece linear (2 knots)
+    knot_pairs = [
+        ('q25+q75', np.percentile(ang, 25), np.percentile(ang, 75)),
+        ('q33+q67', np.percentile(ang, 33), np.percentile(ang, 67)),
+        ('q20+q60', np.percentile(ang, 20), np.percentile(ang, 60)),
+        ('q40+q80', np.percentile(ang, 40), np.percentile(ang, 80)),
+    ]
+    for lbl, k1, k2 in knot_pairs:
+        c, rmse, mae = fit(f"3PL-{lbl}", np.c_[ang, H(ang, k1), H(ang, k2)])
+        results[f"3PL-{lbl}"] = (c, rmse, mae, '3PL', (k1, k2))
+
+    # 4-piece linear (3 knots at quartiles)
+    k1, k2, k3 = np.percentile(ang, [25, 50, 75])
+    c, rmse, mae = fit("4PL-q25/50/75", np.c_[ang, H(ang,k1), H(ang,k2), H(ang,k3)])
+    results["4PL-q25/50/75"] = (c, rmse, mae, '4PL', (k1,k2,k3))
+
+    ranked = sorted(results, key=lambda k: results[k][1])
+
+    print(f"\n{'Function':<22}  {'RMSE':>10}  {'MAE':>10}  Coefficients")
+    print("-" * 80)
+    for name in ranked[:15]:
+        c, rmse, mae, *_ = results[name]
+        cstr = "  ".join(f"{v:.5f}" for v in c)
+        print(f"{name:<22}  {rmse:>10.6f}  {mae:>10.6f}  [{cstr}]")
+
+    best = ranked[0]
+    print(f"\nBest: {best}  RMSE={results[best][1]:.6f}")
+
+    # Plot top 6
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(ang, fractions, color='black', s=20, zorder=5, label='data')
+    ad = np.linspace(0, ang.max(), 400)
+
+    def build_X(name, x):
+        ftype = results[name][3]
+        extra = results[name][4]
+        k = extra
+        if ftype == '2PL':  return np.c_[x, H(x, k)]
+        if ftype == 'PQ2':  return np.c_[x**2, H(x, k)**2]
+        if ftype == 'LQ':   return np.c_[x, H(x, k)**2]
+        if ftype == 'P15L': return np.c_[x**1.5, H(x, k)]
+        if ftype == 'P2L':  return np.c_[x**2, H(x, k)]
+        if ftype == 'sinhL':return np.c_[np.sinh(x), H(x, k)]
+        if ftype == 'expL': return np.c_[np.exp(x)-1, H(x, k)]
+        if ftype == '3PL':  k1,k2=k; return np.c_[x, H(x,k1), H(x,k2)]
+        if ftype == '4PL':  k1,k2,k3=k; return np.c_[x, H(x,k1), H(x,k2), H(x,k3)]
+
+    colors = plt.cm.tab10(np.linspace(0, 1, 6))
+    for i, name in enumerate(ranked[:6]):
+        c = results[name][0]
+        frac_pred = threshold - build_X(name, ad) @ c
+        ax.plot(ad, frac_pred, color=colors[i], linewidth=1.5,
+                linestyle='-' if name == best else '--',
+                label=f"{name}  ({results[name][1]:.5f})")
+
+    ax.axhline(threshold, color='grey', linestyle=':', linewidth=1, label=f'threshold={threshold:.3f}')
+    ax.set_xlabel("|Final yaw angle| (rad)")
+    ax.set_ylabel("Required fraction  (F_right / F_base)")
+    ax.set_title("Piecewise fits: angle → torque fraction  (top 6)")
+    ax.legend(fontsize=8)
+    ax.grid(True)
+    plt.tight_layout()
+    plt.savefig("torque_piecewise.png", dpi=150)
+    plt.close(fig)
+    print("Saved torque_piecewise.png")
+
+
+def fit_torque_bezier(threshold=0.498, n_samples=60):
+    """
+    Fit Bezier curves (Bernstein basis) of degrees 2-8 to the angle→fraction data.
+    Tries both unconstrained and endpoint-constrained variants:
+      - constrained: fraction(0)=threshold, fraction(ang_max)=0  (physical endpoints)
+    Compares RMSE against the best piecewise result (4PL RMSE≈0.00325).
+    """
+    from math import comb as _comb
+
+    fractions = np.linspace(0.0, threshold, n_samples)
+    yaws = []
+    for frac in fractions:
+        sim = BulldozerSimulation()
+        sim.F_track[0] = sim.F_track_base
+        sim.F_track[1] = frac * sim.F_track_base
+        sim.run()
+        yaws.append(np.array(sim.log)[-1, 6])
+    yaws      = np.array(yaws)
+    ang       = np.abs(yaws)
+    ang_max   = ang.max()
+    t         = ang / ang_max          # normalised to [0,1]
+
+    def bernstein(t_vec, n):
+        """(len(t), n+1) Bernstein basis matrix for degree n."""
+        B = np.zeros((len(t_vec), n + 1))
+        for i in range(n + 1):
+            B[:, i] = _comb(n, i) * t_vec**i * (1 - t_vec)**(n - i)
+        return B
+
+    results = {}
+
+    for deg in range(2, 9):
+        B = bernstein(t, deg)
+
+        # ── unconstrained ──────────────────────────────────────────────────
+        c, _, _, _ = np.linalg.lstsq(B, fractions, rcond=None)
+        r = fractions - B @ c
+        rmse = np.sqrt(np.mean(r**2))
+        results[f"Bezier-{deg} (free)"] = (c, rmse, np.mean(np.abs(r)), deg, 'free')
+
+        # ── endpoint-constrained: P0=threshold, Pn=0 ───────────────────────
+        # fractions_adj = fractions - threshold*B[:,0]  (P_n term is 0)
+        # fit interior control points B[:,1:-1]
+        if deg >= 2:
+            rhs  = fractions - threshold * B[:, 0]
+            Bint = B[:, 1:-1]
+            if Bint.shape[1] > 0:
+                c_int, _, _, _ = np.linalg.lstsq(Bint, rhs, rcond=None)
+                c_full = np.concatenate([[threshold], c_int, [0.0]])
+                r = fractions - B @ c_full
+                rmse = np.sqrt(np.mean(r**2))
+                results[f"Bezier-{deg} (pinned)"] = (
+                    c_full, rmse, np.mean(np.abs(r)), deg, 'pinned')
+
+    ranked = sorted(results, key=lambda k: results[k][1])
+
+    print(f"\n{'Model':<24}  {'params':>6}  {'RMSE':>10}  {'MAE':>10}")
+    print("-" * 58)
+    for name in ranked:
+        c, rmse, mae, deg, mode = results[name]
+        n_params = len(c) if mode == 'free' else len(c) - 2  # interior only
+        print(f"{name:<24}  {n_params:>6}  {rmse:>10.6f}  {mae:>10.6f}")
+
+    best = ranked[0]
+    print(f"\nBest: {best}  RMSE={results[best][1]:.6f}")
+    print(f"  (4PL piecewise baseline RMSE~0.003253)")
+
+    # ── plot top 6 + data ──────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.scatter(ang, fractions, color='black', s=20, zorder=5, label='simulation data')
+
+    t_dense   = np.linspace(0, 1, 400)
+    ang_dense = t_dense * ang_max
+    colors    = plt.cm.tab10(np.linspace(0, 1, 6))
+
+    for i, name in enumerate(ranked[:6]):
+        c, rmse, mae, deg, mode = results[name]
+        B_d = bernstein(t_dense, deg)
+        ax.plot(ang_dense, B_d @ c, color=colors[i], linewidth=1.5,
+                linestyle='-' if name == best else '--',
+                label=f"{name}  (RMSE={rmse:.5f})")
+
+    ax.axhline(threshold, color='grey', linestyle=':', linewidth=1,
+               label=f'threshold={threshold:.3f}')
+    ax.set_xlabel("|Final yaw angle| (rad)")
+    ax.set_ylabel("Required fraction  (F_right / F_base)")
+    ax.set_title("Bezier fits: angle → torque fraction  (top 6)")
+    ax.legend(fontsize=8)
+    ax.grid(True)
+    plt.tight_layout()
+    plt.savefig("torque_bezier.png", dpi=150)
+    plt.close(fig)
+    print("Saved torque_bezier.png")
+
+
 def main():
-    # sim = BulldozerSimulation()
-    # sim.run()
-    # sim.make_position_gif()
-
-    plot_track_force_sweep()
-
-    # threshold = find_straight_threshold()
-    # print(f"Largest fraction that does not go straight: {threshold:.6f}")
-    # print(f"  right track force = {threshold * 60000:.1f} N  (base = 60000 N)")
-
-    fit_angle_functions()
+    fit_torque_bezier()
 
 
 if __name__ == "__main__":
