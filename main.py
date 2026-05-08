@@ -12,24 +12,25 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
-        m                   = 10156.0 /10
-        self.dt             = 1/100
-        self.stop_time      = 8
+        self.stop_time      = 0.5
 
-        grav    = 9.81
-        h       = 2.762
+        m                   = 10156.0 /4 # scaled down by Sam
+        self.F_track_base  = 60000.0
+        self.F_track       = np.array([self.F_track_base, 29894])
+        h                  = 2.762 /3   # scaled down by Sam
+        self.l             = 2.349 /1.5 # scaled down by Sam
+        self.b             = 1.75  /1.5 # scaled down by Sam
+        self.B1            = 2.921
+        
         self.h  = h
-        self.l  = 2.349
-        self.b  = 1.75
-        self.B1 = 2.921
         self.H  = 0.955
         self.L  = 1.2
-        
+        grav    = 9.81
         self.mu_l  = 0.1
         self.mu_t  = 0.9
         self.mu_ss = 0.5
         self.kb    = 0.734e6
-
+        self.dt    = 1/100
         self.beta0 = np.radians(38.0)
 
 
@@ -56,14 +57,12 @@ class BulldozerSimulation:
 
         # ───────────────── Initial Conditions ─────────────────
         self.desired_depth = -0.4
-        self.desired_abg   = np.array([-0.00, 0, 0.000])
-        self.surface_abg   = np.array([ 0.0, 0.5,  0.00])
-        self.F_track_base  = 60000.0
-        self.F_track       = np.array([60000.0, 10000.0])
-        self.x_ICR_dot  = 0.0
-        self.bld_ang = np.zeros(3)
-        self.dxyz    = np.zeros(3)
-        self.daBg    = np.zeros(3)
+        self.desired_abg   = np.array([ 0.0, 0, 0.000])
+        self.surface_abg   = np.array([ 0.0, 0.0,  0.00])
+        self.x_ICR_dot     = 0.0
+        self.bld_ang       = np.zeros(3)
+        self.dxyz          = np.zeros(3)
+        self.daBg          = np.zeros(3)
 
         self.q = np.array([
             0.0, 0.0, 0.0,
@@ -602,12 +601,137 @@ class BulldozerSimulation:
         plt.close(fig)
         print("Saved position_3d.gif")
 
-def main():
+def plot_track_force_sweep():
+    """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
+    fractions = np.linspace(0, 1, 100)
+    colors = plt.cm.viridis(np.linspace(0, 1, 100))
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    for i, fraction in enumerate(fractions):
+        sim = BulldozerSimulation()
+        sim.F_track[0] = sim.F_track_base
+        sim.F_track[1] = fraction * sim.F_track_base
+        sim.run()
+
+        data = np.array(sim.log)
+        ax.plot(data[:, 1], data[:, 2], color=colors[i], linewidth=0.8, alpha=0.7)
+
+    sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
+    plt.colorbar(sm, ax=ax, label="right track fraction of F_base")
+
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_title("XY trajectories — left track = F_base, right track = 0 to 1 x F_base (100 steps)")
+    ax.set_aspect("equal")
+    ax.grid(True)
+    plt.tight_layout()
+    plt.savefig("track_force_sweep.png", dpi=150)
+    plt.close(fig)
+    print("Saved track_force_sweep.png")
+
+
+def run_single(fraction):
     sim = BulldozerSimulation()
+    sim.F_track[0] = sim.F_track_base
+    sim.F_track[1] = fraction * sim.F_track_base
     sim.run()
-    # sim.post_process_and_plot()
-    # sim.plot_path_tracking()
-    sim.make_position_gif()
+    data = np.array(sim.log)
+    return np.max(np.abs(data[:, 2]))   # peak |y| displacement
+
+
+def find_straight_threshold(tol=1e-3, n_iter=60):
+    """Binary search for the largest fraction where peak |y| > tol."""
+    lo, hi = 0.0, 1.0
+    for _ in range(n_iter):
+        mid = (lo + hi) / 2
+        if run_single(mid) > tol:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def fit_angle_functions(threshold=0.498, n_samples=60):
+    """
+    For fractions in [0, threshold], record final yaw angle from each sim.
+    Input  T = threshold - fraction  (0 at the straight boundary, max at fraction=0).
+    Fit candidate functions f(T) = A * basis(T) and report RMSE for each.
+    """
+    fractions = np.linspace(0.0, threshold, n_samples)
+    yaws = []
+    for frac in fractions:
+        sim = BulldozerSimulation()
+        sim.F_track[0] = sim.F_track_base
+        sim.F_track[1] = frac * sim.F_track_base
+        sim.run()
+        yaws.append(np.array(sim.log)[-1, 6])   # final yaw = q[5]
+    yaws = np.array(yaws)
+
+    # Shifted input: 0 at the straight boundary, grows as force imbalance increases
+    T = threshold - fractions
+
+    candidates = {
+        "log(T+1)":  np.log(T + 1),
+        "sqrt(T)":   np.sqrt(T),
+        "linear T":  T,
+        "T^1.5":     T ** 1.5,
+        "T^2":       T ** 2,
+    }
+
+    print(f"\n{'Function':<14}  {'A':>10}  {'RMSE':>10}  {'Mean |err|':>12}")
+    print("-" * 52)
+    results = {}
+    for name, basis in candidates.items():
+        denom = np.dot(basis, basis)
+        A = np.dot(basis, yaws) / denom if denom > 0 else 0.0
+        residuals = yaws - A * basis
+        rmse = np.sqrt(np.mean(residuals ** 2))
+        mae  = np.mean(np.abs(residuals))
+        results[name] = (A, basis, rmse, mae)
+        print(f"{name:<14}  {A:>10.4f}  {rmse:>10.6f}  {mae:>12.6f}")
+
+    best = min(results, key=lambda k: results[k][2])
+    print(f"\nBest fit: {best}  (lowest RMSE)")
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    ax.scatter(T, yaws, color='black', s=15, zorder=5, label='simulation data')
+    T_dense = np.linspace(0, threshold, 300)
+    for name, (A, _, _, _) in results.items():
+        basis_dense = {
+            "log(T+1)":  np.log(T_dense + 1),
+            "sqrt(T)":   np.sqrt(T_dense),
+            "linear T":  T_dense,
+            "T^1.5":     T_dense ** 1.5,
+            "T^2":       T_dense ** 2,
+        }[name]
+        ax.plot(T_dense, A * basis_dense, linewidth=1.5,
+                linestyle='--' if name != best else '-',
+                label=f"{name}  (RMSE={results[name][2]:.4f})")
+
+    ax.set_xlabel("T = threshold − fraction  (force imbalance)")
+    ax.set_ylabel("Final yaw angle (rad)")
+    ax.set_title("Final yaw vs force imbalance — candidate function fits")
+    ax.legend(fontsize=8)
+    ax.grid(True)
+    plt.tight_layout()
+    plt.savefig("angle_fit.png", dpi=150)
+    plt.close(fig)
+    print("Saved angle_fit.png")
+
+
+def main():
+    # sim = BulldozerSimulation()
+    # sim.run()
+    # sim.make_position_gif()
+
+    plot_track_force_sweep()
+
+    # threshold = find_straight_threshold()
+    # print(f"Largest fraction that does not go straight: {threshold:.6f}")
+    # print(f"  right track force = {threshold * 60000:.1f} N  (base = 60000 N)")
+
+    fit_angle_functions()
 
 
 if __name__ == "__main__":
