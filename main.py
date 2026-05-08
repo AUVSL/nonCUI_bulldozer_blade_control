@@ -12,7 +12,7 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
-        self.stop_time      = 0.5
+        self.stop_time      = 30
 
         m                   = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
@@ -54,6 +54,7 @@ class BulldozerSimulation:
         # Controller (proportional placeholders)
         self.Kp      = -3.0
         self.Kp_path = 8000.0   # N/m  — track-force gain for cross-track error
+        self.K_cross = 0.2      # rad/m — converts cross-track distance to equivalent heading angle
 
         # ───────────────── Initial Conditions ─────────────────
         self.desired_depth = -0.4
@@ -77,8 +78,9 @@ class BulldozerSimulation:
         self.R_lg    = self.rotation_lg(self.q[3], self.q[4], self.q[5])
         _, self.J_lg = self.rotation_derivatives(self.q[3], self.q[4])
 
-        self.cross_track_err = 0.0
-        self.path_points     = self.figure8_path(A=5.0, B=2.5)
+        self.cross_track_err  = 0.0
+        self.heading_err      = 0.0
+        self.path_points      = self.figure8_path(A=5.0, B=2.5)
 
         self.Fb       = 0.0
         self.Mb       = 0.0
@@ -87,6 +89,12 @@ class BulldozerSimulation:
         self.Mr       = 0.0
         self.vtL      = 0.0
         self.vtR      = 0.0
+
+        # Bezier-6-pinned angular controller (set via use_bezier_controller())
+        self._bezier_coeffs   = None
+        self._bezier_ang_max  = None
+        self._lookahead_dist  = 1.5
+        self._nearest_path_idx = 0
 
         # Logs
         self.log = []
@@ -377,11 +385,105 @@ class BulldozerSimulation:
         self.F_track[0] = float(np.clip(self.F_track_base + delta, 0.0, F_max))
         self.F_track[1] = float(np.clip(self.F_track_base - delta, 0.0, F_max))
 
+    def use_bezier_controller(self, coeffs, ang_max, lookahead_dist=1.5):
+        self._bezier_coeffs   = np.asarray(coeffs)
+        self._bezier_ang_max  = float(ang_max)
+        self._lookahead_dist  = float(lookahead_dist)
+
+    def _eval_bezier6(self, t):
+        from math import comb as _c
+        return sum(_c(6, i) * t**i * (1-t)**(6-i) * self._bezier_coeffs[i]
+                   for i in range(7))
+
+    def pure_pursuit_heading_error(self):
+        """
+        Pure-pursuit: find the lookahead point on the path at distance
+        self._lookahead_dist from the vehicle, return the signed angle
+        from current heading to that point.
+        """
+        pos = self.q[:2]
+        L   = self._lookahead_dist
+        n   = len(self.path_points)
+
+        dists      = np.linalg.norm(self.path_points - pos, axis=1)
+        nearest    = int(np.argmin(dists))
+        self._nearest_path_idx = nearest
+        lookahead_pt = None
+
+        # Walk forward along path segments looking for circle intersection
+        for k in range(n):
+            i   = (nearest + k) % n
+            j   = (i + 1) % n
+            p1  = self.path_points[i]
+            p2  = self.path_points[j]
+            d   = p2 - p1
+            f   = p1 - pos
+            a   = float(np.dot(d, d))
+            b   = 2.0 * float(np.dot(f, d))
+            c   = float(np.dot(f, f)) - L * L
+            disc = b * b - 4 * a * c
+            if disc < 0:
+                continue
+            t2 = (-b + np.sqrt(disc)) / (2 * a)   # forward intersection
+            if 0.0 <= t2 <= 1.0:
+                lookahead_pt = p1 + t2 * d
+                break
+
+        if lookahead_pt is None:                    # fallback: nearest point
+            lookahead_pt = self.path_points[nearest]
+
+        dx  = lookahead_pt[0] - pos[0]
+        dy  = lookahead_pt[1] - pos[1]
+        err = np.arctan2(dy, dx) - self.q[5]
+        return float((err + np.pi) % (2 * np.pi) - np.pi)
+
+    def angular_path_controller(self):
+        """Assign track forces via Bezier-6-pinned lookup on pure-pursuit heading error."""
+        self.heading_err = self.pure_pursuit_heading_error()
+        ang      = min(abs(self.heading_err), self._bezier_ang_max)
+        t        = ang / self._bezier_ang_max
+        fraction = float(np.clip(self._eval_bezier6(t), 0.0, 1.0))
+        if self.heading_err > 0:          # need to turn left  → weaken left track
+            self.F_track[0] = fraction * self.F_track_base
+            self.F_track[1] = self.F_track_base
+        else:                              # need to turn right → weaken right track
+            self.F_track[0] = self.F_track_base
+            self.F_track[1] = fraction * self.F_track_base
+
+    def combined_path_controller(self):
+        """Bezier torque lookup driven by a composite of heading and cross-track errors.
+
+        combined_err = heading_err - K_cross * cross_track_err
+        Sign: positive → turn left (weaken left track), negative → turn right.
+        Both error sources are mapped through the same nonlinear Bezier curve so
+        the torque response is consistent regardless of which error dominates.
+        """
+        self.heading_err     = self.pure_pursuit_heading_error()
+        self.cross_track_err = self.signed_cross_track_error(self.q[:2])
+
+        combined_err = self.heading_err - self.K_cross * self.cross_track_err
+        ang          = min(abs(combined_err), self._bezier_ang_max)
+        t            = ang / self._bezier_ang_max
+        fraction     = float(np.clip(self._eval_bezier6(t), 0.0, 1.0))
+
+        if combined_err > 0:              # net error → turn left → weaken left track
+            self.F_track[0] = fraction * self.F_track_base
+            self.F_track[1] = self.F_track_base
+        else:                             # net error → turn right → weaken right track
+            self.F_track[0] = self.F_track_base
+            self.F_track[1] = fraction * self.F_track_base
+
     # ───────────────── Main Integration Loop ─────────────────
     def run(self):
         t = 0.0
+        n_pts   = len(self.path_points)
+        max_idx = 0
         for _ in range(int(self.stop_time / self.dt)):
-            # self.path_controller()
+            if self._bezier_coeffs is not None:
+                self.angular_path_controller()
+                max_idx = max(max_idx, self._nearest_path_idx)
+                if max_idx > n_pts * 0.9 and self._nearest_path_idx < n_pts * 0.1:
+                    break
             errors, plot_err = self.controller_errors()
 
             self.bld_ang += self.gain * self.Kp * errors
@@ -417,7 +519,8 @@ class BulldozerSimulation:
                              self.Rl[0], self.Rl[1],
                              self.Fy, self.Mr,
                              self.v[0], self.v[1],
-                             self.cross_track_err])
+                             self.cross_track_err,
+                             self.heading_err])
             t += self.dt
             
     def post_process_and_plot(self):
@@ -985,7 +1088,7 @@ def fit_torque_piecewise(threshold=0.498, n_samples=60):
     print("Saved torque_piecewise.png")
 
 
-def fit_torque_bezier(threshold=0.498, n_samples=60):
+def fit_torque_bezier(threshold=0.498, n_samples=600):
     """
     Fit Bezier curves (Bernstein basis) of degrees 2-8 to the angle→fraction data.
     Tries both unconstrained and endpoint-constrained variants:
@@ -1080,8 +1183,98 @@ def fit_torque_bezier(threshold=0.498, n_samples=60):
     print("Saved torque_bezier.png")
 
 
+def build_bezier6_pinned(threshold=0.498, n_samples=600):
+    """Fit Bezier-6 pinned curve and return (coeffs, ang_max)."""
+    from math import comb as _comb
+
+    fractions = np.linspace(0.0, threshold, n_samples)
+    yaws = []
+    for frac in fractions:
+        sim = BulldozerSimulation()
+        sim.stop_time  = 0.5          # short calibration run, constant forces
+        sim.F_track[0] = sim.F_track_base
+        sim.F_track[1] = frac * sim.F_track_base
+        sim.run()
+        yaws.append(np.array(sim.log)[-1, 6])
+    yaws    = np.array(yaws)
+    ang     = np.abs(yaws)
+    ang_max = ang.max()
+    t       = ang / ang_max
+
+    B = np.zeros((len(t), 7))
+    for i in range(7):
+        B[:, i] = _comb(6, i) * t**i * (1 - t)**(6 - i)
+
+    rhs   = fractions - threshold * B[:, 0]
+    c_int, _, _, _ = np.linalg.lstsq(B[:, 1:-1], rhs, rcond=None)
+    coeffs = np.concatenate([[threshold], c_int, [0.0]])
+    print(f"Bezier-6 pinned built  ang_max={ang_max:.4f} rad  "
+          f"coeffs={np.array2string(coeffs, precision=4)}")
+    return coeffs, ang_max
+
+
+def demo_angular_controller(stop_time=30.0, lookahead_dist=1.5):
+    """Run figure-8 with pure-pursuit + Bezier-6-pinned torque lookup."""
+    print("Building Bezier-6 pinned lookup table (600 calibration sims)...")
+    coeffs, ang_max = build_bezier6_pinned()
+
+    print(f"Running figure-8 for {stop_time}s  lookahead={lookahead_dist}m ...")
+    sim = BulldozerSimulation()
+    sim.stop_time = stop_time
+    sim.use_bezier_controller(coeffs, ang_max, lookahead_dist=lookahead_dist)
+    sim.run()
+
+    data       = np.array(sim.log)
+    time       = data[:, 0]
+    x, y       = data[:, 1], data[:, 2]
+    heading_err = data[:, 25]   # col appended in run()
+    F_left     = data[:, 16]
+    F_right    = data[:, 17]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # ── top-down path ──────────────────────────────────────────────────────
+    ax = axes[0]
+    ax.plot(sim.path_points[:, 0], sim.path_points[:, 1],
+            'g--', linewidth=1.5, label='figure-8 reference')
+    ax.plot(x, y, 'b-', linewidth=1.2, label='vehicle')
+    ax.plot(x[0], y[0], 'ko', markersize=6, label='start')
+    ax.set_xlabel("X (m)")
+    ax.set_ylabel("Y (m)")
+    ax.set_title("Top-down trajectory")
+    ax.set_aspect('equal')
+    ax.legend(fontsize=8)
+    ax.grid(True)
+
+    # ── heading error ──────────────────────────────────────────────────────
+    ax = axes[1]
+    ax.plot(time, np.degrees(heading_err), 'r-', linewidth=1.0)
+    ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Heading error (deg)")
+    ax.set_title("Heading error over time")
+    ax.grid(True)
+
+    # ── track forces ──────────────────────────────────────────────────────
+    ax = axes[2]
+    ax.plot(time, F_left  / 1000, label='F_left',  linewidth=1.0)
+    ax.plot(time, F_right / 1000, label='F_right', linewidth=1.0)
+    ax.axhline(sim.F_track_base / 1000, color='grey',
+               linestyle=':', linewidth=0.8, label='F_base')
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Track force (kN)")
+    ax.set_title("Controller track forces")
+    ax.legend(fontsize=8)
+    ax.grid(True)
+
+    plt.tight_layout()
+    plt.savefig("angular_controller_demo.png", dpi=150)
+    plt.close(fig)
+    print("Saved angular_controller_demo.png")
+
+
 def main():
-    fit_torque_bezier()
+    demo_angular_controller()
 
 
 if __name__ == "__main__":
