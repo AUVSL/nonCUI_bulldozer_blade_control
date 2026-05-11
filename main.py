@@ -439,7 +439,8 @@ class BulldozerSimulation:
 
     def angular_path_controller(self):
         """Assign track forces via Bezier-6-pinned lookup on pure-pursuit heading error."""
-        self.heading_err = self.pure_pursuit_heading_error()
+        self.heading_err     = self.pure_pursuit_heading_error()
+        self.cross_track_err = self.signed_cross_track_error(self.q[:2])
         ang      = min(abs(self.heading_err), self._bezier_ang_max)
         t        = ang / self._bezier_ang_max
         fraction = float(np.clip(self._eval_bezier6(t), 0.0, 1.0))
@@ -1213,7 +1214,7 @@ def build_bezier6_pinned(threshold=0.498, n_samples=600):
     return coeffs, ang_max
 
 
-def demo_angular_controller(stop_time=30.0, lookahead_dist=1.5):
+def demo_angular_controller(stop_time=30.0, lookahead_dist=1.0):
     """Run figure-8 with pure-pursuit + Bezier-6-pinned torque lookup."""
     print("Building Bezier-6 pinned lookup table (600 calibration sims)...")
     coeffs, ang_max = build_bezier6_pinned()
@@ -1224,53 +1225,104 @@ def demo_angular_controller(stop_time=30.0, lookahead_dist=1.5):
     sim.use_bezier_controller(coeffs, ang_max, lookahead_dist=lookahead_dist)
     sim.run()
 
-    data       = np.array(sim.log)
-    time       = data[:, 0]
-    x, y       = data[:, 1], data[:, 2]
-    heading_err = data[:, 25]   # col appended in run()
-    F_left     = data[:, 16]
-    F_right    = data[:, 17]
+    data         = np.array(sim.log)
+    cross_track  = data[:, 24]
+    heading_err  = data[:, 25]
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    def _stats(arr):
+        rmse = np.sqrt(np.mean(arr**2))
+        mae  = np.mean(np.abs(arr))
+        mx   = np.max(np.abs(arr))
+        return rmse, mae, mx
 
-    # ── top-down path ──────────────────────────────────────────────────────
-    ax = axes[0]
+    ct_rmse, ct_mae, ct_max   = _stats(cross_track)
+    he_rmse, he_mae, he_max   = _stats(np.degrees(heading_err))
+
+    print(f"\n{'':>16}  {'RMSE':>10}  {'MAE':>10}  {'Max |err|':>10}")
+    print("-" * 52)
+    print(f"{'Cross-track (m)':>16}  {ct_rmse:>10.4f}  {ct_mae:>10.4f}  {ct_max:>10.4f}")
+    print(f"{'Heading (deg)':>16}  {he_rmse:>10.4f}  {he_mae:>10.4f}  {he_max:>10.4f}")
+
+    print("Rendering GIF...")
+    data_full = np.array(sim.log)
+    data      = data_full[::5]          # 5x downsample → real-time at 20 fps
+
+    fig = plt.figure(figsize=(8, 7))
+    ax  = fig.add_subplot(111, projection='3d')
+
+    # Ground plane (surface_abg = 0 so it's flat at z = 0)
+    margin = 2.0
+    cx   = (data[:, 1].max() + data[:, 1].min()) / 2
+    cy   = (data[:, 2].max() + data[:, 2].min()) / 2
+    cz   = sim.h / 2
+    half = max(data[:, 1].max() - data[:, 1].min(),
+               data[:, 2].max() - data[:, 2].min(),
+               sim.h) / 2 + margin
+    xs = np.linspace(cx - half, cx + half, 20)
+    ys = np.linspace(cy - half, cy + half, 20)
+    Xs, Ys = np.meshgrid(xs, ys)
+    ax.plot_surface(Xs, Ys, np.zeros_like(Xs), alpha=0.25, color='tan', zorder=0)
+
+    # Figure-8 reference path on the ground
     ax.plot(sim.path_points[:, 0], sim.path_points[:, 1],
-            'g--', linewidth=1.5, label='figure-8 reference')
-    ax.plot(x, y, 'b-', linewidth=1.2, label='vehicle')
-    ax.plot(x[0], y[0], 'ko', markersize=6, label='start')
+            np.zeros(len(sim.path_points)),
+            'g--', linewidth=1.2, alpha=0.7)
+
+    ax.set_xlim(cx - half, cx + half)
+    ax.set_ylim(cy - half, cy + half)
+    ax.set_zlim(cz - half, cz + half)
+    ax.set_box_aspect([1, 1, 1])
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
-    ax.set_title("Top-down trajectory")
-    ax.set_aspect('equal')
-    ax.legend(fontsize=8)
-    ax.grid(True)
+    ax.set_zlabel("Z (m)")
 
-    # ── heading error ──────────────────────────────────────────────────────
-    ax = axes[1]
-    ax.plot(time, np.degrees(heading_err), 'r-', linewidth=1.0)
-    ax.axhline(0, color='k', linestyle='--', linewidth=0.8)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Heading error (deg)")
-    ax.set_title("Heading error over time")
-    ax.grid(True)
+    # Box corners in local frame (origin = bottom centre)
+    hl, hb = sim.l / 2, sim.b / 2
+    c_local = np.array([
+        [-hl, -hb,      0],   # 0 bottom rear-left
+        [+hl, -hb,      0],   # 1 bottom front-left
+        [+hl, +hb,      0],   # 2 bottom front-right
+        [-hl, +hb,      0],   # 3 bottom rear-right
+        [-hl, -hb, sim.h],   # 4 top rear-left
+        [+hl, -hb, sim.h],   # 5 top front-left
+        [+hl, +hb, sim.h],   # 6 top front-right
+        [-hl, +hb, sim.h],   # 7 top rear-right
+    ])
+    box_edges = [(0,1),(1,2),(2,3),(3,0),
+                 (4,5),(5,6),(6,7),(7,4),
+                 (0,4),(1,5),(2,6),(3,7)]
+    box_lines = [None] * 12
 
-    # ── track forces ──────────────────────────────────────────────────────
-    ax = axes[2]
-    ax.plot(time, F_left  / 1000, label='F_left',  linewidth=1.0)
-    ax.plot(time, F_right / 1000, label='F_right', linewidth=1.0)
-    ax.axhline(sim.F_track_base / 1000, color='grey',
-               linestyle=':', linewidth=0.8, label='F_base')
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Track force (kN)")
-    ax.set_title("Controller track forces")
-    ax.legend(fontsize=8)
-    ax.grid(True)
+    trail, = ax.plot([], [], [], 'b-', linewidth=1.2)
 
-    plt.tight_layout()
-    plt.savefig("angular_controller_demo.png", dpi=150)
+    def update(i):
+        trail.set_data(data[:i+1, 1], data[:i+1, 2])
+        trail.set_3d_properties(data[:i+1, 3])
+
+        for line in box_lines:
+            if line is not None:
+                line.remove()
+
+        R   = sim.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
+        pos = data[i, 1:4]
+        c_g = pos + (R @ c_local.T).T
+
+        for j, (a, b) in enumerate(box_edges):
+            p1, p2 = c_g[a], c_g[b]
+            box_lines[j], = ax.plot(
+                [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                color='red', linewidth=1.5
+            )
+
+        ax.set_title(f"t = {data[i, 0]:.2f} s")
+        return trail,
+
+    anim = animation.FuncAnimation(
+        fig, update, frames=len(data), blit=False, interval=50
+    )
+    anim.save("angular_controller_demo.gif", writer=animation.PillowWriter(fps=20))
     plt.close(fig)
-    print("Saved angular_controller_demo.png")
+    print("Saved angular_controller_demo.gif")
 
 
 def main():
