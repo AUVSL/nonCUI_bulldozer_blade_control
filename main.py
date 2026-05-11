@@ -13,10 +13,10 @@ class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
         self.stop_time      = 1
-
+        self.surface_abg   = np.array([ 0.4, 0,  0.00])
         m                   = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
-        self.F_track       = np.array([self.F_track_base, 10000])
+        self.F_track       = np.array([self.F_track_base, 0])
         h                  = 2.762 /3   # scaled down by Sam
         self.l             = 2.349 /1.5 # scaled down by Sam
         self.b             = 1.75  /1.5 # scaled down by Sam
@@ -59,7 +59,6 @@ class BulldozerSimulation:
         # ───────────────── Initial Conditions ─────────────────
         self.desired_depth = -0.4
         self.desired_abg   = np.array([ 0.0, 0, 0.000])
-        self.surface_abg   = np.array([ 0.4, 0.0,  0.00])
         self.x_ICR_dot     = 0.0
         self.dxyz          = np.zeros(3)
         self.daBg          = np.zeros(3)
@@ -367,7 +366,6 @@ class BulldozerSimulation:
             R_gl            = self.rotation_gl(a, B, g)
             J_gl, self.J_lg = self.rotation_derivatives(a, B)
             
-
             self.dxyz = R_gl @ self.q_dot[0:3]
             self.daBg = J_gl @ self.q_dot[3:6]
             
@@ -379,8 +377,9 @@ class BulldozerSimulation:
                              self.dxyz[0], self.dxyz[1], self.daBg[2], self.x_ICR,])
             t += self.dt
 
-    def make_position_gif(self):
+    def make_position_gif(self, first_frame_only: bool = False):
         data = np.array(self.log)[::5]
+        n_frames = 1 if first_frame_only else len(data)
 
         fig = plt.figure(figsize=(14, 7))
         gs  = fig.add_gridspec(2, 2, width_ratios=[1.4, 1], hspace=0.35, wspace=0.3)
@@ -392,9 +391,11 @@ class BulldozerSimulation:
         a_s, B_s, g_s = self.surface_abg
         sa, ca = np.sin(a_s), np.cos(a_s)
         sB, cB = np.sin(B_s), np.cos(B_s)
-
-        nx = -sB
-        ny = sa * cB
+        sg, cg  = np.sin(g_s), np.cos(g_s)
+        # nx = -sB
+        # ny = sa * cB
+        nx = ca*sB*cg + sa*sg
+        ny = ca*sB*sg - sa*cg
         nz = ca*cB
 
         margin = 2.0
@@ -508,7 +509,7 @@ class BulldozerSimulation:
             return trail,
 
         anim = animation.FuncAnimation(
-            fig, update, frames=len(data), blit=False, interval=50
+            fig, update, frames=n_frames, blit=False, interval=50
         )
         anim.save("position_3d.gif", writer=animation.PillowWriter(fps=20))
         plt.close(fig)
@@ -526,8 +527,7 @@ def run_single(fraction):
 def main():
     sim = BulldozerSimulation()
     sim.run()
-    sim.make_position_gif()
-
+    sim.make_position_gif(first_frame_only=False)
 
 if __name__ == "__main__":
     main()
