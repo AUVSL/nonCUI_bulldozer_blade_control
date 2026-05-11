@@ -16,7 +16,7 @@ class BulldozerSimulation:
 
         m                   = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
-        self.F_track       = np.array([self.F_track_base, 29894])
+        self.F_track       = np.array([self.F_track_base, 10000])
         h                  = 2.762 /3   # scaled down by Sam
         self.l             = 2.349 /1.5 # scaled down by Sam
         self.b             = 1.75  /1.5 # scaled down by Sam
@@ -295,7 +295,7 @@ class BulldozerSimulation:
         R6_lg = np.zeros((6, 6))
         R6_lg[0:3, 0:3] = self.R_lg
         R6_lg[3:6, 3:6] = self.R_lg
-        C = R6_lg @ (Ct_vec + Cb_vec)
+        C = R6_lg @ (Ct_vec)
 
         S  = self.S_matrix()
         Sd = self.Sd_matrix()
@@ -382,25 +382,30 @@ class BulldozerSimulation:
     def make_position_gif(self):
         data = np.array(self.log)[::5]
 
-        fig = plt.figure(figsize=(7, 7))
-        ax  = fig.add_subplot(111, projection='3d')
+        fig = plt.figure(figsize=(14, 7))
+        gs  = fig.add_gridspec(2, 2, width_ratios=[1.4, 1], hspace=0.35, wspace=0.3)
+        ax      = fig.add_subplot(gs[:, 0], projection='3d')
+        ax_top  = fig.add_subplot(gs[0, 1])
+        ax_side = fig.add_subplot(gs[1, 1])
 
-        # Surface plane (same normal derivation as post_process_and_plot)
-        a, B, g = self.surface_abg
-        print(f"Surface angles (degrees): {self.surface_abg}")
-        sa, ca  = np.sin(a), np.cos(a)
-        sB, cB  = np.sin(B), np.cos(B)
-        sg, cg  = np.sin(g), np.cos(g)
-        nx = ca*sB*cg + sa*sg
-        ny = ca*sB*sg - sa*cg
+        # Surface plane normal
+        a_s, B_s, g_s = self.surface_abg
+        sa, ca = np.sin(a_s), np.cos(a_s)
+        sB, cB = np.sin(B_s), np.cos(B_s)
+
+        nx = -sB
+        ny = sa * cB
         nz = ca*cB
+
         margin = 2.0
-        cx = (data[:,1].max() + data[:,1].min()) / 2
-        cy = (data[:,2].max() + data[:,2].min()) / 2
-        cz = (data[:,3].max() + data[:,3].min()) / 2
+        cx   = (data[:,1].max() + data[:,1].min()) / 2
+        cy   = (data[:,2].max() + data[:,2].min()) / 2
+        cz   = (data[:,3].max() + data[:,3].min()) / 2
         half = max(data[:,1].max() - data[:,1].min(),
                    data[:,2].max() - data[:,2].min(),
                    data[:,3].max() - data[:,3].min()) / 2 + margin
+
+        # 3D surface patch
         xs = np.linspace(cx - half, cx + half, 30)
         ys = np.linspace(cy - half, cy + half, 30)
         Xs, Ys = np.meshgrid(xs, ys)
@@ -413,6 +418,30 @@ class BulldozerSimulation:
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
 
+        # Top-view surface line (intersection with y-range at z from plane)
+        ax_top.set_xlim(cx - half, cx + half)
+        ax_top.set_ylim(cy - half, cy + half)
+        ax_top.set_xlabel("X (m)")
+        ax_top.set_ylabel("Y (m)")
+        ax_top.set_title("Top View (X-Y)")
+        ax_top.set_aspect('equal', adjustable='box')
+        ax_top.grid(True, linewidth=0.4)
+
+        # Side-view surface line (x-z cross-section at y=cy)
+        ax_side.set_xlim(cx - half, cx + half)
+        ax_side.set_ylim(cz - half, cz + half)
+        ax_side.set_xlabel("X (m)")
+        ax_side.set_ylabel("Z (m)")
+        ax_side.set_title("Side View (X-Z)")
+        ax_side.set_aspect('equal', adjustable='box')
+        ax_side.grid(True, linewidth=0.4)
+
+        # Surface lines in 2D views
+        x_line = np.array([cx - half, cx + half])
+        ax_top.axhline(cy, color='tan', linewidth=2, alpha=0.7)   # ground centre
+        z_surface = -(nx * x_line + ny * cy) / nz
+        ax_side.plot(x_line, z_surface, color='tan', linewidth=2, alpha=0.7)
+
         # Box corners in local frame, origin = bottom centre
         hl, hb = self.l / 2, self.b / 2
         c_local = np.array([
@@ -420,25 +449,39 @@ class BulldozerSimulation:
             [+hl, -hb,          0],  # 1 bottom front-left
             [+hl, +hb,          0],  # 2 bottom front-right
             [-hl, +hb,          0],  # 3 bottom rear-right
-            [-hl, -hb, self.h], # 4 top rear-left
-            [+hl, -hb, self.h], # 5 top front-left
-            [+hl, +hb, self.h], # 6 top front-right
-            [-hl, +hb, self.h], # 7 top rear-right
+            [-hl, -hb, self.h],      # 4 top rear-left
+            [+hl, -hb, self.h],      # 5 top front-left
+            [+hl, +hb, self.h],      # 6 top front-right
+            [-hl, +hb, self.h],      # 7 top rear-right
         ])
         box_edges = [(0,1),(1,2),(2,3),(3,0),
                      (4,5),(5,6),(6,7),(7,4),
                      (0,4),(1,5),(2,6),(3,7)]
-        box_lines = [None] * 12
+        box_lines      = [None] * 12
+        box_lines_top  = [None] * 12
+        box_lines_side = [None] * 12
 
         ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
+        ax_top.scatter(data[0, 1], data[0, 2], color='blue', s=60, zorder=5)
+        ax_side.scatter(data[0, 1], data[0, 3], color='blue', s=60, zorder=5)
 
-        trail, = ax.plot([], [], [], 'b-', linewidth=1.5)
+        trail,      = ax.plot([], [], [], 'b-', linewidth=1.5)
+        trail_top,  = ax_top.plot([], [], 'b-', linewidth=1.5)
+        trail_side, = ax_side.plot([], [], 'b-', linewidth=1.5)
 
         def update(i):
             trail.set_data(data[:i+1, 1], data[:i+1, 2])
             trail.set_3d_properties(data[:i+1, 3])
+            trail_top.set_data(data[:i+1, 1], data[:i+1, 2])
+            trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
 
             for line in box_lines:
+                if line is not None:
+                    line.remove()
+            for line in box_lines_top:
+                if line is not None:
+                    line.remove()
+            for line in box_lines_side:
                 if line is not None:
                     line.remove()
 
@@ -446,10 +489,18 @@ class BulldozerSimulation:
             pos = data[i, 1:4]
             c_g = pos + (R @ c_local.T).T  # (8, 3) corners in global frame
 
-            for j, (a, b) in enumerate(box_edges):
-                p1, p2 = c_g[a], c_g[b]
+            for j, (ia, ib) in enumerate(box_edges):
+                p1, p2 = c_g[ia], c_g[ib]
                 box_lines[j], = ax.plot(
                     [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                    color='red', linewidth=1.5
+                )
+                box_lines_top[j], = ax_top.plot(
+                    [p1[0], p2[0]], [p1[1], p2[1]],
+                    color='red', linewidth=1.5
+                )
+                box_lines_side[j], = ax_side.plot(
+                    [p1[0], p2[0]], [p1[2], p2[2]],
                     color='red', linewidth=1.5
                 )
 
