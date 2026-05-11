@@ -182,7 +182,7 @@ class BulldozerSimulation:
 
     # ───────────────── Dynamics ─────────────────
     def blade_terrain_interaction(self):
-        a_rel = self.surface_abg[0] - self.bld_ang[0]
+        a_rel = self.surface_abg[0] - self.q[3] - self.bld_ang[0]
         hp    = abs(self.L * np.sin(self.bld_ang[1]))
 
         H1 = self.B1 * np.tan(abs(a_rel))
