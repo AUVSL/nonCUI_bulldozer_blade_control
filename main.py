@@ -12,11 +12,11 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
-        self.stop_time      = 1
-        self.surface_abg   = np.array([ 0.4, 0,  0.00])
+        self.stop_time      = 2
+        self.surface_abg   = np.array([ 0.4, 0.4,  0.00])
         m                   = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
-        self.F_track       = np.array([self.F_track_base, 0])
+        self.F_track       = np.array([self.F_track_base, 10000])
         h                  = 2.762 /3   # scaled down by Sam
         self.l             = 2.349 /1.5 # scaled down by Sam
         self.b             = 1.75  /1.5 # scaled down by Sam
@@ -32,7 +32,6 @@ class BulldozerSimulation:
         self.kb    = 0.734e6
         self.dt    = 1/100
         self.beta0 = np.radians(38.0)
-
 
         self.gain           = 1/40
         self.velocity_limit = 2.222
@@ -53,12 +52,10 @@ class BulldozerSimulation:
 
         # Controller (proportional placeholders)
         self.Kp      = -3.0
-        self.Kp_path = 8000.0   # N/m  — track-force gain for cross-track error
-        self.K_cross = 0.2      # rad/m — converts cross-track distance to equivalent heading angle
 
         # ───────────────── Initial Conditions ─────────────────
         self.desired_depth = -0.4
-        self.desired_abg   = np.array([ 0.0, 0, 0.000])
+        self.desired_abg   = np.array([ 0.0, 0, 0.0])
         self.x_ICR_dot     = 0.0
         self.dxyz          = np.zeros(3)
         self.daBg          = np.zeros(3)
@@ -122,6 +119,8 @@ class BulldozerSimulation:
         sa, ca = np.sin(a), np.cos(a)
         sB, cB = np.sin(B), np.cos(B)
         sg, cg = np.sin(g), np.cos(g)
+        # print(f"Rotation angles (a, B, g): {np.degrees([a, B, g])} degrees")
+        # print(f"Top corner:\n{ca * sB * cg + sa * sg}")
 
         return np.array([
             [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
@@ -132,8 +131,8 @@ class BulldozerSimulation:
     def rotation_derivatives(self, a, B):
         """Rotation derivative matrices"""
         # change to accept input array
-        sa, ca = np.sin(a), np.cos(a)
-        sB, cB, tB = np.sin(B), np.cos(B), np.tan(B)
+        sa, ca = np.sin(-a), np.cos(a)
+        sB, cB, tB = np.sin(-B), np.cos(B), np.tan(-B)
 
         J_gl = np.array([
             [1, sa * tB, ca * tB],
@@ -178,36 +177,6 @@ class BulldozerSimulation:
         if abs(self.x_ICR) < eps:
             return np.finfo(float).max
         return self.x_ICR
-
-    # ───────────────── Dynamics ─────────────────
-    def blade_terrain_interaction(self):
-        a_rel = self.surface_abg[0] - self.q[3] - self.bld_ang[0]
-        hp    = abs(self.L * np.sin(self.bld_ang[1]))
-
-        H1 = self.B1 * np.tan(abs(a_rel))
-        H2 = hp / np.cos(a_rel)
-        H3 = self.H - H2 + np.sign(a_rel) * H1 / 2 - H1 / 2
-        H4 = self.H - H2 - np.sign(a_rel) * H1 / 2 - H1 / 2
-
-        a_val = np.tan(abs(a_rel)) ** 2
-        c_val = (H3 + H4) / 2
-        V = 0.5 / np.tan(self.beta0) * (
-            1 / 12 * a_val ** 2 * self.B1 ** 3 + c_val ** 2 * self.B1
-        )
-
-        # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
-        fill_percent = np.linalg.norm(self.q[:3]) / self.fill_distance
-        Gt = V * self.gamma_g * fill_percent
-
-        hyp      = self.B1 / np.cos(abs(a_rel))
-        area_cut = 0.5 * self.B1 * H1 + hyp * hp
-        F1       = area_cut * self.kb
-        F2       = Gt * self.mu_ss
-        self.Fb  = -F1 - F2
-
-        yc1     = self.yc(H3 / np.tan(self.beta0), H4 / np.tan(self.beta0), self.B1)
-        yc2     = self.yc(H2, H1 + H2, self.B1)
-        self.Mb = yc1 * F1 + yc2 * F2
 
     def track_terrain_interaction(self):
         vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
@@ -265,7 +234,6 @@ class BulldozerSimulation:
 
     def vehicle_dynamics(self):
         # update forces and moments for current time step
-        self.blade_terrain_interaction()
         self.track_terrain_interaction()
 
         B_mat = np.zeros((6, 2))
@@ -287,15 +255,12 @@ class BulldozerSimulation:
             0, 0,
             self.Mr + (self.Rl[1] - self.Rl[0]) * self.b / 2
         ])
-
-        blade_vec = np.array([self.Fb, 0.0, 0.0, 0.0, 0.0, self.Mb])
-        Cb_vec = self.elim @ R6 @ blade_vec
         
         R6_lg = np.zeros((6, 6))
         R6_lg[0:3, 0:3] = self.R_lg
         R6_lg[3:6, 3:6] = self.R_lg
         C = R6_lg @ (Ct_vec)
-
+        
         S  = self.S_matrix()
         Sd = self.Sd_matrix()
 
@@ -307,56 +272,18 @@ class BulldozerSimulation:
         Et = S.T @ self.M @ Sd
         v_dot = np.linalg.solve(Mt, Bt @ self.F_track + Ct - Et @ self.v - Pt)
         return v_dot
-    # ───────────────── Controller ─────────────────
-    def controller_errors(self):
-        """
-        Computes blade roll, pitch, yaw errors relative to desired surface and depth.
-
-        Returns
-        -------
-        errors : np.ndarray, shape (3,)
-            [roll_error, pitch_error, yaw_error]
-        plot_out : np.ndarray, shape (3,)
-            [roll_error, depth_error, yaw_error]
-        """
-        roll, pitch, yaw = self.bld_ang
-        desired_roll, des_pitch_mult, desired_yaw = self.desired_abg
-
-        desired_pitch = des_pitch_mult * np.arcsin(
-            np.clip(self.desired_depth / self.L, -1.0, 1.0)
-        )
-
-        errors = np.array([
-            roll  - desired_roll,
-            pitch - desired_pitch,
-            yaw   - desired_yaw
-        ])
-
-        # Matches errors_and_plots.m convention
-        plot_out = np.array([
-            errors[0],
-            np.sin(errors[1]) * self.L,
-            errors[2]
-        ])
-
-        return errors, plot_out
 
     # ───────────────── Main Integration Loop ─────────────────
     def run(self):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
-
-            errors, plot_err = self.controller_errors()
-
-            self.bld_ang += self.gain * self.Kp * errors
-
             v_dot = self.vehicle_dynamics()
 
             self.v += self.dt * v_dot
             self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
             self.v[1] = np.clip(self.v[1], -self.turn_vel_limit, self.turn_vel_limit)
             self.q_dot = self.S_matrix() @ self.v
-
+            # print(f"t={t:.2f} s, v={self.v}, q_dot={self.q_dot} S={self.S_matrix()}")
             # update global/local positions and orientations for next time step
             self.q   += self.dt * self.q_dot
             self.q[3:6]    = self.wrap_angles(self.q[3:6])
@@ -373,8 +300,7 @@ class BulldozerSimulation:
             self.x_ICR     = self.get_x_icr()
             self.x_ICR_dot = (self.x_ICR - prev) / self.dt
 
-            self.log.append([t, *self.q, *plot_err,
-                             self.dxyz[0], self.dxyz[1], self.daBg[2], self.x_ICR,])
+            self.log.append([t, *self.q])
             t += self.dt
 
     def make_position_gif(self, first_frame_only: bool = False):
@@ -392,8 +318,6 @@ class BulldozerSimulation:
         sa, ca = np.sin(a_s), np.cos(a_s)
         sB, cB = np.sin(B_s), np.cos(B_s)
         sg, cg  = np.sin(g_s), np.cos(g_s)
-        # nx = -sB
-        # ny = sa * cB
         nx = ca*sB*cg + sa*sg
         ny = ca*sB*sg - sa*cg
         nz = ca*cB
@@ -514,15 +438,6 @@ class BulldozerSimulation:
         anim.save("position_3d.gif", writer=animation.PillowWriter(fps=20))
         plt.close(fig)
         print("Saved position_3d.gif")
-
-def run_single(fraction):
-    sim = BulldozerSimulation()
-    sim.F_track[0] = sim.F_track_base
-    sim.F_track[1] = fraction * sim.F_track_base
-    sim.run()
-    data = np.array(sim.log)
-    return np.max(np.abs(data[:, 2]))   # peak |y| displacement
-
 
 def main():
     sim = BulldozerSimulation()
