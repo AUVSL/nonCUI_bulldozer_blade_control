@@ -13,7 +13,7 @@ class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
         self.stop_time      = 2
-        self.surface_abg   = np.array([ 0.4, 0.4,  0.00])
+        self.surface_abg   = np.array([ 0, 0,  1.57079])
         m                   = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
         self.F_track       = np.array([self.F_track_base, 10000])
@@ -121,29 +121,30 @@ class BulldozerSimulation:
         sg, cg = np.sin(g), np.cos(g)
         # print(f"Rotation angles (a, B, g): {np.degrees([a, B, g])} degrees")
         # print(f"Top corner:\n{ca * sB * cg + sa * sg}")
-
-        return np.array([
+        R_gl = np.array([
             [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
             [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
             [-sB,                      sa * cB,                  ca * cB]
         ]).T
+        # print(f"Rotation matrix R_gl:\n{R_gl}")
+        return R_gl
     
     def rotation_derivatives(self, a, B):
         """Rotation derivative matrices"""
         # change to accept input array
-        sa, ca = np.sin(-a), np.cos(a)
-        sB, cB, tB = np.sin(-B), np.cos(B), np.tan(-B)
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB, tB = np.sin(B), np.cos(B), np.tan(B)
 
         J_gl = np.array([
-            [1, sa * tB, ca * tB],
-            [0,      ca,    - sa],
-            [0, sa / cB,  ca / cB]
-        ])
-
-        J_lg = np.array([
             [1,   0,     -sB],
             [0,  ca, sa * cB],
             [0, -sa, ca * cB]
+        ])
+
+        J_lg = np.array([
+            [1, sa * tB, ca * tB],
+            [0,      ca,    - sa],
+            [0, sa / cB,  ca / cB]
         ])
 
         return J_gl, J_lg
@@ -343,6 +344,14 @@ class BulldozerSimulation:
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
 
+        arrow_len = half * 0.5
+        ax.quiver(0, 0, 0, arrow_len, 0, 0, color='red',   linewidth=2, arrow_length_ratio=0.2)
+        ax.quiver(0, 0, 0, 0, arrow_len, 0, color='green', linewidth=2, arrow_length_ratio=0.2)
+        ax.quiver(0, 0, 0, 0, 0, arrow_len, color='blue',  linewidth=2, arrow_length_ratio=0.2)
+        ax.text(arrow_len * 1.15, 0, 0, 'X', color='red',   fontsize=11, fontweight='bold')
+        ax.text(0, arrow_len * 1.15, 0, 'Y', color='green', fontsize=11, fontweight='bold')
+        ax.text(0, 0, arrow_len * 1.15, 'Z', color='blue',  fontsize=11, fontweight='bold')
+
         # Top-view surface line (intersection with y-range at z from plane)
         ax_top.set_xlim(cx - half, cx + half)
         ax_top.set_ylim(cy - half, cy + half)
@@ -409,7 +418,7 @@ class BulldozerSimulation:
             for line in box_lines_side:
                 if line is not None:
                     line.remove()
-
+            # print(f"Frame {i+1}/{n_frames}: position=({data[i, 1]:.2f}, {data[i, 2]:.2f}, {data[i, 3]:.2f}), orientation=({np.degrees(data[i, 4]):.1f}, {np.degrees(data[i, 5]):.1f}, {np.degrees(data[i, 6]):.1f}) degrees") 
             R   = self.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
             pos = data[i, 1:4]
             c_g = pos + (R @ c_local.T).T  # (8, 3) corners in global frame
@@ -439,10 +448,108 @@ class BulldozerSimulation:
         plt.close(fig)
         print("Saved position_3d.gif")
 
+    def make_init_position_gif(self):
+        data = np.array([[0.0, *self.q]])  # single row: [t, x, y, z, a, B, g]
+
+        fig = plt.figure(figsize=(14, 7))
+        gs  = fig.add_gridspec(2, 2, width_ratios=[1.4, 1], hspace=0.35, wspace=0.3)
+        ax      = fig.add_subplot(gs[:, 0], projection='3d')
+        ax_top  = fig.add_subplot(gs[0, 1])
+        ax_side = fig.add_subplot(gs[1, 1])
+
+        a_s, B_s, g_s = self.surface_abg
+        sa, ca = np.sin(a_s), np.cos(a_s)
+        sB, cB = np.sin(B_s), np.cos(B_s)
+        sg, cg  = np.sin(g_s), np.cos(g_s)
+        nx = ca*sB*cg + sa*sg
+        ny = ca*sB*sg - sa*cg
+        nz = ca*cB
+
+        margin = 2.0
+        cx, cy, cz = data[0, 1], data[0, 2], data[0, 3]
+        half = max(self.l, self.b, self.h) + margin
+
+        xs = np.linspace(cx - half, cx + half, 30)
+        ys = np.linspace(cy - half, cy + half, 30)
+        Xs, Ys = np.meshgrid(xs, ys)
+        Zs = -(nx * Xs + ny * Ys) / nz
+        ax.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan', zorder=0)
+        ax.set_xlim(cx - half, cx + half)
+        ax.set_ylim(cy - half, cy + half)
+        ax.set_zlim(cz - half, cz + half)
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_zlabel("Z (m)")
+
+        arrow_len = half * 0.5
+        ax.quiver(0, 0, 0, arrow_len, 0, 0, color='red',   linewidth=2, arrow_length_ratio=0.2)
+        ax.quiver(0, 0, 0, 0, arrow_len, 0, color='green', linewidth=2, arrow_length_ratio=0.2)
+        ax.quiver(0, 0, 0, 0, 0, arrow_len, color='blue',  linewidth=2, arrow_length_ratio=0.2)
+        ax.text(arrow_len * 1.15, 0, 0, 'X', color='red',   fontsize=11, fontweight='bold')
+        ax.text(0, arrow_len * 1.15, 0, 'Y', color='green', fontsize=11, fontweight='bold')
+        ax.text(0, 0, arrow_len * 1.15, 'Z', color='blue',  fontsize=11, fontweight='bold')
+
+        ax_top.set_xlim(cx - half, cx + half)
+        ax_top.set_ylim(cy - half, cy + half)
+        ax_top.set_xlabel("X (m)")
+        ax_top.set_ylabel("Y (m)")
+        ax_top.set_title("Top View (X-Y)")
+        ax_top.set_aspect('equal', adjustable='box')
+        ax_top.grid(True, linewidth=0.4)
+
+        ax_side.set_xlim(cx - half, cx + half)
+        ax_side.set_ylim(cz - half, cz + half)
+        ax_side.set_xlabel("X (m)")
+        ax_side.set_ylabel("Z (m)")
+        ax_side.set_title("Side View (X-Z)")
+        ax_side.set_aspect('equal', adjustable='box')
+        ax_side.grid(True, linewidth=0.4)
+
+        x_line = np.array([cx - half, cx + half])
+        ax_top.axhline(cy, color='tan', linewidth=2, alpha=0.7)
+        z_surface = -(nx * x_line + ny * cy) / nz
+        ax_side.plot(x_line, z_surface, color='tan', linewidth=2, alpha=0.7)
+
+        hl, hb = self.l / 2, self.b / 2
+        c_local = np.array([
+            [-hl, -hb,          0],
+            [+hl, -hb,          0],
+            [+hl, +hb,          0],
+            [-hl, +hb,          0],
+            [-hl, -hb, self.h],
+            [+hl, -hb, self.h],
+            [+hl, +hb, self.h],
+            [-hl, +hb, self.h],
+        ])
+        box_edges = [(0,1),(1,2),(2,3),(3,0),
+                     (4,5),(5,6),(6,7),(7,4),
+                     (0,4),(1,5),(2,6),(3,7)]
+
+        ax.scatter(cx, cy, cz, color='blue', s=60, zorder=5)
+        ax_top.scatter(cx, cy, color='blue', s=60, zorder=5)
+        ax_side.scatter(cx, cz, color='blue', s=60, zorder=5)
+
+        R   = self.rotation_lg(data[0, 4], data[0, 5], data[0, 6])
+        pos = data[0, 1:4]
+        c_g = pos + (R @ c_local.T).T
+
+        for ia, ib in box_edges:
+            p1, p2 = c_g[ia], c_g[ib]
+            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], color='red', linewidth=1.5)
+            ax_top.plot([p1[0], p2[0]], [p1[1], p2[1]], color='red', linewidth=1.5)
+            ax_side.plot([p1[0], p2[0]], [p1[2], p2[2]], color='red', linewidth=1.5)
+
+        ax.set_title("t = 0.00 s (init)")
+
+        anim = animation.FuncAnimation(fig, lambda _: [], frames=1, blit=False, interval=50)
+        anim.save("init_position_3d.gif", writer=animation.PillowWriter(fps=20))
+        plt.close(fig)
+        print("Saved init_position_3d.gif")
+
 def main():
     sim = BulldozerSimulation()
-    sim.run()
-    sim.make_position_gif(first_frame_only=False)
+    # sim.run()
+    sim.make_init_position_gif()
 
 if __name__ == "__main__":
     main()
