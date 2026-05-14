@@ -13,11 +13,11 @@ class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
         self.stop_time      = 2
-        self.surface_abg   = np.array([ 0.4, 0, 0])
+        self.surface_abg   = np.array([ 0.4, 0.4, 0])
         m                   = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
         self.F_track       = np.array([self.F_track_base, 10000])
-        h                  = 2.762 /3   # scaled down by Sam
+        h                  = 2.762 / 2   # scaled down by Sam
         self.l             = 2.349 /1.5 # scaled down by Sam
         self.b             = 1.75  /1.5 # scaled down by Sam
         self.B1            = 2.921
@@ -159,7 +159,7 @@ class BulldozerSimulation:
         S = np.zeros((6, 2))
         S[0:3, 0] = self.R_lg[:, 0]            # forward velocity
         S[0:3, 1] = self.R_lg[:, 1] * (-1.0/x) # lateral/turning velocity
-        S[3:6, 1] = self.J_lg[:, 2]  # yaw contribution
+        S[3:6, 1] = self.J_lg[:, 2]            # yaw contribution
 
         return S
 
@@ -201,20 +201,21 @@ class BulldozerSimulation:
         sa, ca = np.sin(a), np.cos(a)
         sB, cB = np.sin(B), np.cos(B)
         sg, cg = np.sin(g), np.cos(g)
+        tB     = np.tan(B)
 
-        # Time-derivative of S (Sd)
-        # TODO: derive a matrix form for this instead of hardcoding each element (using R_gl since many of the values are already stored there)
-        S_11 =                                     -sB * cg * Bd                  - cB * sg * Gd
-        S_21 = (ca * sB * cg + sa * sg) * Ad + sa * cB * cg * Bd - (sa * sB * sg + ca * cg) * Gd
-        S_31 = (ca * sg - sa * sB * cg) * Ad + ca * cB * cg * Bd + (sa * cg - ca * sB * sg) * Gd
+        R = self.R_lg  # R_{i,j} = R_lg[i,j] per equation notation
 
-        S_12 = -self.x_ICR * (-sB * sg * Bd + cB * cg * Gd)                                                       - self.x_ICR_dot * (cB * sg)
-        S_22 = -self.x_ICR * ((ca * sB * sg - sa * cg) * Ad + sa * cB * sg * Bd + (sa * sB * cg - ca * sg) * Gd)  - self.x_ICR_dot * (sa * sB * sg + ca * cg)
-        S_32 = -self.x_ICR * (-(sa * sB * sg + ca * cg) * Ad + ca * cB * sg * Bd + (ca * sB * cg + sa * sg) * Gd) - self.x_ICR_dot * (ca * sB * sg - sa * cg)
+        S_11 = -sB * cg * Bd - R[1, 0] * Gd
+        S_21 = -sB * sg * Bd + R[0, 0] * Gd
+        S_31 = -cB * Bd
 
-        S_42 = -cB * Bd
-        S_52 =  ca * cB * Ad - sa * sB * Bd
-        S_62 = -sa * cB * Ad - ca * sB * Bd
+        S_12 = -self.x_ICR * ( R[0, 2] * Ad + R[2, 1] * cg * Bd - R[1, 1] * Gd) - self.x_ICR_dot * R[0, 1]
+        S_22 = -self.x_ICR * ( R[1, 2] * Ad + R[2, 1] * sg * Bd + R[0, 1] * Gd) - self.x_ICR_dot * R[1, 1]
+        S_32 = -self.x_ICR * ( R[2, 2] * Ad - sa * sB * Bd)                     - self.x_ICR_dot * R[2, 1]
+
+        S_42 = -sa * tB * Ad + ca / (cB**2) * Bd
+        S_52 = -ca * Ad
+        S_62 = -sa / cB * Ad + ca * tB / cB * Bd
 
         Sd = np.array([
             [S_11, S_12],
