@@ -12,11 +12,15 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
+        self.desired_abg   = np.array([ 0.3, 0, 0.0])
+        self.desired_depth = -0.05
+
         self.stop_time      = 0.2
-        self.surface_abg   = np.array([ 0.4, 0.4, 0])
-        m                   = 10156.0 /4 # scaled down by Sam
+        self.surface_abg   = np.array([ 0, 0, 0])
+        
+        m                  = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
-        self.F_track       = np.array([self.F_track_base, 10000])
+        self.F_track       = np.array([self.F_track_base, self.F_track_base])
         h                  = 2.762 / 2   # scaled down by Sam
         self.l             = 2.349 /1.5 # scaled down by Sam
         self.b             = 1.75  /1.5 # scaled down by Sam
@@ -59,8 +63,6 @@ class BulldozerSimulation:
         self.Kp_path = 8000.0   # N/m  — track-force gain for cross-track error
 
         # ───────────────── Initial Conditions ─────────────────
-        self.desired_depth = -0.4
-        self.desired_abg   = np.array([ 0.0, 0, 0.0])
         self.x_ICR_dot     = 0.0
         self.dxyz          = np.zeros(3)
         self.daBg          = np.zeros(3)
@@ -85,6 +87,7 @@ class BulldozerSimulation:
         self.Mr       = 0.0
         self.vtL      = 0.0
         self.vtR      = 0.0
+        self.v_dot    = np.zeros(2)
 
         # Bezier-6-pinned angular controller (set via use_bezier_controller())
         self._bezier_coeffs   = None
@@ -195,19 +198,17 @@ class BulldozerSimulation:
 
         a_val = np.tan(abs(a_rel)) ** 2
         c_val = (H3 + H4) / 2
-        V = 0.5 / np.tan(self.beta0) * (
-            1 / 12 * a_val ** 2 * self.B1 ** 3 + c_val ** 2 * self.B1
-        )
+        V     = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val ** 2 * self.B1 ** 3 + c_val ** 2 * self.B1)
 
         # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
         fill_percent = np.linalg.norm(self.q[:3]) / self.fill_distance
-        Gt = V * self.gamma_g * fill_percent
-
+        Gt           = V * self.gamma_g * fill_percent
+        
         hyp      = self.B1 / np.cos(abs(a_rel))
         area_cut = 0.5 * self.B1 * H1 + hyp * hp
         F1       = area_cut * self.kb
         F2       = Gt * self.mu_ss
-        self.Fb  = -F1 - F2
+        self.Fb  = -F1 - F2 
 
         yc1     = self.yc(H3 / np.tan(self.beta0), H4 / np.tan(self.beta0), self.B1)
         yc2     = self.yc(H2, H1 + H2, self.B1)
@@ -271,6 +272,7 @@ class BulldozerSimulation:
     def vehicle_dynamics(self):
         # update forces and moments for current time step
         self.track_terrain_interaction()
+        self.blade_terrain_interaction()
 
         B_mat = np.zeros((6, 2))
         B_mat[0:3, 0] = self.R_lg[:, 0]
@@ -281,27 +283,34 @@ class BulldozerSimulation:
         #UPDATE: when changing the rotation angle convention
         ab, Bb, gb = self.bld_ang
         
+        Ct_vec = np.array([
+            self.Rl.sum(), 
+            self.Fy, 0,
+            0, 
+            0,
+            self.Mr + (self.Rl[1] - self.Rl[0]) * self.b / 2
+        ])
         R_blade = self.rotation_lg(ab, Bb, gb)
-
+        
         R6 = np.zeros((6, 6))
         R6[0:3, 0:3] = R_blade
         R6[3:6, 3:6] = R_blade
-        Ct_vec = np.array([
-            self.Rl.sum(), self.Fy, 0,
-            0, 0,
-            self.Mr + (self.Rl[1] - self.Rl[0]) * self.b / 2
-        ])
+
+        blade_vec = np.array([self.Fb, 0.0, 0.0, 0.0, 0.0, self.Mb])
+        Cb_vec    = self.elim @ R6 @ blade_vec
         
         R6_lg = np.zeros((6, 6))
         R6_lg[0:3, 0:3] = self.R_lg
         R6_lg[3:6, 3:6] = self.R_lg
-        C = R6_lg @ (Ct_vec)
+        C = R6_lg @ (Ct_vec + Cb_vec)
         
         S  = self.S_matrix()
         Sd = self.Sd_matrix()
 
         Bt = S.T @ B_mat
         Ct = S.T @ C
+
+        print(f"Ct: {Ct}  Bt @ self.F_track: {Bt @ self.F_track}")
 
         Pt = S.T @ self.P
         Mt = S.T @ self.M @ S
@@ -465,9 +474,9 @@ class BulldozerSimulation:
 
             self.bld_ang += self.gain * self.Kp * errors
 
-            v_dot = self.vehicle_dynamics()
+            self.v_dot = self.vehicle_dynamics()
 
-            self.v += self.dt * v_dot
+            self.v += self.dt * self.v_dot
             self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
             self.v[1] = np.clip(self.v[1], -self.turn_vel_limit, self.turn_vel_limit)
             self.q_dot = self.S_matrix() @ self.v
@@ -489,7 +498,9 @@ class BulldozerSimulation:
             self.x_ICR     = self.get_x_icr()
             self.x_ICR_dot = (self.x_ICR - prev) / self.dt
 
-            self.log.append([t, *self.q, self.cross_track_err, self.heading_err])
+            self.log.append([t, *self.q, self.cross_track_err, self.heading_err,
+                             self.Mb, self.Fb, self.Rl[0], self.Rl[1], self.Fy, self.Mr,
+                             self.v[0], self.v[1]])
             t += self.dt
             
     def build_bezier6_pinned(self,threshold=0.498, n_samples=60):
@@ -521,7 +532,40 @@ class BulldozerSimulation:
             f"coeffs={np.array2string(coeffs, precision=4)}")
         return coeffs, ang_max
 
-    def run_and_plot(self, stop_time=30.0, lookahead_dist=1.0,
+    @staticmethod
+    def _plot_forces(log_arr, fname="forces.png"):
+        t   = log_arr[:, 0]
+        Mb    = log_arr[:, 9]
+        Fb    = log_arr[:, 10]
+        RlL   = log_arr[:, 11]
+        RlR   = log_arr[:, 12]
+        Fy    = log_arr[:, 13]
+        Mr    = log_arr[:, 14]
+        v_fwd = log_arr[:, 15]
+        v_trn = log_arr[:, 16]
+
+        fig, axes = plt.subplots(3, 2, figsize=(12, 9), sharex=True)
+        fig.suptitle("Forces & Moments over Time")
+
+        axes[0, 0].plot(t, Fb);  axes[0, 0].set_ylabel("Fb (N)");   axes[0, 0].set_title("Blade force")
+        axes[0, 1].plot(t, Mb);  axes[0, 1].set_ylabel("Mb (N·m)"); axes[0, 1].set_title("Blade moment")
+        axes[1, 0].plot(t, RlL, label="Left"); axes[1, 0].plot(t, RlR, label="Right")
+        axes[1, 0].set_ylabel("Rl (N)"); axes[1, 0].set_title("Track rolling resistance"); axes[1, 0].legend()
+        axes[1, 1].plot(t, Fy);  axes[1, 1].set_ylabel("Fy (N)");   axes[1, 1].set_title("Lateral track force")
+        axes[2, 0].plot(t, Mr);  axes[2, 0].set_ylabel("Mr (N·m)"); axes[2, 0].set_title("Track turning moment")
+        axes[2, 1].plot(t, v_fwd, label="forward"); axes[2, 1].plot(t, v_trn, label="turn")
+        axes[2, 1].set_ylabel("v (m/s  or  rad/s)"); axes[2, 1].set_title("v"); axes[2, 1].legend()
+
+        for ax in axes.flat:
+            ax.set_xlabel("Time (s)")
+            ax.grid(True, linewidth=0.4)
+
+        fig.tight_layout()
+        fig.savefig(fname, dpi=120)
+        plt.close(fig)
+        print(f"Saved {fname}")
+
+    def run_and_plot(self, stop_time=30.0, lookahead_dist=1.2,
                      use_path_controller=True, first_frame_only=False):
         """Run the simulation and render a multi-panel GIF.
 
@@ -698,10 +742,11 @@ class BulldozerSimulation:
         anim.save(fname, writer=animation.PillowWriter(fps=20))
         plt.close(fig)
         print(f"Saved {fname}")
+        self._plot_forces(np.array(sim.log))
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=1.2)
+    sim.run_and_plot(use_path_controller=False, stop_time=2.0)
 
 if __name__ == "__main__":
     main()
