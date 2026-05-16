@@ -12,7 +12,7 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
-        self.desired_abg   = np.array([ 0.3, 0, 0.0])
+        self.desired_abg   = np.array([ -0.4, 0, 0.0])
         self.desired_depth = -0.05
 
         self.stop_time      = 0.2
@@ -309,13 +309,14 @@ class BulldozerSimulation:
 
         Bt = S.T @ B_mat
         Ct = S.T @ C
-
-        print(f"Ct: {Ct}  Bt @ self.F_track: {Bt @ self.F_track}")
-
         Pt = S.T @ self.P
         Mt = S.T @ self.M @ S
         Et = S.T @ self.M @ Sd
+
         v_dot = np.linalg.solve(Mt, Bt @ self.F_track + Ct - Et @ self.v - Pt)
+        resistive_forces = Ct - Et @ self.v - Pt
+        if(abs(Bt[0]@ self.F_track) > 0 and (abs(Bt[0]@ self.F_track) < abs(resistive_forces[0]))):
+            v_dot = np.zeros_like(v_dot)  # prevent forward motion if track force can't overcome resistance
         return v_dot
   # ───────────────── Controller ─────────────────
     def controller_errors(self):
