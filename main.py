@@ -12,7 +12,8 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 class BulldozerSimulation:
     def __init__(self):
         # ───────────────── Parameters ─────────────────
-        self.desired_abg   = np.array([ 0.3, 0, 0.0])
+        self.backward = True
+        self.desired_abg   = np.array([ 0, 0, 0.0])
         self.desired_depth = -0.05
 
         self.stop_time      = 0.2
@@ -20,7 +21,7 @@ class BulldozerSimulation:
         
         m                  = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
-        self.F_track       = np.array([self.F_track_base, self.F_track_base])
+        self.F_track       = -np.array([0, self.F_track_base])
         h                  = 2.762 / 2   # scaled down by Sam
         self.l             = 2.349 /1.5 # scaled down by Sam
         self.b             = 1.75  /1.5 # scaled down by Sam
@@ -272,7 +273,8 @@ class BulldozerSimulation:
     def vehicle_dynamics(self):
         # update forces and moments for current time step
         self.track_terrain_interaction()
-        self.blade_terrain_interaction()
+        if (not self.backward):
+            self.blade_terrain_interaction()
 
         B_mat = np.zeros((6, 2))
         B_mat[0:3, 0] = self.R_lg[:, 0]
@@ -309,13 +311,14 @@ class BulldozerSimulation:
 
         Bt = S.T @ B_mat
         Ct = S.T @ C
-
-        print(f"Ct: {Ct}  Bt @ self.F_track: {Bt @ self.F_track}")
-
         Pt = S.T @ self.P
         Mt = S.T @ self.M @ S
         Et = S.T @ self.M @ Sd
+
         v_dot = np.linalg.solve(Mt, Bt @ self.F_track + Ct - Et @ self.v - Pt)
+        resistive_forces = Ct - Et @ self.v - Pt
+        if(abs(Bt[0]@ self.F_track) > 0 and (abs(Bt[0]@ self.F_track) < abs(resistive_forces[0]))):
+            v_dot = np.zeros_like(v_dot)  # prevent forward motion if track force can't overcome resistance
         return v_dot
   # ───────────────── Controller ─────────────────
     def controller_errors(self):
@@ -477,7 +480,10 @@ class BulldozerSimulation:
             self.v_dot = self.vehicle_dynamics()
 
             self.v += self.dt * self.v_dot
-            self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
+            if (not self.backward):
+                self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
+            else:
+                self.v[0] = min(max(self.v[0], -self.velocity_limit), 0)
             self.v[1] = np.clip(self.v[1], -self.turn_vel_limit, self.turn_vel_limit)
             self.q_dot = self.S_matrix() @ self.v
 
@@ -746,7 +752,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(use_path_controller=False, stop_time=2.0)
+    sim.run_and_plot(use_path_controller=False, stop_time=1.8)
 
 if __name__ == "__main__":
     main()
