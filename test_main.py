@@ -12,7 +12,6 @@ def sim():
 
 
 # ───────────────── Static helpers ─────────────────
-
 class TestSaturation:
     def test_within_limits(self):
         assert BulldozerSimulation.saturation(1.0, 5.0) == pytest.approx(1.0)
@@ -28,6 +27,9 @@ class TestSaturation:
 
     def test_zero(self):
         assert BulldozerSimulation.saturation(0.0, 3.0) == pytest.approx(0.0)
+
+    def test_negative_limit(self):
+        assert BulldozerSimulation.saturation(2.0, -3.0) == pytest.approx(2.0)
 
     def test_returns_float(self):
         result = BulldozerSimulation.saturation(np.float64(2.0), 5.0)
@@ -98,8 +100,7 @@ class TestYc:
     def test_symmetric_trapezoid(self):
         # D1 == D2 → centroid at (D1 + 2*D2) / (3*(D1+D2)) * B1 - B1/2
         D1, D2, B1 = 1.0, 1.0, 4.0
-        expected = (D1 + 2 * D2) / (3 * (D1 + D2)) * B1 - B1 / 2
-        assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(expected)
+        assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(0.0)
 
     def test_triangle_D1_zero(self):
         D1, D2, B1 = 0.0, 2.0, 3.0
@@ -176,8 +177,7 @@ class TestRotationDerivatives:
         np.testing.assert_allclose(J_gl @ J_lg, np.eye(3), atol=1e-10)
 
 
-# ───────────────── ICR helpers ─────────────────
-
+# ───────────────── ICR helper ─────────────────
 class TestGetXIcr:
     def test_near_zero_yaw_rate_returns_zero(self, sim):
         sim.daBg = np.array([0.0, 0.0, 1e-4])  # below eps=1e-3
@@ -188,7 +188,7 @@ class TestGetXIcr:
         sim.dxyz  = np.array([1.0, 0.5, 0.0])
         sim.daBg  = np.array([0.0, 0.0, 1.0])
         result = sim.get_x_icr()
-        expected = np.clip(0.5 / 1.0, -sim.l / 2, sim.l / 2)
+        expected = np.clip(-0.5 / 1.0, -sim.l / 2, sim.l / 2)
         assert result == pytest.approx(float(expected))
 
     def test_clamped_to_half_length(self, sim):
@@ -197,29 +197,16 @@ class TestGetXIcr:
         result = sim.get_x_icr()
         assert abs(result) <= sim.l / 2 + 1e-10
 
-
-class TestSafeDivisionXIcr:
-    def test_small_x_icr_returns_max_float(self, sim):
-        sim.x_ICR = 1e-3  # below eps=5e-2
-        result = sim.safe_division_x_icr()
-        assert result == np.finfo(float).max
-
-    def test_large_x_icr_returns_value(self, sim):
-        sim.x_ICR = 0.5
-        result = sim.safe_division_x_icr()
-        assert result == pytest.approx(0.5)
-
-
 # ───────────────── Controller errors ─────────────────
 
 class TestControllerErrors:
     def test_at_desired_angles_errors_are_zero(self, sim):
         sim.desired_abg   = np.array([0.1, 1.0, 0.2])
         sim.desired_depth = -0.05
-        desired_pitch = 1.0 * np.arcsin(np.clip(-0.05 / sim.L, -1.0, 1.0))
-        sim.bld_ang = np.array([0.1, desired_pitch, 0.2])
+        desired_pitch     = 1.0 * np.arcsin(np.clip(-0.05 / sim.L, -1.0, 1.0))
+        sim.bld_ang       = np.array([0.1, desired_pitch, 0.2])
 
-        errors, plot_out = sim.controller_errors()
+        errors, _ = sim.controller_errors()
         np.testing.assert_allclose(errors, np.zeros(3), atol=1e-12)
 
     def test_error_shape(self, sim):

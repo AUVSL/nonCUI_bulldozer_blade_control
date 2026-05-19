@@ -102,7 +102,7 @@ class BulldozerSimulation:
     # ───────────────── Helpers ─────────────────
     @staticmethod
     def saturation(value, limit):
-        return float(np.clip(value, -limit, limit))
+        return float(np.clip(value, -abs(limit), abs(limit)))
 
     @staticmethod
     def wrap_angles(angles):
@@ -162,31 +162,25 @@ class BulldozerSimulation:
         """Rotation matrix: local → global frame"""
         return self.rotation_gl(a, B, g).T
 
-    def S_matrix(self):
+    def S_matrix(self, eps: float = 5e-2):
         """
         Configuration-dependent velocity mapping matrix.
         Recomputed every time step.
 
         Maps v = [v_forward, v_turn] to q_dot.
         """
-        x = self.safe_division_x_icr()
-
+        
         S = np.zeros((6, 2))
-        S[0:3, 0] = self.R_lg[:, 0]            # forward velocity
-        S[0:3, 1] = self.R_lg[:, 1] * (-1.0/x) # lateral/turning velocity
-        S[3:6, 1] = self.J_lg[:, 2]            # yaw contribution
+        S[0:3, 0] = self.R_lg[:, 0]                 # forward velocity
+        S[0:3, 1] = self.R_lg[:, 1] * (-self.x_ICR) # lateral/turning velocity
+        S[3:6, 1] = self.J_lg[:, 2]                 # yaw contribution
 
         return S
 
     def get_x_icr(self, eps: float = 1e-3):
         if abs(self.daBg[2]) < eps:
             return 0.0
-        return float(np.clip(self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
-    
-    def safe_division_x_icr(self, eps: float = 5e-2):
-        if abs(self.x_ICR) < eps:
-            return np.finfo(float).max
-        return self.x_ICR
+        return float(np.clip(-self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
     
     def blade_terrain_interaction(self):
         a_rel = self.surface_abg[0] - self.bld_ang[0]
@@ -216,15 +210,13 @@ class BulldozerSimulation:
         self.Mb = yc1 * F1 + yc2 * F2
 
     def track_terrain_interaction(self):
-        vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
-        vtR = self.saturation(self.dxyz[0] + self.b / 2 * self.daBg[2], self.velocity_limit)
-        self.vtL = vtL
-        self.vtR = vtR
+        self.vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
+        self.vtR = self.saturation(self.dxyz[0] + self.b / 2 * self.daBg[2], self.velocity_limit)
 
         FtL, FtR = self.F_track[0], self.F_track[1]
         
-        RlL     = self.G(FtL, self.rl, vtL)
-        RlR     = self.G(FtR, self.rl, vtR)
+        RlL     = self.G(FtL, self.rl, self.vtL)
+        RlR     = self.G(FtR, self.rl, self.vtR)
         self.Rl = np.array([RlL, RlR])
         
         self.Fy = -2 * np.sign(self.dxyz[1]) * self.fy * abs(self.x_ICR)
