@@ -90,7 +90,7 @@ class BulldozerSimulation:
         self.vtR      = 0.0
         self.v_dot    = np.zeros(2)
 
-        # Bezier-6-pinned angular controller (set via use_bezier_controller())
+        # Bezier-6-pinned angular controller (set via use_bezier_controller()) hi
         self._bezier_coeffs   = None
         self._bezier_ang_max  = None
         self._lookahead_dist  = 1.5
