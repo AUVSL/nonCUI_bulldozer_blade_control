@@ -11,7 +11,7 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 
 class BulldozerSimulation:
     def __init__(self):
-        # ───────────────── Parameters ─────────────────-
+        # ───────────────── Parameters ─────────────────--
         self.backward = True
         self.desired_abg   = np.array([ 0, 0, 0.0])
         self.desired_depth = -0.05
