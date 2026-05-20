@@ -11,17 +11,18 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 
 class BulldozerSimulation:
     def __init__(self):
-        # ───────────────── Parameters ───── ────────────--
-        self.backward = True
+        # ───────────────── Parameters ───── ────────────
+        #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
+        self.backward = False
         self.desired_abg   = np.array([ 0, 0, 0.0])
         self.desired_depth = -0.05
 
         self.stop_time      = 0.2
-        self.surface_abg   = np.array([ 0, 0, 0])
+        self.surface_abg   = np.array([ 0.4, -0.4, 0])
         
         m                  = 10156.0 /4 # scaled down by Sam
         self.F_track_base  = 60000.0
-        self.F_track       = -np.array([0, self.F_track_base])
+        self.F_track       = np.array([self.F_track_base, self.F_track_base])
         h                  = 2.762 / 2   # scaled down by Sam
         self.l             = 2.349 /1.5 # scaled down by Sam
         self.b             = 1.75  /1.5 # scaled down by Sam
@@ -119,10 +120,10 @@ class BulldozerSimulation:
 
     @staticmethod
     def yc(D1, D2, B1):
-        """Centroid of a trapezoid."""
+        """Centroid of a trapezoid where left is posative and right is negative."""
         if (D1 == 0 and D2 == 0):
             return 0.0
-        return (D1 + 2 * D2) / (3 * (D1 + D2)) * B1 - B1 / 2
+        return (2 * D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
 
     # ───────────────── Kinematics ─────────────────
     def rotation_gl(self, a, B, g):
@@ -183,17 +184,19 @@ class BulldozerSimulation:
         return float(np.clip(-self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
     
     def blade_terrain_interaction(self):
-        a_rel = self.surface_abg[0] - self.bld_ang[0]
+        a_rel = self.bld_ang[0]
         hp    = abs(self.L * np.sin(self.bld_ang[1]))
-
-        H1 = self.B1 * np.tan(abs(a_rel))
-        H2 = hp / np.cos(a_rel)
-        H3 = self.H - H2 + np.sign(a_rel) * H1 / 2 - H1 / 2
-        H4 = self.H - H2 - np.sign(a_rel) * H1 / 2 - H1 / 2
+        
+        H1     = self.B1 * np.tan(abs(a_rel))
+        H2     = hp / np.cos(abs(a_rel))
+        H3_sub = - H2 + (np.sign(a_rel) * H1 / 2) - (H1 / 2)
+        H4_sub = - H2 - (np.sign(a_rel) * H1 / 2) - (H1 / 2)
+        H3     = self.H  + H3_sub
+        H4     = self.H  + H4_sub
 
         a_val = np.tan(abs(a_rel)) ** 2
         c_val = (H3 + H4) / 2
-        V     = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val ** 2 * self.B1 ** 3 + c_val ** 2 * self.B1)
+        V     = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val * self.B1 ** 3 + c_val ** 2 * self.B1)
 
         # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
         fill_percent = np.linalg.norm(self.q[:3]) / self.fill_distance
@@ -206,7 +209,7 @@ class BulldozerSimulation:
         self.Fb  = -F1 - F2 
 
         yc1     = self.yc(H3 / np.tan(self.beta0), H4 / np.tan(self.beta0), self.B1)
-        yc2     = self.yc(H2, H1 + H2, self.B1)
+        yc2     = self.yc(-H3_sub, -H4_sub, self.B1)
         self.Mb = yc1 * F1 + yc2 * F2
 
     def track_terrain_interaction(self):
@@ -222,7 +225,7 @@ class BulldozerSimulation:
         self.Fy = -2 * np.sign(self.dxyz[1]) * self.fy * abs(self.x_ICR)
 
         M       = ((FtR + RlR) - (FtL + RlL)) * self.b / 2
-        mr      = 2 * self.fy * ((self.l ** 2) / 4 - self.x_ICR ** 2)
+        mr      = 2 * self.fy * (((self.l ** 2) / 4) - (self.x_ICR ** 2))
         self.Mr = self.G(M, mr, self.daBg[2])
         
     def Sd_matrix(self):
@@ -316,33 +319,15 @@ class BulldozerSimulation:
     def controller_errors(self):
         """
         Computes blade roll, pitch, yaw errors relative to desired surface and depth.
-
-        Returns
-        -------
-        errors : np.ndarray, shape (3,)
-            [roll_error, pitch_error, yaw_error]
-        plot_out : np.ndarray, shape (3,)
-            [roll_error, depth_error, yaw_error]
         """
-        roll, pitch, yaw = self.bld_ang
+        roll, pitch, yaw                          = self.bld_ang
         desired_roll, des_pitch_mult, desired_yaw = self.desired_abg
 
-        desired_pitch = des_pitch_mult * np.arcsin(
-            np.clip(self.desired_depth / self.L, -1.0, 1.0)
-        )
+        # TODO: update blade angle limits from -1 to 1 to something more realistic, and update the test cases accordingly
+        desired_pitch = des_pitch_mult * np.arcsin(np.clip(self.desired_depth / self.L, -1.0, 1.0))
 
-        errors = np.array([
-            roll  - desired_roll,
-            pitch - desired_pitch,
-            yaw   - desired_yaw
-        ])
-
-        # Matches errors_and_plots.m convention
-        plot_out = np.array([
-            errors[0],
-            np.sin(errors[1]) * self.L,
-            errors[2]
-        ])
+        errors  = np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
+        plot_out = np.array(          [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
 
         return errors, plot_out
 
@@ -563,7 +548,7 @@ class BulldozerSimulation:
         plt.close(fig)
         print(f"Saved {fname}")
 
-    def run_and_plot(self, stop_time=30.0, lookahead_dist=1.2,
+    def run_and_plot(self, stop_time=30.0, lookahead_dist=1.5,
                      use_path_controller=True, first_frame_only=False):
         """Run the simulation and render a multi-panel GIF.
 
@@ -744,7 +729,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(use_path_controller=False, stop_time=1.8)
+    sim.run_and_plot(use_path_controller=True, stop_time=10, lookahead_dist=1.0)
 
 if __name__ == "__main__":
     main()
