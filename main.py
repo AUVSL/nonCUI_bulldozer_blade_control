@@ -79,11 +79,14 @@ class BulldozerSimulation:
         self.vtR       = 0.0
         self.v_dot            = np.zeros(2)
         self.log              = []
-        self.cross_track_err  = 0.0
-        self.heading_err      = 0.0
-        self.backward         = False
-        self._active_controller = None
-        self.path_points      = self.figure8_path()
+        self.cross_track_err     = 0.0
+        self.heading_err         = 0.0
+        self.backward            = False
+        self._active_controller  = None
+        self.path_points         = self.figure8_path()
+        self.stop_after_first_loop = True
+        self._nearest_path_idx   = 0
+        self._passed_halfway     = False
 
     # ---------------- Helpers ----------------
     @staticmethod
@@ -345,17 +348,6 @@ class BulldozerSimulation:
         self.F_track[0] = float(np.clip(self.F_track_base + delta, 0.0, F_max))
         self.F_track[1] = float(np.clip(self.F_track_base - delta, 0.0, F_max))
 
-    def use_bezier_controller(self, coeffs, ang_max, lookahead_dist=1.5):
-        self._bezier_coeffs     = np.asarray(coeffs)
-        self._bezier_ang_max    = float(ang_max)
-        self._lookahead_dist    = float(lookahead_dist)
-        self._active_controller = self.angular_path_controller
-
-    def _eval_bezier6(self, t):
-        from math import comb as _c
-        return sum(_c(6, i) * t**i * (1-t)**(6-i) * self._bezier_coeffs[i]
-                   for i in range(7))
-
     def pure_pursuit_heading_error(self):
         """
         Pure-pursuit: find the lookahead point on the path at distance
@@ -465,6 +457,12 @@ class BulldozerSimulation:
 
             if self._active_controller is not None:
                 self._active_controller()
+                if self.stop_after_first_loop:
+                    n = len(self.path_points)
+                    if self._nearest_path_idx > n // 2:
+                        self._passed_halfway = True
+                    if self._passed_halfway and self._nearest_path_idx < n // 10:
+                        break
 
             self.v_dot = self.vehicle_dynamics()
             self.v    += self.dt * self.v_dot
@@ -817,638 +815,135 @@ class BulldozerSimulation:
         anim.save("position_3d.gif", writer=animation.PillowWriter(fps=20))
         plt.close(fig)
         print("Saved position_3d.gif")
+    
+    def plot_track_force_sweep(self):
+        """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
+        fractions = np.linspace(0, 1, 100)
+        colors = plt.cm.viridis(np.linspace(0, 1, 100))
 
-def plot_track_force_sweep():
-    """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
-    fractions = np.linspace(0, 1, 100)
-    colors = plt.cm.viridis(np.linspace(0, 1, 100))
+        fig, ax = plt.subplots(figsize=(10, 8))
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+        for i, fraction in enumerate(fractions):
+            sim = BulldozerSimulation()
+            sim.F_track[0] = sim.F_track_base
+            sim.F_track[1] = fraction * sim.F_track_base
+            sim.run()
 
-    for i, fraction in enumerate(fractions):
+            data = np.array(sim.log)
+            ax.plot(data[:, 1], data[:, 2], color=colors[i], linewidth=0.8, alpha=0.7)
+
+        sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
+        plt.colorbar(sm, ax=ax, label="right track fraction of F_base")
+
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_title("XY trajectories — left track = F_base, right track = 0 to 1 x F_base (100 steps)")
+        ax.set_aspect("equal")
+        ax.grid(True)
+        plt.tight_layout()
+        plt.savefig("track_force_sweep.png", dpi=150)
+        plt.close(fig)
+        print("Saved track_force_sweep.png")
+
+    def run_single(self, fraction):
         sim = BulldozerSimulation()
         sim.F_track[0] = sim.F_track_base
         sim.F_track[1] = fraction * sim.F_track_base
         sim.run()
-
         data = np.array(sim.log)
-        ax.plot(data[:, 1], data[:, 2], color=colors[i], linewidth=0.8, alpha=0.7)
+        return np.max(np.abs(data[:, 2]))   # peak |y| displacement
 
-    sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
-    plt.colorbar(sm, ax=ax, label="right track fraction of F_base")
+    def find_straight_threshold(self, tol=1e-4, n_iter=1000):
+        """Binary search for the largest fraction where peak |y| > tol."""
+        lo, hi = 0.0, 1.0
+        for _ in range(n_iter):
+            mid = (lo + hi) / 2
+            if self.run_single(mid) > tol:
+                lo = mid
+            else:
+                hi = mid
+        print(f"Converged to straight threshold: {(lo + hi) / 2}")
+        return (lo + hi) / 2
 
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_title("XY trajectories — left track = F_base, right track = 0 to 1 x F_base (100 steps)")
-    ax.set_aspect("equal")
-    ax.grid(True)
-    plt.tight_layout()
-    plt.savefig("track_force_sweep.png", dpi=150)
-    plt.close(fig)
-    print("Saved track_force_sweep.png")
+    def build_log_controller(self, threshold=0.7993, n_samples=200):
+        """Calibrate log-based angle→fraction mapping.
 
-def run_single(fraction):
-    sim = BulldozerSimulation()
-    sim.F_track[0] = sim.F_track_base
-    sim.F_track[1] = fraction * sim.F_track_base
-    sim.run()
-    data = np.array(sim.log)
-    return np.max(np.abs(data[:, 2]))   # peak |y| displacement
+        Fits scalar A via least-squares so that:
+            fraction = threshold - A * log(|yaw| + 1)
+        Returns (A, threshold, ang_max).
+        """
+        fractions = np.linspace(0.0, threshold, n_samples)
+        yaws = []
+        for frac in fractions:
+            sim = BulldozerSimulation()
+            sim.F_track[0] = sim.F_track_base
+            sim.F_track[1] = frac * sim.F_track_base
+            sim.run()
+            yaws.append(np.array(sim.log)[-1, 6])
+        yaws  = np.array(yaws)
+        ang   = np.abs(yaws)
+        T     = threshold - fractions
+        basis = np.log(ang + 1)
+        A     = float(np.dot(basis, T) / np.dot(basis, basis))
+        ang_max = ang.max()
+        rmse  = np.sqrt(np.mean((T - A * basis) ** 2))
+        print(f"Log controller: A={A:.6f}  ang_max={ang_max:.4f} rad  RMSE={rmse:.6f}")
+        return A, threshold, ang_max
 
-def find_straight_threshold(tol=1e-4, n_iter=1000):
-    """Binary search for the largest fraction where peak |y| > tol."""
-    lo, hi = 0.0, 1.0
-    for _ in range(n_iter):
-        mid = (lo + hi) / 2
-        if run_single(mid) > tol:
-            lo = mid
-        else:
-            hi = mid
-    print(f"Converged to straight threshold: {(lo + hi) / 2}")
-    return (lo + hi) / 2
+    def demo_log_controller(self,stop_time=30.0, lookahead_dist=0.7):
+        """Run figure-8 with pure-pursuit + log-based torque mapping."""
+        print("Building log controller (200 calibration sims)...")
+        A, threshold, ang_max = self.build_log_controller()
 
-
-def fit_torque_from_angle(threshold=0.7993, n_samples=600):
-    """
-    Inverse mapping: given desired final yaw angle, predict the required fraction.
-    T = threshold - fraction is the output (force imbalance needed).
-    |yaw| is the input.
-    Candidates fit T = A * basis(|yaw|); fraction = threshold - T.
-    """
-    fractions = np.linspace(0.0, threshold, n_samples)
-    yaws = []
-    for frac in fractions:
+        print(f"Running figure-8 for {stop_time}s  lookahead={lookahead_dist}m ...")
         sim = BulldozerSimulation()
-        sim.F_track[0] = sim.F_track_base
-        sim.F_track[1] = frac * sim.F_track_base
+        sim.stop_time = stop_time
+        sim.use_log_controller(A, threshold, ang_max, lookahead_dist=lookahead_dist)
         sim.run()
-        yaws.append(np.array(sim.log)[-1, 6])
-    yaws = np.array(yaws)
 
-    T = threshold - fractions        # target output: force imbalance
-    ang = np.abs(yaws)               # input: magnitude of final yaw
-
-    def _b(x, name):
-        return {
-            "ang^0.25":             x ** 0.25,
-            "ang^0.5":              x ** 0.5,
-            "ang^(2/3)":            x ** (2.0/3.0),
-            "ang^0.75":             x ** 0.75,
-            "ang^1":                x,
-            "ang^1.25":             x ** 1.25,
-            "ang^1.5":              x ** 1.5,
-            "ang^(5/3)":            x ** (5.0/3.0),
-            "ang^2":                x ** 2,
-            "ang^2.5":              x ** 2.5,
-            "ang^3":                x ** 3,
-            "log(ang+1)":           np.log(x + 1),
-            "log(ang+1)^2":         np.log(x + 1) ** 2,
-            "ang*log(ang+1)":       x * np.log(x + 1),
-            "ang^2*log(ang+1)":     x ** 2 * np.log(x + 1),
-            "ang/log(ang+2)":       x / np.log(x + 2),
-            # --- exponential family ---
-            "exp(ang)-1":           np.exp(x) - 1,
-            "exp(ang)-1-ang":       np.exp(x) - 1 - x,
-            "exp(ang^0.5)-1":       np.exp(x ** 0.5) - 1,
-            "exp(ang^0.75)-1":      np.exp(x ** 0.75) - 1,
-            "exp(ang^1.25)-1":      np.exp(x ** 1.25) - 1,
-            "exp(ang^1.5)-1":       np.exp(x ** 1.5) - 1,
-            "exp(ang^2)-1":         np.exp(x ** 2) - 1,
-            "(exp(ang)-1)^0.5":     np.sqrt(np.exp(x) - 1),
-            "(exp(ang)-1)^1.5":     (np.exp(x) - 1) ** 1.5,
-            "(exp(ang)-1)^2":       (np.exp(x) - 1) ** 2,
-            "ang*exp(ang)":         x * np.exp(x),
-            "ang^2*exp(ang)":       x ** 2 * np.exp(x),
-            # --- sinh / cosh family ---
-            "sinh(ang)":            np.sinh(x),
-            "sinh(ang^0.5)":        np.sinh(x ** 0.5),
-            "sinh(ang^0.75)":       np.sinh(x ** 0.75),
-            "sinh(ang^1.5)":        np.sinh(x ** 1.5),
-            "sinh(ang^2)":          np.sinh(x ** 2),
-            "cosh(ang)-1":          np.cosh(x) - 1,
-            "cosh(ang^0.5)-1":      np.cosh(x ** 0.5) - 1,
-            "sinh(ang)*ang":        np.sinh(x) * x,
-            # --- tanh-based ---
-            "tanh(ang)":            np.tanh(x),
-            "ang/tanh(ang+1e-9)-1": x / np.tanh(x + 1e-9) - 1,
-            "1-cos(ang)":           1 - np.cos(x),
-        }[name]
-
-    all_names = [
-        "ang^0.25","ang^0.5","ang^(2/3)","ang^0.75","ang^1",
-        "ang^1.25","ang^1.5","ang^(5/3)","ang^2","ang^2.5","ang^3",
-        "log(ang+1)","log(ang+1)^2","ang*log(ang+1)","ang^2*log(ang+1)","ang/log(ang+2)",
-        "exp(ang)-1","exp(ang)-1-ang",
-        "exp(ang^0.5)-1","exp(ang^0.75)-1","exp(ang^1.25)-1","exp(ang^1.5)-1","exp(ang^2)-1",
-        "(exp(ang)-1)^0.5","(exp(ang)-1)^1.5","(exp(ang)-1)^2",
-        "ang*exp(ang)","ang^2*exp(ang)",
-        "sinh(ang)","sinh(ang^0.5)","sinh(ang^0.75)","sinh(ang^1.5)","sinh(ang^2)",
-        "cosh(ang)-1","cosh(ang^0.5)-1","sinh(ang)*ang",
-        "tanh(ang)","ang/tanh(ang+1e-9)-1","1-cos(ang)",
-    ]
-    candidates = {n: _b(ang, n) for n in all_names}
-
-    print(f"\n{'Function':<24}  {'A':>12}  {'RMSE':>10}  {'Mean |err|':>12}")
-    print("-" * 64)
-    results = {}
-    for name, basis in candidates.items():
-        denom = np.dot(basis, basis)
-        A = np.dot(basis, T) / denom if denom > 0 else 0.0
-        residuals = T - A * basis
-        rmse = np.sqrt(np.mean(residuals ** 2))
-        mae  = np.mean(np.abs(residuals))
-        results[name] = (A, rmse, mae)
-        print(f"{name:<24}  {A:>12.6f}  {rmse:>10.6f}  {mae:>12.6f}")
-
-    best = min(results, key=lambda k: results[k][1])
-    print(f"\nBest fit: {best}  (lowest RMSE)")
-    A_best = results[best][0]
-    print(f"  fraction(yaw) = {threshold:.4f} - {A_best:.6f} * ({best})")
-
-    # Plot: angle → fraction — only top 6 by RMSE to keep plot readable
-    ranked = sorted(results, key=lambda k: results[k][1])
-    print(f"\n--- Top 10 ---")
-    for r in ranked[:10]:
-        A, rmse, mae = results[r]
-        print(f"  {r:<28}  A={A:.6f}  RMSE={rmse:.6f}  MAE={mae:.6f}")
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(ang, fractions, color='black', s=20, zorder=5, label='simulation data')
-    ang_dense = np.linspace(1e-9, ang.max(), 300)
-
-    colors_top = plt.cm.tab10(np.linspace(0, 1, 10))
-    for i, name in enumerate(ranked[:10]):
-        A = results[name][0]
-        frac_pred = threshold - A * _b(ang_dense, name)
-        ax.plot(ang_dense, frac_pred, linewidth=1.5,
-                linestyle='-' if name == best else '--',
-                color=colors_top[i],
-                label=f"{name}  ({results[name][1]:.4f})")
-
-    ax.axhline(threshold, color='grey', linestyle=':', linewidth=1, label=f'threshold={threshold}')
-    ax.set_xlabel("|Final yaw angle| (rad)")
-    ax.set_ylabel("Required fraction  (F_right / F_base)")
-    ax.set_title("Required torque fraction from desired yaw angle")
-    ax.legend(fontsize=8)
-    ax.grid(True)
-    plt.tight_layout()
-    plt.savefig("torque_from_angle.png", dpi=150)
-    plt.close(fig)
-    print("Saved torque_from_angle.png")
-
-def fit_torque_piecewise(threshold=0.7993, n_samples=600):
-    """
-    Piecewise fits for angle → torque fraction.
-    Uses hinge/ReLU basis so each segment is continuous at the knot.
-    Multi-param fits via lstsq; RMSE reported for fair comparison.
-    """
-    fractions = np.linspace(0.0, threshold, n_samples)
-    yaws = []
-    for frac in fractions:
-        sim = BulldozerSimulation()
-        sim.F_track[0] = sim.F_track_base
-        sim.F_track[1] = frac * sim.F_track_base
-        sim.run()
-        yaws.append(np.array(sim.log)[-1, 6])
-    yaws = np.array(yaws)
-
-    T   = threshold - fractions
-    ang = np.abs(yaws)
-
-    def H(x, k):
-        return np.maximum(x - k, 0)
-
-    # Knot locations to sweep
-    knots = {
-        'q10': np.percentile(ang, 10),
-        'q25': np.percentile(ang, 25),
-        'q33': np.percentile(ang, 33),
-        'q50': np.percentile(ang, 50),
-        'q67': np.percentile(ang, 67),
-        'q75': np.percentile(ang, 75),
-        'q90': np.percentile(ang, 90),
-    }
-
-    results = {}
-
-    def fit(_, X):
-        c, _, _, _ = np.linalg.lstsq(X, T, rcond=None)
-        r = T - X @ c
-        return c, np.sqrt(np.mean(r**2)), np.mean(np.abs(r))
-
-    for kn, k in knots.items():
-        # 2-piece linear (different slopes, continuous)
-        c, rmse, mae = fit(f"2PL-{kn}", np.c_[ang, H(ang, k)])
-        results[f"2PL-{kn}"] = (c, rmse, mae, '2PL', k)
-
-        # 2-piece: ang^2 base + quadratic hinge
-        c, rmse, mae = fit(f"PQ2-{kn}", np.c_[ang**2, H(ang, k)**2])
-        results[f"PQ2-{kn}"] = (c, rmse, mae, 'PQ2', k)
-
-        # linear base + quadratic hinge
-        c, rmse, mae = fit(f"L+Q-{kn}", np.c_[ang, H(ang, k)**2])
-        results[f"L+Q-{kn}"] = (c, rmse, mae, 'LQ', k)
-
-        # ang^1.5 base + linear hinge
-        c, rmse, mae = fit(f"P1.5+PL-{kn}", np.c_[ang**1.5, H(ang, k)])
-        results[f"P1.5+PL-{kn}"] = (c, rmse, mae, 'P15L', k)
-
-        # ang^2 base + linear hinge
-        c, rmse, mae = fit(f"P2+PL-{kn}", np.c_[ang**2, H(ang, k)])
-        results[f"P2+PL-{kn}"] = (c, rmse, mae, 'P2L', k)
-
-        # sinh base + linear hinge
-        c, rmse, mae = fit(f"sinh+PL-{kn}", np.c_[np.sinh(ang), H(ang, k)])
-        results[f"sinh+PL-{kn}"] = (c, rmse, mae, 'sinhL', k)
-
-        # exp base + linear hinge
-        c, rmse, mae = fit(f"exp+PL-{kn}", np.c_[np.exp(ang) - 1, H(ang, k)])
-        results[f"exp+PL-{kn}"] = (c, rmse, mae, 'expL', k)
-
-    # 3-piece linear (2 knots)
-    knot_pairs = [
-        ('q25+q75', np.percentile(ang, 25), np.percentile(ang, 75)),
-        ('q33+q67', np.percentile(ang, 33), np.percentile(ang, 67)),
-        ('q20+q60', np.percentile(ang, 20), np.percentile(ang, 60)),
-        ('q40+q80', np.percentile(ang, 40), np.percentile(ang, 80)),
-    ]
-    for lbl, k1, k2 in knot_pairs:
-        c, rmse, mae = fit(f"3PL-{lbl}", np.c_[ang, H(ang, k1), H(ang, k2)])
-        results[f"3PL-{lbl}"] = (c, rmse, mae, '3PL', (k1, k2))
-
-    # 4-piece linear (3 knots at quartiles)
-    k1, k2, k3 = np.percentile(ang, [25, 50, 75])
-    c, rmse, mae = fit("4PL-q25/50/75", np.c_[ang, H(ang,k1), H(ang,k2), H(ang,k3)])
-    results["4PL-q25/50/75"] = (c, rmse, mae, '4PL', (k1,k2,k3))
-
-    ranked = sorted(results, key=lambda k: results[k][1])
-
-    print(f"\n{'Function':<22}  {'RMSE':>10}  {'MAE':>10}  Coefficients")
-    print("-" * 80)
-    for name in ranked[:15]:
-        c, rmse, mae, *_ = results[name]
-        cstr = "  ".join(f"{v:.5f}" for v in c)
-        print(f"{name:<22}  {rmse:>10.6f}  {mae:>10.6f}  [{cstr}]")
-
-    best = ranked[0]
-    print(f"\nBest: {best}  RMSE={results[best][1]:.6f}")
-
-    # Plot top 6
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(ang, fractions, color='black', s=20, zorder=5, label='data')
-    ad = np.linspace(0, ang.max(), 400)
-
-    def build_X(name, x):
-        ftype = results[name][3]
-        extra = results[name][4]
-        k = extra
-        if ftype == '2PL':  return np.c_[x, H(x, k)]
-        if ftype == 'PQ2':  return np.c_[x**2, H(x, k)**2]
-        if ftype == 'LQ':   return np.c_[x, H(x, k)**2]
-        if ftype == 'P15L': return np.c_[x**1.5, H(x, k)]
-        if ftype == 'P2L':  return np.c_[x**2, H(x, k)]
-        if ftype == 'sinhL':return np.c_[np.sinh(x), H(x, k)]
-        if ftype == 'expL': return np.c_[np.exp(x)-1, H(x, k)]
-        if ftype == '3PL':  k1,k2=k; return np.c_[x, H(x,k1), H(x,k2)]
-        if ftype == '4PL':  k1,k2,k3=k; return np.c_[x, H(x,k1), H(x,k2), H(x,k3)]
-
-    colors = plt.cm.tab10(np.linspace(0, 1, 6))
-    for i, name in enumerate(ranked[:6]):
-        c = results[name][0]
-        frac_pred = threshold - build_X(name, ad) @ c
-        ax.plot(ad, frac_pred, color=colors[i], linewidth=1.5,
-                linestyle='-' if name == best else '--',
-                label=f"{name}  ({results[name][1]:.5f})")
-
-    ax.axhline(threshold, color='grey', linestyle=':', linewidth=1, label=f'threshold={threshold:.3f}')
-    ax.set_xlabel("|Final yaw angle| (rad)")
-    ax.set_ylabel("Required fraction  (F_right / F_base)")
-    ax.set_title("Piecewise fits: angle → torque fraction  (top 6)")
-    ax.legend(fontsize=8)
-    ax.grid(True)
-    plt.tight_layout()
-    plt.savefig("torque_piecewise.png", dpi=150)
-    plt.close(fig)
-    print("Saved torque_piecewise.png")
-
-def fit_torque_bezier(threshold=0.7993, n_samples=600):
-    """
-    Fit Bezier curves (Bernstein basis) of degrees 2-8 to the angle→fraction data.
-    Tries both unconstrained and endpoint-constrained variants:
-      - constrained: fraction(0)=threshold, fraction(ang_max)=0  (physical endpoints)
-    Compares RMSE against the best piecewise result (4PL RMSE≈0.00325).
-    """
-    from math import comb as _comb
-
-    fractions = np.linspace(0.0, threshold, n_samples)
-    yaws = []
-    for frac in fractions:
-        sim = BulldozerSimulation()
-        sim.F_track[0] = sim.F_track_base
-        sim.F_track[1] = frac * sim.F_track_base
-        sim.run()
-        yaws.append(np.array(sim.log)[-1, 6])
-    yaws      = np.array(yaws)
-    ang       = np.abs(yaws)
-    ang_max   = ang.max()
-    t         = ang / ang_max          # normalised to [0,1]
-
-    def bernstein(t_vec, n):
-        """(len(t), n+1) Bernstein basis matrix for degree n."""
-        B = np.zeros((len(t_vec), n + 1))
-        for i in range(n + 1):
-            B[:, i] = _comb(n, i) * t_vec**i * (1 - t_vec)**(n - i)
-        return B
-
-    results = {}
-
-    for deg in range(2, 9):
-        B = bernstein(t, deg)
-
-        # ── unconstrained ──────────────────────────────────────────────────
-        c, _, _, _ = np.linalg.lstsq(B, fractions, rcond=None)
-        r = fractions - B @ c
-        rmse = np.sqrt(np.mean(r**2))
-        results[f"Bezier-{deg} (free)"] = (c, rmse, np.mean(np.abs(r)), deg, 'free')
-
-        # ── endpoint-constrained: P0=threshold, Pn=0 ───────────────────────
-        # fractions_adj = fractions - threshold*B[:,0]  (P_n term is 0)
-        # fit interior control points B[:,1:-1]
-        if deg >= 2:
-            rhs  = fractions - threshold * B[:, 0]
-            Bint = B[:, 1:-1]
-            if Bint.shape[1] > 0:
-                c_int, _, _, _ = np.linalg.lstsq(Bint, rhs, rcond=None)
-                c_full = np.concatenate([[threshold], c_int, [0.0]])
-                r = fractions - B @ c_full
-                rmse = np.sqrt(np.mean(r**2))
-                results[f"Bezier-{deg} (pinned)"] = (
-                    c_full, rmse, np.mean(np.abs(r)), deg, 'pinned')
-
-    ranked = sorted(results, key=lambda k: results[k][1])
-
-    print(f"\n{'Model':<24}  {'params':>6}  {'RMSE':>10}  {'MAE':>10}")
-    print("-" * 58)
-    for name in ranked:
-        c, rmse, mae, deg, mode = results[name]
-        n_params = len(c) if mode == 'free' else len(c) - 2  # interior only
-        print(f"{name:<24}  {n_params:>6}  {rmse:>10.6f}  {mae:>10.6f}")
-
-    best = ranked[0]
-    print(f"\nBest: {best}  RMSE={results[best][1]:.6f}")
-    print(f"  (4PL piecewise baseline RMSE~0.003253)")
-
-    # ── plot top 6 + data ──────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(ang, fractions, color='black', s=20, zorder=5, label='simulation data')
-
-    t_dense   = np.linspace(0, 1, 400)
-    ang_dense = t_dense * ang_max
-    colors    = plt.cm.tab10(np.linspace(0, 1, 6))
-
-    for i, name in enumerate(ranked[:6]):
-        c, rmse, mae, deg, mode = results[name]
-        B_d = bernstein(t_dense, deg)
-        ax.plot(ang_dense, B_d @ c, color=colors[i], linewidth=1.5,
-                linestyle='-' if name == best else '--',
-                label=f"{name}  (RMSE={rmse:.5f})")
-
-    ax.axhline(threshold, color='grey', linestyle=':', linewidth=1,
-               label=f'threshold={threshold:.3f}')
-    ax.set_xlabel("|Final yaw angle| (rad)")
-    ax.set_ylabel("Required fraction  (F_right / F_base)")
-    ax.set_title("Bezier fits: angle → torque fraction  (top 6)")
-    ax.legend(fontsize=8)
-    ax.grid(True)
-    plt.tight_layout()
-    plt.savefig("torque_bezier.png", dpi=150)
-    plt.close(fig)
-    print("Saved torque_bezier.png")
-
-
-def build_bezier6_pinned(threshold=0.7993, n_samples=600):
-    """Fit Bezier-6 pinned curve and return (coeffs, ang_max)."""
-    from math import comb as _comb
-
-    fractions = np.linspace(0.0, threshold, n_samples)
-    yaws = []
-    for frac in fractions:
-        sim = BulldozerSimulation()
-        sim.stop_time  = 0.5          # short calibration run, constant forces
-        sim.F_track[0] = sim.F_track_base
-        sim.F_track[1] = frac * sim.F_track_base
-        sim.run()
-        yaws.append(np.array(sim.log)[-1, 6])
-    yaws    = np.array(yaws)
-    ang     = np.abs(yaws)
-    ang_max = ang.max()
-    t       = ang / ang_max
-
-    B = np.zeros((len(t), 7))
-    for i in range(7):
-        B[:, i] = _comb(6, i) * t**i * (1 - t)**(6 - i)
-
-    rhs   = fractions - threshold * B[:, 0]
-    c_int, _, _, _ = np.linalg.lstsq(B[:, 1:-1], rhs, rcond=None)
-    coeffs = np.concatenate([[threshold], c_int, [0.0]])
-    print(f"Bezier-6 pinned built  ang_max={ang_max:.4f} rad  "
-          f"coeffs={np.array2string(coeffs, precision=4)}")
-    return coeffs, ang_max
-
-def build_log_controller(threshold=0.7993, n_samples=200):
-    """Calibrate log-based angle→fraction mapping.
-
-    Fits scalar A via least-squares so that:
-        fraction = threshold - A * log(|yaw| + 1)
-    Returns (A, threshold, ang_max).
-    """
-    fractions = np.linspace(0.0, threshold, n_samples)
-    yaws = []
-    for frac in fractions:
-        sim = BulldozerSimulation()
-        sim.F_track[0] = sim.F_track_base
-        sim.F_track[1] = frac * sim.F_track_base
-        sim.run()
-        yaws.append(np.array(sim.log)[-1, 6])
-    yaws  = np.array(yaws)
-    ang   = np.abs(yaws)
-    T     = threshold - fractions
-    basis = np.log(ang + 1)
-    A     = float(np.dot(basis, T) / np.dot(basis, basis))
-    ang_max = ang.max()
-    rmse  = np.sqrt(np.mean((T - A * basis) ** 2))
-    print(f"Log controller: A={A:.6f}  ang_max={ang_max:.4f} rad  RMSE={rmse:.6f}")
-    return A, threshold, ang_max
-
-
-def demo_log_controller(stop_time=30.0, lookahead_dist=1.0):
-    """Run figure-8 with pure-pursuit + log-based torque mapping."""
-    print("Building log controller (200 calibration sims)...")
-    A, threshold, ang_max = build_log_controller()
-
-    print(f"Running figure-8 for {stop_time}s  lookahead={lookahead_dist}m ...")
-    sim = BulldozerSimulation()
-    sim.stop_time = stop_time
-    sim.use_log_controller(A, threshold, ang_max, lookahead_dist=lookahead_dist)
-    sim.run()
-
-    data        = np.array(sim.log)
-    cross_track = data[:, 7]
-    heading_err = data[:, 8]
-
-    def _stats(arr):
-        return np.sqrt(np.mean(arr**2)), np.mean(np.abs(arr)), np.max(np.abs(arr))
-
-    ct_rmse, ct_mae, ct_max = _stats(cross_track)
-    he_rmse, he_mae, he_max = _stats(np.degrees(heading_err))
-
-    print(f"\n{'':>16}  {'RMSE':>10}  {'MAE':>10}  {'Max |err|':>10}")
-    print("-" * 52)
-    print(f"{'Cross-track (m)':>16}  {ct_rmse:>10.4f}  {ct_mae:>10.4f}  {ct_max:>10.4f}")
-    print(f"{'Heading (deg)':>16}  {he_rmse:>10.4f}  {he_mae:>10.4f}  {he_max:>10.4f}")
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    ax1.plot(sim.path_points[:, 0], sim.path_points[:, 1], 'g--', linewidth=1.5, label='Reference')
-    ax1.plot(data[:, 1], data[:, 2], 'b-', linewidth=1.5, label='Vehicle')
-    ax1.set_xlabel("X (m)")
-    ax1.set_ylabel("Y (m)")
-    ax1.set_title("Figure-8: log controller")
-    ax1.legend()
-    ax1.set_aspect('equal')
-    ax1.grid(True)
-    ax2.plot(data[:, 0], cross_track, 'r-', linewidth=1.2)
-    ax2.axhline(0, color='k', linestyle='--', linewidth=0.8)
-    ax2.set_xlabel("Time (s)")
-    ax2.set_ylabel("Cross-track error (m)")
-    ax2.set_title("Cross-track error")
-    ax2.grid(True)
-    plt.tight_layout()
-    plt.savefig("log_controller_demo.png", dpi=150)
-    plt.close(fig)
-    print("Saved log_controller_demo.png")
-
-
-def demo_angular_controller(stop_time=30.0, lookahead_dist=1.0):
-    """Run figure-8 with pure-pursuit + Bezier-6-pinned torque lookup."""
-    print("Building Bezier-6 pinned lookup table (600 calibration sims)...")
-    coeffs, ang_max = build_bezier6_pinned()
-
-    print(f"Running figure-8 for {stop_time}s  lookahead={lookahead_dist}m ...")
-    sim = BulldozerSimulation()
-    sim.stop_time = stop_time
-    sim.use_bezier_controller(coeffs, ang_max, lookahead_dist=lookahead_dist)
-    sim.run()
-
-    data         = np.array(sim.log)
-    cross_track  = data[:, 7]
-    heading_err  = data[:, 8]
-
-    def _stats(arr):
-        rmse = np.sqrt(np.mean(arr**2))
-        mae  = np.mean(np.abs(arr))
-        mx   = np.max(np.abs(arr))
-        return rmse, mae, mx
-
-    ct_rmse, ct_mae, ct_max   = _stats(cross_track)
-    he_rmse, he_mae, he_max   = _stats(np.degrees(heading_err))
-
-    print(f"\n{'':>16}  {'RMSE':>10}  {'MAE':>10}  {'Max |err|':>10}")
-    print("-" * 52)
-    print(f"{'Cross-track (m)':>16}  {ct_rmse:>10.4f}  {ct_mae:>10.4f}  {ct_max:>10.4f}")
-    print(f"{'Heading (deg)':>16}  {he_rmse:>10.4f}  {he_mae:>10.4f}  {he_max:>10.4f}")
-
-    print("Rendering GIF...")
-    data_full = np.array(sim.log)
-    data      = data_full[::5]          # 5x downsample → real-time at 20 fps
-
-    fig = plt.figure(figsize=(8, 7))
-    ax  = fig.add_subplot(111, projection='3d')
-
-    # Ground plane (surface_abg = 0 so it's flat at z = 0)
-    margin = 2.0
-    cx   = (data[:, 1].max() + data[:, 1].min()) / 2
-    cy   = (data[:, 2].max() + data[:, 2].min()) / 2
-    cz   = sim.h / 2
-    half = max(data[:, 1].max() - data[:, 1].min(),
-               data[:, 2].max() - data[:, 2].min(),
-               sim.h) / 2 + margin
-    xs = np.linspace(cx - half, cx + half, 20)
-    ys = np.linspace(cy - half, cy + half, 20)
-    Xs, Ys = np.meshgrid(xs, ys)
-    ax.plot_surface(Xs, Ys, np.zeros_like(Xs), alpha=0.25, color='tan', zorder=0)
-
-    # Figure-8 reference path on the ground
-    ax.plot(sim.path_points[:, 0], sim.path_points[:, 1],
-            np.zeros(len(sim.path_points)),
-            'g--', linewidth=1.2, alpha=0.7)
-
-    ax.set_xlim(cx - half, cx + half)
-    ax.set_ylim(cy - half, cy + half)
-    ax.set_zlim(cz - half, cz + half)
-    ax.set_box_aspect([1, 1, 1])
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_zlabel("Z (m)")
-
-    # Box corners in local frame (origin = bottom centre)
-    hl, hb = sim.l / 2, sim.b / 2
-    c_local = np.array([
-        [-hl, -hb,      0],   # 0 bottom rear-left
-        [+hl, -hb,      0],   # 1 bottom front-left
-        [+hl, +hb,      0],   # 2 bottom front-right
-        [-hl, +hb,      0],   # 3 bottom rear-right
-        [-hl, -hb, sim.h],   # 4 top rear-left
-        [+hl, -hb, sim.h],   # 5 top front-left
-        [+hl, +hb, sim.h],   # 6 top front-right
-        [-hl, +hb, sim.h],   # 7 top rear-right
-    ])
-    box_edges = [(0,1),(1,2),(2,3),(3,0),
-                 (4,5),(5,6),(6,7),(7,4),
-                 (0,4),(1,5),(2,6),(3,7)]
-    box_lines = [None] * 12
-
-    trail, = ax.plot([], [], [], 'b-', linewidth=1.2)
-
-    def update(i):
-        trail.set_data(data[:i+1, 1], data[:i+1, 2])
-        trail.set_3d_properties(data[:i+1, 3])
-
-        for line in box_lines:
-            if line is not None:
-                line.remove()
-
-        R   = sim.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
-        pos = data[i, 1:4]
-        c_g = pos + (R @ c_local.T).T
-
-        for j, (a, b) in enumerate(box_edges):
-            p1, p2 = c_g[a], c_g[b]
-            box_lines[j], = ax.plot(
-                [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                color='red', linewidth=1.5
-            )
-
-        ax.set_title(f"t = {data[i, 0]:.2f} s")
-        return trail,
-
-    anim = animation.FuncAnimation(
-        fig, update, frames=len(data), blit=False, interval=50
-    )
-    anim.save("angular_controller_demo.gif", writer=animation.PillowWriter(fps=20))
-    plt.close(fig)
-    print("Saved angular_controller_demo.gif")
+        data        = np.array(sim.log)
+        cross_track = data[:, 7]
+        heading_err = data[:, 8]
+
+        def _stats(arr):
+            return np.sqrt(np.mean(arr**2)), np.mean(np.abs(arr)), np.max(np.abs(arr))
+
+        ct_rmse, ct_mae, ct_max = _stats(cross_track)
+        he_rmse, he_mae, he_max = _stats(np.degrees(heading_err))
+
+        print(f"\n{'':>16}  {'RMSE':>10}  {'MAE':>10}  {'Max |err|':>10}")
+        print("-" * 52)
+        print(f"{'Cross-track (m)':>16}  {ct_rmse:>10.4f}  {ct_mae:>10.4f}  {ct_max:>10.4f}")
+        print(f"{'Heading (deg)':>16}  {he_rmse:>10.4f}  {he_mae:>10.4f}  {he_max:>10.4f}")
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        ax1.plot(sim.path_points[:, 0], sim.path_points[:, 1], 'g--', linewidth=1.5, label='Reference')
+        ax1.plot(data[:, 1], data[:, 2], 'b-', linewidth=1.5, label='Vehicle')
+        ax1.set_xlabel("X (m)")
+        ax1.set_ylabel("Y (m)")
+        ax1.set_title("Figure-8: log controller")
+        ax1.legend()
+        ax1.set_aspect('equal')
+        ax1.grid(True)
+        ax2.plot(data[:, 0], cross_track, 'r-', linewidth=1.2)
+        ax2.axhline(0, color='k', linestyle='--', linewidth=0.8)
+        ax2.set_xlabel("Time (s)")
+        ax2.set_ylabel("Cross-track error (m)")
+        ax2.set_title("Cross-track error")
+        ax2.grid(True)
+        plt.tight_layout()
+        plt.savefig("log_controller_demo.png", dpi=150)
+        plt.close(fig)
+        print("Saved log_controller_demo.png")
 
 
 def main():
-    # sim = BulldozerSimulation()
-    # plot_track_force_sweep()
-    # find_straight_threshold()
-
-    # fit_torque_from_angle()
-    # fit_torque_bezier()
-    # fit_torque_piecewise()
+    sim = BulldozerSimulation()
+    # sim.plot_track_force_sweep()
+    # sim.find_straight_threshold()
+    sim.demo_log_controller()
     # sim.run_and_plot(stop_time=2.0, first_frame_only=False)
-    demo_log_controller()
+    
 
 if __name__ == "__main__":
     main()
