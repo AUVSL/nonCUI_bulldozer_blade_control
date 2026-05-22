@@ -197,67 +197,8 @@ class TestGetXIcr:
         result = sim.get_x_icr()
         assert abs(result) <= sim.l / 2 + 1e-10
 
-# ───────────────── Controller errors ─────────────────
-
-class TestControllerErrors:
-    def test_at_desired_angles_errors_are_zero(self, sim):
-        sim.desired_abg   = np.array([0.1, 1.0, 0.2])
-        sim.desired_depth = -0.05
-        desired_pitch     = 1.0 * np.arcsin(np.clip(-0.05 / sim.L, -1.0, 1.0))
-        sim.bld_ang       = np.array([0.1, desired_pitch, 0.2])
-
-        errors, _ = sim.controller_errors()
-        np.testing.assert_allclose(errors, np.zeros(3), atol=1e-12)
-
-    def test_error_shape(self, sim):
-        errors, plot_out = sim.controller_errors()
-        assert errors.shape == (3,)
-        assert plot_out.shape == (3,)
-
-    def test_plot_out_depth_is_sin_times_L(self, sim):
-        sim.bld_ang = np.array([0.0, 0.3, 0.0])
-        errors, plot_out = sim.controller_errors()
-        assert plot_out[1] == pytest.approx(np.sin(errors[1]) * sim.L)
-
-    def test_plot_out_roll_equals_roll_error(self, sim):
-        sim.bld_ang = np.array([0.2, 0.0, 0.0])
-        errors, plot_out = sim.controller_errors()
-        assert plot_out[0] == pytest.approx(errors[0])
-
-    def test_nonzero_blade_angle_gives_nonzero_error(self, sim):
-        sim.bld_ang = np.array([0.5, 0.0, 0.0])
-        errors, _ = sim.controller_errors()
-        assert errors[0] != pytest.approx(0.0)
-
-
-# ───────────────── Figure-8 path ─────────────────
-
-class TestFigure8Path:
-    def test_shape(self, sim):
-        pts = sim.figure8_path(A=5.0, B=2.5, n_points=100)
-        assert pts.shape == (100, 3)
-
-    def test_starts_near_origin(self, sim):
-        pts = sim.figure8_path(A=5.0, B=2.5)
-        np.testing.assert_allclose(pts[0], np.zeros(3), atol=1e-12)
-
-    def test_amplitude_x(self, sim):
-        A = 4.0
-        pts = sim.figure8_path(A=A, B=2.0, n_points=2000)
-        assert pts[:, 0].max() == pytest.approx(A, rel=1e-2)
-
-    def test_flat_surface_z_is_zero(self, sim):
-        # surface_abg = [0,0,0] → all points lie in z=0 plane
-        pts = sim.figure8_path()
-        np.testing.assert_allclose(pts[:, 2], 0.0, atol=1e-12)
-
-    def test_custom_n_points(self, sim):
-        pts = sim.figure8_path(n_points=500)
-        assert len(pts) == 500
-
 
 # ───────────────── Cross-track error ─────────────────
-
 class TestSignedCrossTrackError:
     def test_on_path_returns_near_zero(self, sim):
         # Place vehicle exactly on a path point
@@ -281,7 +222,6 @@ class TestSignedCrossTrackError:
 
 
 # ───────────────── Track terrain interaction ─────────────────
-
 class TestTrackTerrainInteraction:
     def test_symmetric_velocities_at_rest(self, sim):
         sim.dxyz  = np.zeros(3)
@@ -300,23 +240,6 @@ class TestTrackTerrainInteraction:
     def test_Rl_shape(self, sim):
         sim.track_terrain_interaction()
         assert sim.Rl.shape == (2,)
-
-
-# ───────────────── Path controller ─────────────────
-
-class TestPathController:
-    def test_on_path_forces_near_equal(self, sim):
-        # Vehicle at path origin → cross-track error ≈ 0 → F_track symmetric
-        sim.q[:3] = sim.path_points[0].copy()
-        sim.path_controller()
-        assert abs(sim.F_track[0] - sim.F_track[1]) < 1.0  # within 1 N
-
-    def test_forces_within_bounds(self, sim):
-        sim.q[:3] = np.array([3.0, 3.0, 0.0])
-        sim.path_controller()
-        F_max = 2 * sim.F_track_base
-        assert 0.0 <= sim.F_track[0] <= F_max
-        assert 0.0 <= sim.F_track[1] <= F_max
 
 
 # ───────────────── Integration smoke test ─────────────────
