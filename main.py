@@ -80,7 +80,7 @@ class BulldozerSimulation:
         self.v_dot     = np.zeros(2)
         self.log       = []
 
-    # ───────────────── Helpers ─────────────────
+    # ---------------- Helpers ----------------
     @staticmethod
     def saturation(value, limit):
         return float(np.clip(value, -abs(limit), abs(limit)))
@@ -105,7 +105,7 @@ class BulldozerSimulation:
             return 0.0
         return (2 * D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
     
-    # ───────────────── Kinematics ─────────────────
+    # ---------------- Kinematics ----------------
     def rotation_gl(self, a, B, g):
         """Rotation matrix: global → local frame"""
         # change to accept input array
@@ -162,21 +162,7 @@ class BulldozerSimulation:
             return 0.0
         return float(np.clip(-self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
     
-    def controller_errors(self):
-        """
-        Computes blade roll, pitch, yaw errors relative to desired surface and depth.
-        """
-        roll, pitch, yaw                          = self.bld_ang
-        desired_roll, des_pitch_mult, desired_yaw = self.desired_abg
-
-        # TODO: update blade angle limits from -1 to 1 to something more realistic, and update the test cases accordingly
-        desired_pitch = des_pitch_mult * np.arcsin(np.clip(self.desired_depth / self.L, -1.0, 1.0))
-
-        errors  = np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
-        plot_out = np.array(          [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
-
-        return errors, plot_out
-
+    # ---------------- Dynamics ----------------
     def blade_terrain_interaction(self):
         a_rel = self.bld_ang[0]
         hp    = abs(self.L * np.sin(self.bld_ang[1]))
@@ -305,8 +291,24 @@ class BulldozerSimulation:
 
         v_dot = np.linalg.solve(Mt, Bt @ self.F_track + Ct - Et @ self.v - Pt)
         return v_dot
-   
-    # ───────────────── Main Integration Loop ─────────────────
+    
+    # ---------------- Control ----------------
+    def controller_errors(self):
+        """
+        Computes blade roll, pitch, yaw errors relative to desired surface and depth.
+        """
+        roll, pitch, yaw                          = self.bld_ang
+        desired_roll, des_pitch_mult, desired_yaw = self.desired_abg
+
+        # TODO: update blade angle limits from -1 to 1 to something more realistic, and update the test cases accordingly
+        desired_pitch = des_pitch_mult * np.arcsin(np.clip(self.desired_depth / self.L, -1.0, 1.0))
+
+        errors  = np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
+        plot_out = np.array(          [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
+
+        return errors, plot_out
+    
+    # ---------------- Main Loop ----------------
     def run(self):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
@@ -336,6 +338,7 @@ class BulldozerSimulation:
             self.log.append([t, *self.q, self.x_ICR, self.dxyz[1], self.daBg[2]])
             t += self.dt
 
+    # ---------------- Visualization ----------------
     def run_and_plot(self, stop_time=30.0, first_frame_only=False):
         """Run the simulation and render a single GIF with the 3D trajectory
         and x_ICR / lateral-velocity / yaw-rate time series animated together."""
@@ -480,38 +483,39 @@ class BulldozerSimulation:
         plt.close(fig)
         print(f"Saved {fname}")
 
-def plot_track_force_sweep():
-    """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 0.5 x F_track_base."""
-    fractions = np.linspace(0, 0.8, 100)
-    colors = plt.cm.viridis(np.linspace(0, 0.6, 100))
+    def plot_track_force_sweep(self):
+        """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 0.5 x F_track_base."""
+        fractions = np.linspace(0, 0.8, 100)
+        colors = plt.cm.viridis(np.linspace(0, 0.6, 100))
 
-    fig, ax = plt.subplots(figsize=(10, 8))
+        fig, ax = plt.subplots(figsize=(10, 8))
 
-    for i, fraction in enumerate(fractions):
-        sim = BulldozerSimulation()
-        sim.F_track[0] = sim.F_track_base
-        sim.F_track[1] = fraction * sim.F_track_base
-        sim.run()
+        for i, fraction in enumerate(fractions):
+            sim = BulldozerSimulation()
+            sim.F_track[0] = sim.F_track_base
+            sim.F_track[1] = fraction * sim.F_track_base
+            sim.run()
 
-        data = np.array(sim.log)
-        ax.plot(data[:, 1], data[:, 2], color=colors[i], linewidth=0.8, alpha=0.7)
+            data = np.array(sim.log)
+            ax.plot(data[:, 1], data[:, 2], color=colors[i], linewidth=0.8, alpha=0.7)
 
-    sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
-    plt.colorbar(sm, ax=ax, label="right track fraction of F_base")
+        sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
+        plt.colorbar(sm, ax=ax, label="right track fraction of F_base")
 
-    ax.set_xlabel("X (m)")
-    ax.set_ylabel("Y (m)")
-    ax.set_title("XY trajectories — left track = F_base, right track = 0 to 1 x F_base (100 steps)")
-    ax.set_aspect("equal")
-    ax.grid(True)
-    plt.tight_layout()
-    plt.savefig("track_force_sweep.png", dpi=150)
-    plt.close(fig)
-    print("Saved track_force_sweep.png")
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_title("XY trajectories — left track = F_base, right track = 0 to 1 x F_base (100 steps)")
+        ax.set_aspect("equal")
+        ax.grid(True)
+        plt.tight_layout()
+        plt.savefig("track_force_sweep.png", dpi=150)
+        plt.close(fig)
+        print("Saved track_force_sweep.png")
+
 
 def main():
     sim = BulldozerSimulation()
-    # plot_track_force_sweep()
+    sim.plot_track_force_sweep()
     sim.run_and_plot(stop_time=2.0, first_frame_only=False)
 
 if __name__ == "__main__":
