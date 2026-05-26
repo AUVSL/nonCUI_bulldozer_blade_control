@@ -189,7 +189,11 @@ class BulldozerSimulation:
 
         a_val = np.tan(abs(a_rel)) ** 2
         c_val = (H3 + H4) / 2
-        V     = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val * self.B1 ** 3 + c_val ** 2 * self.B1)
+
+        if((H3_sub == 0) and (H4_sub == 0)):
+            V = 0.0
+        else:
+            V     = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val * self.B1 ** 3 + c_val ** 2 * self.B1)
 
         # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
         fill_percent = np.linalg.norm(self.q[:3]) / self.fill_distance
@@ -291,7 +295,7 @@ class BulldozerSimulation:
         R6_lg = np.zeros((6, 6))
         R6_lg[0:3, 0:3] = self.R_lg
         R6_lg[3:6, 3:6] = self.R_lg
-        C = R6_lg @ (Ct_vec)
+        C = R6_lg @ (Ct_vec + Cb_vec)
         
         S  = self.S_matrix()
         Sd = self.Sd_matrix()
