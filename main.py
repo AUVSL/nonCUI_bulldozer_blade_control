@@ -15,7 +15,6 @@ class BulldozerSimulation:
     def __init__(self):
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # simulation and control parameters
-        self.backward      = False
         self.dt            = 1/100
         self.stop_time     = 0.7
         grav               = 9.81
@@ -440,10 +439,7 @@ class BulldozerSimulation:
 
             self.v_dot = self.vehicle_dynamics()
             self.v    += self.dt * self.v_dot
-            if self.backward:
-                self.v[0] = min(max(self.v[0], -self.velocity_limit), 0)
-            else:
-                self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
+            self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
             self.v[1]  = self.saturation(self.v[1], self.angular_velocity_limit)
             self.q_dot = self.S_matrix() @ self.v
 
@@ -465,7 +461,7 @@ class BulldozerSimulation:
                              self.v[0], self.v[1]])
             t += self.dt
 
-    def build_bezier6_pinned(self,threshold=0.498, n_samples=60):
+    def build_bezier6_pinned(self,threshold=0.799, n_samples=60):
         """Fit Bezier-6 pinned curve and return (coeffs, ang_max)."""
         from math import comb as _comb
 
@@ -577,7 +573,7 @@ class BulldozerSimulation:
         plt.close(fig)
         print(f"Saved {fname}")
 
-    def run_and_plot(self, stop_time=30.0, lookahead_dist=1.2,
+    def run_and_plot(self, stop_time=30.0, lookahead_dist=0.9,
                      use_path_controller=True, first_frame_only=False):
         """Run the simulation and render a multi-panel GIF.
 
