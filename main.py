@@ -190,6 +190,7 @@ class BulldozerSimulation:
         a_val = np.tan(abs(a_rel)) ** 2
         c_val = (H3 + H4) / 2
 
+        # TODO: update to account for later dump cycles
         if((H3_sub == 0) and (H4_sub == 0)):
             V = 0.0
         else:

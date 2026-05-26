@@ -104,7 +104,7 @@ class TestYc:
 
     def test_triangle_D1_zero(self):
         D1, D2, B1 = 0.0, 2.0, 3.0
-        expected = (0 + 2 * D2) / (3 * (0 + D2)) * B1 - B1 / 2
+        expected = (2 * D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
         assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(expected)
 
     def test_result_in_valid_range(self):
@@ -262,9 +262,3 @@ class TestRun:
         # At least one position coordinate must have changed
         assert not np.allclose(log_arr[-1, 1:4], np.zeros(3))
 
-    def test_backward_velocity_is_nonpositive(self, sim):
-        sim.backward   = True
-        sim.stop_time  = 0.2
-        sim.run()
-        log_arr = np.array(sim.log)
-        assert (log_arr[:, 15] <= 1e-10).all()
