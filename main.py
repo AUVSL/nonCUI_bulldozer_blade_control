@@ -15,6 +15,7 @@ class BulldozerSimulation:
     def __init__(self):
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # simulation and control parameters
+        self.backward      = False
         self.dt            = 1/100
         self.stop_time     = 0.7
         grav               = 9.81
@@ -81,12 +82,11 @@ class BulldozerSimulation:
         self.log                 = []
         self.cross_track_err     = 0.0
         self.heading_err         = 0.0
-        self.backward            = False
-        self._active_controller  = None
-        self.path_points         = self.figure8_path()
-        self.stop_after_first_loop = True
+        self._bezier_coeffs      = None
+        self._bezier_ang_max     = None
+        self._lookahead_dist     = 1.5
         self._nearest_path_idx   = 0
-        self._passed_halfway     = False
+        self.path_points         = self.figure8_path(A=5.0, B=2.5)
 
     # ---------------- Helpers ----------------
     @staticmethod
@@ -317,31 +317,58 @@ class BulldozerSimulation:
         return errors, plot_out
     
     def figure8_path(self, A=5.0, B=2.5, n_points=2000):
-        """Dense (x, y) waypoints for a figure-8: x=A·sin(t), y=B·sin(2t)."""
+        """Dense (x, y, z) waypoints for a figure-8 on the surface plane defined by surface_abg."""
+        R_surf = self.rotation_lg(*self.surface_abg)
+        e1, e2 = R_surf[:, 0], R_surf[:, 1]
         t = np.linspace(0, 2 * np.pi, n_points, endpoint=False)
-        return np.column_stack([A * np.sin(t), B * np.sin(2 * t)])
+        xs, ys = A * np.sin(t), B * np.sin(2 * t)
+        return np.outer(xs, e1) + np.outer(ys, e2)
 
-    def signed_cross_track_error(self, pos_xy):
-        """Signed perpendicular distance from pos_xy to self.path_points.
+    def signed_cross_track_error(self, pos_xyz):
+        """Signed perpendicular distance from pos_xyz to self.path_points on the surface plane.
         Positive when the vehicle is to the left of the path tangent direction."""
-        diffs = self.path_points - pos_xy
-        idx   = int(np.argmin(np.linalg.norm(diffs, axis=1)))
+        diffs = self.path_points - pos_xyz
+        idx      = int(np.argmin(np.linalg.norm(diffs, axis=1)))
         next_idx = (idx + 1) % len(self.path_points)
         tangent  = self.path_points[next_idx] - self.path_points[idx]
         norm     = np.linalg.norm(tangent)
         if norm < 1e-10:
             return 0.0
         tangent /= norm
-        left_normal = np.array([-tangent[1], tangent[0]])  # CCW 90° of tangent
-        return float(np.dot(pos_xy - self.path_points[idx], left_normal))
+        n_surf      = self.rotation_lg(*self.surface_abg)[:, 2]
+        left_normal = np.cross(n_surf, tangent)  # left of tangent within surface plane
+        return float(np.dot(pos_xyz - self.path_points[idx], left_normal))
+
+    def path_controller(self):
+        """Proportional controller: differential track forces to reduce cross-track error.
+
+        Sign convention: left_normal points left of the path direction.
+        e > 0  → vehicle is left  → increase F_left  → turn right toward path.
+        e < 0  → vehicle is right → increase F_right → turn left toward path.
+        """
+        self.cross_track_err = self.signed_cross_track_error(self.q[:3])
+        delta         = self.Kp_path * self.cross_track_err
+        F_max         = 2* self.F_track_base
+        self.F_track[0] = float(np.clip(self.F_track_base + delta, 0.0, F_max))
+        self.F_track[1] = float(np.clip(self.F_track_base - delta, 0.0, F_max))
+
+    def use_bezier_controller(self, coeffs, ang_max, lookahead_dist=1):
+        self._bezier_coeffs   = np.asarray(coeffs)
+        self._bezier_ang_max  = float(ang_max)
+        self._lookahead_dist  = float(lookahead_dist)
+
+    def _eval_bezier6(self, t):
+        from math import comb as _c
+        return sum(_c(6, i) * t**i * (1-t)**(6-i) * self._bezier_coeffs[i]
+                   for i in range(7))
 
     def pure_pursuit_heading_error(self):
         """
         Pure-pursuit: find the lookahead point on the path at distance
         self._lookahead_dist from the vehicle, return the signed angle
-        from current heading to that point.
+        from current heading to that point, measured within the surface plane.
         """
-        pos = self.q[:2]
+        pos = self.q[:3]
         L   = self._lookahead_dist
         n   = len(self.path_points)
 
@@ -350,7 +377,7 @@ class BulldozerSimulation:
         self._nearest_path_idx = nearest
         lookahead_pt = None
 
-        # Walk forward along path segments looking for circle intersection
+        # Walk forward along path segments looking for sphere intersection
         for k in range(n):
             i   = (nearest + k) % n
             j   = (i + 1) % n
@@ -372,72 +399,44 @@ class BulldozerSimulation:
         if lookahead_pt is None:                    # fallback: nearest point
             lookahead_pt = self.path_points[nearest]
 
-        dx  = lookahead_pt[0] - pos[0]
-        dy  = lookahead_pt[1] - pos[1]
-        err = np.arctan2(dy, dx) - self.q[5]
+        R_surf  = self.rotation_lg(*self.surface_abg)
+        n_surf  = R_surf[:, 2]
+        e1_surf = R_surf[:, 0]
+        e2_surf = R_surf[:, 1]
+        d_vec   = lookahead_pt - pos
+        d_proj  = d_vec - np.dot(d_vec, n_surf) * n_surf   # project onto surface plane
+        angle   = np.arctan2(np.dot(d_proj, e2_surf), np.dot(d_proj, e1_surf))
+        err     = angle - self.q[5]
         return float((err + np.pi) % (2 * np.pi) - np.pi)
 
-    def _log_path_controller(self):
-        """Pure-pursuit heading error → track fraction via log mapping:
-        fraction = threshold - A * log(|heading_err| + 1)"""
+    def angular_path_controller(self):
+        """Assign track forces via Bezier-6-pinned lookup on pure-pursuit heading error."""
         self.heading_err     = self.pure_pursuit_heading_error()
-        self.cross_track_err = self.signed_cross_track_error(self.q[:2])
-        ang      = min(abs(self.heading_err), self._log_ang_max)
-        fraction = float(np.clip(self._log_threshold - self._log_A * np.log(ang + 1), 0.0, 1.0))
-        if self.heading_err > 0:
+        self.cross_track_err = self.signed_cross_track_error(self.q[:3])
+        ang      = min(abs(self.heading_err), self._bezier_ang_max)
+        t        = ang / self._bezier_ang_max
+        fraction = float(np.clip(self._eval_bezier6(t), 0.0, 1.0))
+        if self.heading_err > 0:          # need to turn left  → weaken left track
             self.F_track[0] = fraction * self.F_track_base
             self.F_track[1] = self.F_track_base
-        else:
+        else:                              # need to turn right → weaken right track
             self.F_track[0] = self.F_track_base
             self.F_track[1] = fraction * self.F_track_base
     
-    def build_log_controller(self, threshold=0.7993, n_samples=200):
-        """Calibrate log-based angle→fraction mapping.
-
-        Fits scalar A via least-squares so that:
-            fraction = threshold - A * log(|yaw| + 1)
-        Returns (A, threshold, ang_max).
-        """
-        fractions = np.linspace(0.0, threshold, n_samples)
-        yaws = []
-        for frac in fractions:
-            sim = BulldozerSimulation()
-            sim.F_track[0] = sim.F_track_base
-            sim.F_track[1] = frac * sim.F_track_base
-            sim.run()
-            yaws.append(np.array(sim.log)[-1, 6])
-        yaws  = np.array(yaws)
-        ang   = np.abs(yaws)
-        T     = threshold - fractions
-        basis = np.log(ang + 1)
-        A     = float(np.dot(basis, T) / np.dot(basis, basis))
-        ang_max = ang.max()
-        rmse  = np.sqrt(np.mean((T - A * basis) ** 2))
-        print(f"Log controller: A={A:.6f}  ang_max={ang_max:.4f} rad  RMSE={rmse:.6f}")
-        return A, threshold, ang_max
-    
-    def use_log_controller(self, A, threshold, ang_max, lookahead_dist=1.5):
-        self._log_A             = float(A)
-        self._log_threshold     = float(threshold)
-        self._log_ang_max       = float(ang_max)
-        self._lookahead_dist    = float(lookahead_dist)
-        self._active_controller = self._log_path_controller
-
     # ---------------- Main Loop ----------------
     def run(self):
         t = 0.0
+        n_pts   = len(self.path_points)
+        max_idx = 0
         for _ in range(int(self.stop_time / self.dt)):
+            if self._bezier_coeffs is not None:
+                self.angular_path_controller()
+                max_idx = max(max_idx, self._nearest_path_idx)
+                if max_idx > n_pts * 0.9 and self._nearest_path_idx < n_pts * 0.1:
+                    break
             errors, plot_err = self.controller_errors()
-            self.bld_ang += self.gain * self.Kp * errors
 
-            if self._active_controller is not None:
-                self._active_controller()
-                if self.stop_after_first_loop:
-                    n = len(self.path_points)
-                    if self._nearest_path_idx > n // 2:
-                        self._passed_halfway = True
-                    if self._passed_halfway and self._nearest_path_idx < n // 10:
-                        break
+            self.bld_ang += self.gain * self.Kp * errors
 
             self.v_dot = self.vehicle_dynamics()
             self.v    += self.dt * self.v_dot
@@ -466,6 +465,35 @@ class BulldozerSimulation:
                              self.v[0], self.v[1]])
             t += self.dt
 
+    def build_bezier6_pinned(self,threshold=0.498, n_samples=60):
+        """Fit Bezier-6 pinned curve and return (coeffs, ang_max)."""
+        from math import comb as _comb
+
+        fractions = np.linspace(0.0, threshold, n_samples)
+        yaws = []
+        for frac in fractions:
+            sim = BulldozerSimulation()
+            sim.stop_time  = 0.5          # short calibration run, constant forces
+            sim.F_track[0] = sim.F_track_base
+            sim.F_track[1] = frac * sim.F_track_base
+            sim.run()
+            yaws.append(np.array(sim.log)[-1, 6])
+        yaws    = np.array(yaws)
+        ang     = np.abs(yaws)
+        ang_max = ang.max()
+        t       = ang / ang_max
+
+        B = np.zeros((len(t), 7))
+        for i in range(7):
+            B[:, i] = _comb(6, i) * t**i * (1 - t)**(6 - i)
+
+        rhs   = fractions - threshold * B[:, 0]
+        c_int, _, _, _ = np.linalg.lstsq(B[:, 1:-1], rhs, rcond=None)
+        coeffs = np.concatenate([[threshold], c_int, [0.0]])
+        print(f"Bezier-6 pinned built  ang_max={ang_max:.4f} rad  "
+            f"coeffs={np.array2string(coeffs, precision=4)}")
+        return coeffs, ang_max
+    
     # ---------------- Visualization ----------------
     def plot_track_force_sweep(self):
         """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
@@ -516,29 +544,98 @@ class BulldozerSimulation:
         print(f"Converged to straight threshold: {(lo + hi) / 2}")
         return (lo + hi) / 2
 
-    def make_position_gif(self):
+    @staticmethod
+    def _plot_forces(log_arr, fname="forces.png"):
+        t     = log_arr[:, 0]
+        Mb    = log_arr[:, 9]
+        Fb    = log_arr[:, 10]
+        RlL   = log_arr[:, 11]
+        RlR   = log_arr[:, 12]
+        Fy    = log_arr[:, 13]
+        Mr    = log_arr[:, 14]
+        v_fwd = log_arr[:, 15]
+        v_trn = log_arr[:, 16]
+
+        fig, axes = plt.subplots(3, 2, figsize=(12, 9), sharex=True)
+        fig.suptitle("Forces & Moments over Time")
+
+        axes[0, 0].plot(t, Fb);  axes[0, 0].set_ylabel("Fb (N)");   axes[0, 0].set_title("Blade force")
+        axes[0, 1].plot(t, Mb);  axes[0, 1].set_ylabel("Mb (N·m)"); axes[0, 1].set_title("Blade moment")
+        axes[1, 0].plot(t, RlL, label="Left"); axes[1, 0].plot(t, RlR, label="Right")
+        axes[1, 0].set_ylabel("Rl (N)"); axes[1, 0].set_title("Track rolling resistance"); axes[1, 0].legend()
+        axes[1, 1].plot(t, Fy);  axes[1, 1].set_ylabel("Fy (N)");   axes[1, 1].set_title("Lateral track force")
+        axes[2, 0].plot(t, Mr);  axes[2, 0].set_ylabel("Mr (N·m)"); axes[2, 0].set_title("Track turning moment")
+        axes[2, 1].plot(t, v_fwd, label="forward"); axes[2, 1].plot(t, v_trn, label="turn")
+        axes[2, 1].set_ylabel("v (m/s  or  rad/s)"); axes[2, 1].set_title("v"); axes[2, 1].legend()
+
+        for ax in axes.flat:
+            ax.set_xlabel("Time (s)")
+            ax.grid(True, linewidth=0.4)
+
+        fig.tight_layout()
+        fig.savefig(fname, dpi=120)
+        plt.close(fig)
+        print(f"Saved {fname}")
+
+    def run_and_plot(self, stop_time=30.0, lookahead_dist=1.2,
+                     use_path_controller=True, first_frame_only=False):
+        """Run the simulation and render a multi-panel GIF.
+
+        use_path_controller=True  — build Bezier lookup, run pure-pursuit figure-8, overlay path.
+        use_path_controller=False — run with fixed track forces, no path overlay.
+        """
         sim = BulldozerSimulation()
+        sim.stop_time = stop_time
+
+        if use_path_controller:
+            print("Building Bezier-6 pinned lookup table...")
+            coeffs, ang_max = self.build_bezier6_pinned()
+            print(f"Running figure-8 for {stop_time}s  lookahead={lookahead_dist}m ...")
+            sim.use_bezier_controller(coeffs, ang_max, lookahead_dist=lookahead_dist)
         sim.run()
-        data = np.array(sim.log)[::5]
 
-        fig = plt.figure(figsize=(7, 7))
-        ax  = fig.add_subplot(111, projection='3d')
+        if use_path_controller:
+            log_arr     = np.array(sim.log)
+            cross_track = log_arr[:, 7]
+            heading_err = log_arr[:, 8]
 
-        # Surface plane (same normal derivation as post_process_and_plot)
-        a, B, g = self.surface_abg
-        sa, ca  = np.sin(a), np.cos(a)
-        sB, cB  = np.sin(B), np.cos(B)
-        sg, cg  = np.sin(g), np.cos(g)
-        nx = ca*sB*cg + sa*sg
-        ny = ca*sB*sg - sa*cg
-        nz = ca*cB
+            def _stats(arr):
+                return (np.sqrt(np.mean(arr**2)), np.mean(np.abs(arr)), np.max(np.abs(arr)))
+
+            ct_rmse, ct_mae, ct_max = _stats(cross_track)
+            he_rmse, he_mae, he_max = _stats(np.degrees(heading_err))
+            print(f"\n{'':>16}  {'RMSE':>10}  {'MAE':>10}  {'Max |err|':>10}")
+            print("-" * 52)
+            print(f"{'Cross-track (m)':>16}  {ct_rmse:>10.4f}  {ct_mae:>10.4f}  {ct_max:>10.4f}")
+            print(f"{'Heading (deg)':>16}  {he_rmse:>10.4f}  {he_mae:>10.4f}  {he_max:>10.4f}")
+
+        print("Rendering GIF...")
+        data     = np.array(sim.log)[::5]
+        n_frames = 1 if first_frame_only else len(data)
+
+        fig = plt.figure(figsize=(14, 7))
+        gs  = fig.add_gridspec(2, 2, width_ratios=[1.4, 1], hspace=0.35, wspace=0.3)
+        ax      = fig.add_subplot(gs[:, 0], projection='3d')
+        ax_top  = fig.add_subplot(gs[0, 1])
+        ax_side = fig.add_subplot(gs[1, 1])
+
+        # Surface plane normal
+        a_s, B_s, g_s = sim.surface_abg
+        sa, ca = np.sin(a_s), np.cos(a_s)
+        sB, cB = np.sin(B_s), np.cos(B_s)
+        sg, cg = np.sin(g_s), np.cos(g_s)
+        nx = ca * sB * cg + sa * sg
+        ny = ca * sB * sg - sa * cg
+        nz = ca * cB
+
         margin = 2.0
-        cx = (data[:,1].max() + data[:,1].min()) / 2
-        cy = (data[:,2].max() + data[:,2].min()) / 2
-        cz = (data[:,3].max() + data[:,3].min()) / 2
-        half = max(data[:,1].max() - data[:,1].min(),
-                   data[:,2].max() - data[:,2].min(),
-                   data[:,3].max() - data[:,3].min()) / 2 + margin
+        cx   = (data[:, 1].max() + data[:, 1].min()) / 2
+        cy   = (data[:, 2].max() + data[:, 2].min()) / 2
+        cz   = (data[:, 3].max() + data[:, 3].min()) / 2
+        half = max(data[:, 1].max() - data[:, 1].min(),
+                   data[:, 2].max() - data[:, 2].min(),
+                   data[:, 3].max() - data[:, 3].min()) / 2 + margin
+
         xs = np.linspace(cx - half, cx + half, 30)
         ys = np.linspace(cy - half, cy + half, 30)
         Xs, Ys = np.meshgrid(xs, ys)
@@ -547,113 +644,122 @@ class BulldozerSimulation:
         ax.set_xlim(cx - half, cx + half)
         ax.set_ylim(cy - half, cy + half)
         ax.set_zlim(cz - half, cz + half)
+        ax.set_box_aspect([1, 1, 1])
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
 
-        # Box corners in local frame, origin = bottom centre
-        hl, hb = self.l / 2, self.b / 2
+        arrow_len = half * 0.5
+        ax.quiver(0, 0, 0, arrow_len, 0, 0, color='red',   linewidth=2, arrow_length_ratio=0.2)
+        ax.quiver(0, 0, 0, 0, arrow_len, 0, color='green', linewidth=2, arrow_length_ratio=0.2)
+        ax.quiver(0, 0, 0, 0, 0, arrow_len, color='blue',  linewidth=2, arrow_length_ratio=0.2)
+        ax.text(arrow_len * 1.15, 0, 0, 'X', color='red',   fontsize=11, fontweight='bold')
+        ax.text(0, arrow_len * 1.15, 0, 'Y', color='green', fontsize=11, fontweight='bold')
+        ax.text(0, 0, arrow_len * 1.15, 'Z', color='blue',  fontsize=11, fontweight='bold')
+
+        if use_path_controller:
+            ax.plot(sim.path_points[:, 0], sim.path_points[:, 1], sim.path_points[:, 2],
+                    'g--', linewidth=1.2, alpha=0.7)
+            ax_top.plot(sim.path_points[:, 0], sim.path_points[:, 1],
+                        'g--', linewidth=1.2, alpha=0.7)
+            ax_side.plot(sim.path_points[:, 0], sim.path_points[:, 2],
+                         'g--', linewidth=1.2, alpha=0.7)
+
+        ax_top.set_xlim(cx - half, cx + half)
+        ax_top.set_ylim(cy - half, cy + half)
+        ax_top.set_xlabel("X (m)")
+        ax_top.set_ylabel("Y (m)")
+        ax_top.set_title("Top View (X-Y)")
+        ax_top.set_aspect('equal', adjustable='box')
+        ax_top.grid(True, linewidth=0.4)
+
+        ax_side.set_xlim(cx - half, cx + half)
+        ax_side.set_ylim(cz - half, cz + half)
+        ax_side.set_xlabel("X (m)")
+        ax_side.set_ylabel("Z (m)")
+        ax_side.set_title("Side View (X-Z)")
+        ax_side.set_aspect('equal', adjustable='box')
+        ax_side.grid(True, linewidth=0.4)
+
+        x_line = np.array([cx - half, cx + half])
+        ax_top.axhline(cy, color='tan', linewidth=2, alpha=0.7)
+        ax_side.plot(x_line, -(nx * x_line + ny * cy) / nz, color='tan', linewidth=2, alpha=0.7)
+
+        hl, hb = sim.l / 2, sim.b / 2
         c_local = np.array([
-            [-hl, -hb,          0],  # 0 bottom rear-left
-            [+hl, -hb,          0],  # 1 bottom front-left
-            [+hl, +hb,          0],  # 2 bottom front-right
-            [-hl, +hb,          0],  # 3 bottom rear-right
-            [-hl, -hb, self.h], # 4 top rear-left
-            [+hl, -hb, self.h], # 5 top front-left
-            [+hl, +hb, self.h], # 6 top front-right
-            [-hl, +hb, self.h], # 7 top rear-right
+            [-hl, -hb,       0],
+            [+hl, -hb,       0],
+            [+hl, +hb,       0],
+            [-hl, +hb,       0],
+            [-hl, -hb, sim.h],
+            [+hl, -hb, sim.h],
+            [+hl, +hb, sim.h],
+            [-hl, +hb, sim.h],
         ])
         box_edges = [(0,1),(1,2),(2,3),(3,0),
                      (4,5),(5,6),(6,7),(7,4),
                      (0,4),(1,5),(2,6),(3,7)]
-        box_lines = [None] * 12
+        box_lines      = [None] * 12
+        box_lines_top  = [None] * 12
+        box_lines_side = [None] * 12
 
         ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
+        ax_top.scatter(data[0, 1], data[0, 2], color='blue', s=60, zorder=5)
+        ax_side.scatter(data[0, 1], data[0, 3], color='blue', s=60, zorder=5)
 
-        trail, = ax.plot([], [], [], 'b-', linewidth=1.5)
+        trail,      = ax.plot([], [], [], 'b-', linewidth=1.5)
+        trail_top,  = ax_top.plot([], [], 'b-', linewidth=1.5)
+        trail_side, = ax_side.plot([], [], 'b-', linewidth=1.5)
 
         def update(i):
             trail.set_data(data[:i+1, 1], data[:i+1, 2])
             trail.set_3d_properties(data[:i+1, 3])
+            trail_top.set_data(data[:i+1, 1], data[:i+1, 2])
+            trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
 
             for line in box_lines:
                 if line is not None:
                     line.remove()
+            for line in box_lines_top:
+                if line is not None:
+                    line.remove()
+            for line in box_lines_side:
+                if line is not None:
+                    line.remove()
 
-            R   = self.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
+            R   = sim.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
             pos = data[i, 1:4]
-            c_g = pos + (R @ c_local.T).T  # (8, 3) corners in global frame
+            c_g = pos + (R @ c_local.T).T
 
-            for j, (a, b) in enumerate(box_edges):
-                p1, p2 = c_g[a], c_g[b]
+            for j, (ia, ib) in enumerate(box_edges):
+                p1, p2 = c_g[ia], c_g[ib]
                 box_lines[j], = ax.plot(
                     [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                    color='red', linewidth=1.5
-                )
+                    color='red', linewidth=1.5)
+                box_lines_top[j], = ax_top.plot(
+                    [p1[0], p2[0]], [p1[1], p2[1]],
+                    color='red', linewidth=1.5)
+                box_lines_side[j], = ax_side.plot(
+                    [p1[0], p2[0]], [p1[2], p2[2]],
+                    color='red', linewidth=1.5)
 
             ax.set_title(f"t = {data[i, 0]:.2f} s")
             return trail,
 
         anim = animation.FuncAnimation(
-            fig, update, frames=len(data), blit=False, interval=50
+            fig, update, frames=n_frames, blit=False, interval=50
         )
-        anim.save("position_3d.gif", writer=animation.PillowWriter(fps=20))
+        fname = "simulation.gif"
+        anim.save(fname, writer=animation.PillowWriter(fps=20))
         plt.close(fig)
-        print("Saved position_3d.gif")
-
-    def demo_log_controller(self,stop_time=30.0, lookahead_dist=0.7):
-        """Run figure-8 with pure-pursuit + log-based torque mapping."""
-        print("Building log controller (200 calibration sims)...")
-        A, threshold, ang_max = self.build_log_controller()
-
-        print(f"Running figure-8 for {stop_time}s  lookahead={lookahead_dist}m ...")
-        sim = BulldozerSimulation()
-        sim.stop_time = stop_time
-        sim.use_log_controller(A, threshold, ang_max, lookahead_dist=lookahead_dist)
-        sim.run()
-
-        data        = np.array(sim.log)
-        cross_track = data[:, 7]
-        heading_err = data[:, 8]
-
-        def _stats(arr):
-            return np.sqrt(np.mean(arr**2)), np.mean(np.abs(arr)), np.max(np.abs(arr))
-
-        ct_rmse, ct_mae, ct_max = _stats(cross_track)
-        he_rmse, he_mae, he_max = _stats(np.degrees(heading_err))
-
-        print(f"\n{'':>16}  {'RMSE':>10}  {'MAE':>10}  {'Max |err|':>10}")
-        print("-" * 52)
-        print(f"{'Cross-track (m)':>16}  {ct_rmse:>10.4f}  {ct_mae:>10.4f}  {ct_max:>10.4f}")
-        print(f"{'Heading (deg)':>16}  {he_rmse:>10.4f}  {he_mae:>10.4f}  {he_max:>10.4f}")
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        ax1.plot(sim.path_points[:, 0], sim.path_points[:, 1], 'g--', linewidth=1.5, label='Reference')
-        ax1.plot(data[:, 1], data[:, 2], 'b-', linewidth=1.5, label='Vehicle')
-        ax1.set_xlabel("X (m)")
-        ax1.set_ylabel("Y (m)")
-        ax1.set_title("Figure-8: log controller")
-        ax1.legend()
-        ax1.set_aspect('equal')
-        ax1.grid(True)
-        ax2.plot(data[:, 0], cross_track, 'r-', linewidth=1.2)
-        ax2.axhline(0, color='k', linestyle='--', linewidth=0.8)
-        ax2.set_xlabel("Time (s)")
-        ax2.set_ylabel("Cross-track error (m)")
-        ax2.set_title("Cross-track error")
-        ax2.grid(True)
-        plt.tight_layout()
-        plt.savefig("log_controller_demo.png", dpi=150)
-        plt.close(fig)
-        print("Saved log_controller_demo.png")
+        print(f"Saved {fname}")
+        self._plot_forces(np.array(sim.log))
 
 def main():
     sim = BulldozerSimulation()
     # sim.plot_track_force_sweep()
     # sim.find_straight_threshold()
-    
-    sim.make_position_gif()
-    # sim.demo_log_controller()
+    sim.run_and_plot(lookahead_dist=0.9)
 
 if __name__ == "__main__":
     main()
