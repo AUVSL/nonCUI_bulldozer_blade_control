@@ -60,25 +60,25 @@ class BulldozerSimulation:
         self.elim = np.diag([1, 1, 1, 0, 0, 1])
 
         # Initial conditions
-        self.dxyz      = np.zeros(3)
-        self.daBg      = np.zeros(3)
-        self.bld_ang   = np.zeros(3)  # [roll, pitch, yaw]
-        self.q         = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
-        self.q_dot     = np.zeros(6)
-        self.v         = np.zeros(2)
-        self.R_lg      = self.rotation_lg(self.q[3], self.q[4], self.q[5])
-        _, self.J_lg   = self.rotation_derivatives(self.q[3], self.q[4])
-        self.x_ICR     = 0.0
-        self.x_ICR_dot = 0.0
-        self.Fb        = 0.0
-        self.Mb        = 0.0
-        self.Rl        = np.zeros(2)
-        self.Fy        = 0.0
-        self.Mr        = 0.0
-        self.vtL       = 0.0
-        self.vtR       = 0.0
-        self.v_dot            = np.zeros(2)
-        self.log              = []
+        self.dxyz                = np.zeros(3)
+        self.daBg                = np.zeros(3)
+        self.bld_ang             = np.zeros(3)  # [roll, pitch, yaw]
+        self.q                   = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
+        self.q_dot               = np.zeros(6)
+        self.v                   = np.zeros(2)
+        self.R_lg                = self.rotation_lg(self.q[3], self.q[4], self.q[5])
+        _, self.J_lg             = self.rotation_derivatives(self.q[3], self.q[4])
+        self.x_ICR               = 0.0
+        self.x_ICR_dot           = 0.0
+        self.Fb                  = 0.0
+        self.Mb                  = 0.0
+        self.Rl                  = np.zeros(2)
+        self.Fy                  = 0.0
+        self.Mr                  = 0.0
+        self.vtL                 = 0.0
+        self.vtR                 = 0.0
+        self.v_dot               = np.zeros(2)
+        self.log                 = []
         self.cross_track_err     = 0.0
         self.heading_err         = 0.0
         self.backward            = False
@@ -335,19 +335,6 @@ class BulldozerSimulation:
         left_normal = np.array([-tangent[1], tangent[0]])  # CCW 90° of tangent
         return float(np.dot(pos_xy - self.path_points[idx], left_normal))
 
-    def path_controller(self):
-        """Proportional controller: differential track forces to reduce cross-track error.
-
-        Sign convention: left_normal points left of the path direction.
-        e > 0  → vehicle is left  → increase F_left  → turn right toward path.
-        e < 0  → vehicle is right → increase F_right → turn left toward path.
-        """
-        self.cross_track_err = self.signed_cross_track_error(self.q[:2])
-        delta         = self.Kp_path * self.cross_track_err
-        F_max         = 2* self.F_track_base
-        self.F_track[0] = float(np.clip(self.F_track_base + delta, 0.0, F_max))
-        self.F_track[1] = float(np.clip(self.F_track_base - delta, 0.0, F_max))
-
     def pure_pursuit_heading_error(self):
         """
         Pure-pursuit: find the lookahead point on the path at distance
@@ -390,50 +377,6 @@ class BulldozerSimulation:
         err = np.arctan2(dy, dx) - self.q[5]
         return float((err + np.pi) % (2 * np.pi) - np.pi)
 
-    def angular_path_controller(self):
-        """Assign track forces via Bezier-6-pinned lookup on pure-pursuit heading error."""
-        self.heading_err     = self.pure_pursuit_heading_error()
-        self.cross_track_err = self.signed_cross_track_error(self.q[:2])
-        ang      = min(abs(self.heading_err), self._bezier_ang_max)
-        t        = ang / self._bezier_ang_max
-        fraction = float(np.clip(self._eval_bezier6(t), 0.0, 1.0))
-        if self.heading_err > 0:          # need to turn left  → weaken left track
-            self.F_track[0] = fraction * self.F_track_base
-            self.F_track[1] = self.F_track_base
-        else:                              # need to turn right → weaken right track
-            self.F_track[0] = self.F_track_base
-            self.F_track[1] = fraction * self.F_track_base
-
-    def combined_path_controller(self):
-        """Bezier torque lookup driven by a composite of heading and cross-track errors.
-
-        combined_err = heading_err - K_cross * cross_track_err
-        Sign: positive → turn left (weaken left track), negative → turn right.
-        Both error sources are mapped through the same nonlinear Bezier curve so
-        the torque response is consistent regardless of which error dominates.
-        """
-        self.heading_err     = self.pure_pursuit_heading_error()
-        self.cross_track_err = self.signed_cross_track_error(self.q[:2])
-
-        combined_err = self.heading_err - self.K_cross * self.cross_track_err
-        ang          = min(abs(combined_err), self._bezier_ang_max)
-        t            = ang / self._bezier_ang_max
-        fraction     = float(np.clip(self._eval_bezier6(t), 0.0, 1.0))
-
-        if combined_err > 0:              # net error → turn left → weaken left track
-            self.F_track[0] = fraction * self.F_track_base
-            self.F_track[1] = self.F_track_base
-        else:                             # net error → turn right → weaken right track
-            self.F_track[0] = self.F_track_base
-            self.F_track[1] = fraction * self.F_track_base
-
-    def use_log_controller(self, A, threshold, ang_max, lookahead_dist=1.5):
-        self._log_A             = float(A)
-        self._log_threshold     = float(threshold)
-        self._log_ang_max       = float(ang_max)
-        self._lookahead_dist    = float(lookahead_dist)
-        self._active_controller = self._log_path_controller
-
     def _log_path_controller(self):
         """Pure-pursuit heading error → track fraction via log mapping:
         fraction = threshold - A * log(|heading_err| + 1)"""
@@ -447,6 +390,38 @@ class BulldozerSimulation:
         else:
             self.F_track[0] = self.F_track_base
             self.F_track[1] = fraction * self.F_track_base
+    
+    def build_log_controller(self, threshold=0.7993, n_samples=200):
+        """Calibrate log-based angle→fraction mapping.
+
+        Fits scalar A via least-squares so that:
+            fraction = threshold - A * log(|yaw| + 1)
+        Returns (A, threshold, ang_max).
+        """
+        fractions = np.linspace(0.0, threshold, n_samples)
+        yaws = []
+        for frac in fractions:
+            sim = BulldozerSimulation()
+            sim.F_track[0] = sim.F_track_base
+            sim.F_track[1] = frac * sim.F_track_base
+            sim.run()
+            yaws.append(np.array(sim.log)[-1, 6])
+        yaws  = np.array(yaws)
+        ang   = np.abs(yaws)
+        T     = threshold - fractions
+        basis = np.log(ang + 1)
+        A     = float(np.dot(basis, T) / np.dot(basis, basis))
+        ang_max = ang.max()
+        rmse  = np.sqrt(np.mean((T - A * basis) ** 2))
+        print(f"Log controller: A={A:.6f}  ang_max={ang_max:.4f} rad  RMSE={rmse:.6f}")
+        return A, threshold, ang_max
+    
+    def use_log_controller(self, A, threshold, ang_max, lookahead_dist=1.5):
+        self._log_A             = float(A)
+        self._log_threshold     = float(threshold)
+        self._log_ang_max       = float(ang_max)
+        self._lookahead_dist    = float(lookahead_dist)
+        self._active_controller = self._log_path_controller
 
     # ---------------- Main Loop ----------------
     def run(self):
@@ -492,6 +467,55 @@ class BulldozerSimulation:
             t += self.dt
 
     # ---------------- Visualization ----------------
+    def plot_track_force_sweep(self):
+        """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
+        fractions = np.linspace(0, 1, 100)
+        colors = plt.cm.viridis(np.linspace(0, 1, 100))
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        for i, fraction in enumerate(fractions):
+            sim = BulldozerSimulation()
+            sim.F_track[0] = sim.F_track_base
+            sim.F_track[1] = fraction * sim.F_track_base
+            sim.run()
+
+            data = np.array(sim.log)
+            ax.plot(data[:, 1], data[:, 2], color=colors[i], linewidth=0.8, alpha=0.7)
+
+        sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
+        plt.colorbar(sm, ax=ax, label="right track fraction of F_base")
+
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_title("XY trajectories — left track = F_base, right track = 0 to 1 x F_base (100 steps)")
+        ax.set_aspect("equal")
+        ax.grid(True)
+        plt.tight_layout()
+        plt.savefig("track_force_sweep.png", dpi=150)
+        plt.close(fig)
+        print("Saved track_force_sweep.png")
+
+    def threshold_run(self, fraction):
+        sim = BulldozerSimulation()
+        sim.F_track[0] = sim.F_track_base
+        sim.F_track[1] = fraction * sim.F_track_base
+        sim.run()
+        data = np.array(sim.log)
+        return np.max(np.abs(data[:, 2]))   # peak |y| displacement
+
+    def find_straight_threshold(self, tol=1e-4, n_iter=1000):
+        """Binary search for the largest fraction where peak |y| > tol."""
+        lo, hi = 0.0, 1.0
+        for _ in range(n_iter):
+            mid = (lo + hi) / 2
+            if self.threshold_run(mid) > tol:
+                lo = mid
+            else:
+                hi = mid
+        print(f"Converged to straight threshold: {(lo + hi) / 2}")
+        return (lo + hi) / 2
+
     def run_and_plot(self, stop_time=30.0, first_frame_only=False):
         """Run the simulation and render a single GIF with the 3D trajectory
         and x_ICR / lateral-velocity / yaw-rate time series animated together."""
@@ -815,80 +839,6 @@ class BulldozerSimulation:
         anim.save("position_3d.gif", writer=animation.PillowWriter(fps=20))
         plt.close(fig)
         print("Saved position_3d.gif")
-    
-    def plot_track_force_sweep(self):
-        """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
-        fractions = np.linspace(0, 1, 100)
-        colors = plt.cm.viridis(np.linspace(0, 1, 100))
-
-        fig, ax = plt.subplots(figsize=(10, 8))
-
-        for i, fraction in enumerate(fractions):
-            sim = BulldozerSimulation()
-            sim.F_track[0] = sim.F_track_base
-            sim.F_track[1] = fraction * sim.F_track_base
-            sim.run()
-
-            data = np.array(sim.log)
-            ax.plot(data[:, 1], data[:, 2], color=colors[i], linewidth=0.8, alpha=0.7)
-
-        sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, 1))
-        plt.colorbar(sm, ax=ax, label="right track fraction of F_base")
-
-        ax.set_xlabel("X (m)")
-        ax.set_ylabel("Y (m)")
-        ax.set_title("XY trajectories — left track = F_base, right track = 0 to 1 x F_base (100 steps)")
-        ax.set_aspect("equal")
-        ax.grid(True)
-        plt.tight_layout()
-        plt.savefig("track_force_sweep.png", dpi=150)
-        plt.close(fig)
-        print("Saved track_force_sweep.png")
-
-    def run_single(self, fraction):
-        sim = BulldozerSimulation()
-        sim.F_track[0] = sim.F_track_base
-        sim.F_track[1] = fraction * sim.F_track_base
-        sim.run()
-        data = np.array(sim.log)
-        return np.max(np.abs(data[:, 2]))   # peak |y| displacement
-
-    def find_straight_threshold(self, tol=1e-4, n_iter=1000):
-        """Binary search for the largest fraction where peak |y| > tol."""
-        lo, hi = 0.0, 1.0
-        for _ in range(n_iter):
-            mid = (lo + hi) / 2
-            if self.run_single(mid) > tol:
-                lo = mid
-            else:
-                hi = mid
-        print(f"Converged to straight threshold: {(lo + hi) / 2}")
-        return (lo + hi) / 2
-
-    def build_log_controller(self, threshold=0.7993, n_samples=200):
-        """Calibrate log-based angle→fraction mapping.
-
-        Fits scalar A via least-squares so that:
-            fraction = threshold - A * log(|yaw| + 1)
-        Returns (A, threshold, ang_max).
-        """
-        fractions = np.linspace(0.0, threshold, n_samples)
-        yaws = []
-        for frac in fractions:
-            sim = BulldozerSimulation()
-            sim.F_track[0] = sim.F_track_base
-            sim.F_track[1] = frac * sim.F_track_base
-            sim.run()
-            yaws.append(np.array(sim.log)[-1, 6])
-        yaws  = np.array(yaws)
-        ang   = np.abs(yaws)
-        T     = threshold - fractions
-        basis = np.log(ang + 1)
-        A     = float(np.dot(basis, T) / np.dot(basis, basis))
-        ang_max = ang.max()
-        rmse  = np.sqrt(np.mean((T - A * basis) ** 2))
-        print(f"Log controller: A={A:.6f}  ang_max={ang_max:.4f} rad  RMSE={rmse:.6f}")
-        return A, threshold, ang_max
 
     def demo_log_controller(self,stop_time=30.0, lookahead_dist=0.7):
         """Run figure-8 with pure-pursuit + log-based torque mapping."""
@@ -935,7 +885,6 @@ class BulldozerSimulation:
         plt.savefig("log_controller_demo.png", dpi=150)
         plt.close(fig)
         print("Saved log_controller_demo.png")
-
 
 def main():
     sim = BulldozerSimulation()
