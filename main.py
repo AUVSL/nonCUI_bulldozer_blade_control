@@ -25,15 +25,15 @@ class BulldozerSimulation:
         self.Kp            = -3.0       # Controller gains
 
         # Dozer body parameters
-        m                                = 10156.0 # scaled down by Sam
-        self.h                           = 2.762/2 # scaled down by Sam
-        self.l                           = 2.349   # scaled down by Sam
-        self.b                           = 1.75    # scaled down by Sam
+        m                            = 10156.0 # scaled down by Sam
+        self.h                       = 2.762/2 # scaled down by Sam
+        self.l                       = 2.349   # scaled down by Sam
+        self.b                       = 1.75    # scaled down by Sam
         self.velocity_limit          = 2.222
         self.laterial_velocity_limit = 0.0     # this governs how much the dozer can "slide" laterally
         self.angular_velocity_limit  = 2 * self.velocity_limit / self.b
-        self.F_track_base                = 600000.0
-        self.F_track                     = np.array([self.F_track_base, self.F_track_base*0.79])
+        self.F_track_base            = 600000.0
+        self.F_track                 = np.array([self.F_track_base, 0])
 
         # Bulldozer blade parameters
         self.B1   = 2.921
@@ -516,249 +516,10 @@ class BulldozerSimulation:
         print(f"Converged to straight threshold: {(lo + hi) / 2}")
         return (lo + hi) / 2
 
-    def run_and_plot(self, stop_time=30.0, first_frame_only=False):
-        """Run the simulation and render a single GIF with the 3D trajectory
-        and x_ICR / lateral-velocity / yaw-rate time series animated together."""
-        sim = BulldozerSimulation()
-        sim.stop_time = stop_time
-        sim.run()
-
-        print("Rendering GIF...")
-        data     = np.array(sim.log)[::5]
-        n_frames = 1 if first_frame_only else len(data)
-
-        fig = plt.figure(figsize=(16, 9))
-        gs  = fig.add_gridspec(3, 2, width_ratios=[1.4, 1], hspace=0.45, wspace=0.35)
-        ax      = fig.add_subplot(gs[:, 0], projection='3d')
-        ax_icr  = fig.add_subplot(gs[0, 1])
-        ax_dy   = fig.add_subplot(gs[1, 1])
-        ax_dyaw = fig.add_subplot(gs[2, 1])
-
-        # ── Surface plane ──
-        a_s, B_s, g_s = sim.surface_abg
-        sa, ca = np.sin(a_s), np.cos(a_s)
-        sB, cB = np.sin(B_s), np.cos(B_s)
-        sg, cg = np.sin(g_s), np.cos(g_s)
-        nx = ca * sB * cg + sa * sg
-        ny = ca * sB * sg - sa * cg
-        nz = ca * cB
-
-        margin = 2.0
-        cx   = (data[:, 1].max() + data[:, 1].min()) / 2
-        cy   = (data[:, 2].max() + data[:, 2].min()) / 2
-        cz   = (data[:, 3].max() + data[:, 3].min()) / 2
-        half = max(data[:, 1].max() - data[:, 1].min(),
-                   data[:, 2].max() - data[:, 2].min(),
-                   data[:, 3].max() - data[:, 3].min()) / 2 + margin
-
-        xs = np.linspace(cx - half, cx + half, 30)
-        ys = np.linspace(cy - half, cy + half, 30)
-        Xs, Ys = np.meshgrid(xs, ys)
-        Zs = -(nx * Xs + ny * Ys) / nz
-        ax.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan', zorder=0)
-        ax.set_xlim(cx - half, cx + half)
-        ax.set_ylim(cy - half, cy + half)
-        ax.set_zlim(cz - half, cz + half)
-        ax.set_box_aspect([1, 1, 1])
-        ax.set_xlabel("X (m)")
-        ax.set_ylabel("Y (m)")
-        ax.set_zlabel("Z (m)")
-
-        arrow_len = half * 0.5
-        ax.quiver(0, 0, 0, arrow_len, 0, 0, color='red',   linewidth=2, arrow_length_ratio=0.2)
-        ax.quiver(0, 0, 0, 0, arrow_len, 0, color='green', linewidth=2, arrow_length_ratio=0.2)
-        ax.quiver(0, 0, 0, 0, 0, arrow_len, color='blue',  linewidth=2, arrow_length_ratio=0.2)
-        ax.text(arrow_len * 1.15, 0, 0, 'X', color='red',   fontsize=11, fontweight='bold')
-        ax.text(0, arrow_len * 1.15, 0, 'Y', color='green', fontsize=11, fontweight='bold')
-        ax.text(0, 0, arrow_len * 1.15, 'Z', color='blue',  fontsize=11, fontweight='bold')
-
-        hl, hb = sim.l / 2, sim.b / 2
-        c_local = np.array([
-            [-hl, -hb,       0],
-            [+hl, -hb,       0],
-            [+hl, +hb,       0],
-            [-hl, +hb,       0],
-            [-hl, -hb, sim.h],
-            [+hl, -hb, sim.h],
-            [+hl, +hb, sim.h],
-            [-hl, +hb, sim.h],
-        ])
-        box_edges = [(0,1),(1,2),(2,3),(3,0),
-                     (4,5),(5,6),(6,7),(7,4),
-                     (0,4),(1,5),(2,6),(3,7)]
-        box_lines      = [None] * 12
-        box_lines_top  = [None] * 12
-        box_lines_side = [None] * 12
-
-        ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
-        trail, = ax.plot([], [], [], 'b-', linewidth=1.5)
-
-        # ── Time-series axes ──
-        t_all     = data[:, 0]
-        x_icr_all = data[:, 7]
-        dy_all    = data[:, 8]
-        dyaw_all  = data[:, 9]
-
-        def _ylim(arr, margin=0.05):
-            lo, hi = float(arr.min()), float(arr.max())
-            span = hi - lo if abs(hi - lo) > 1e-9 else 0.2
-            return lo - margin * span, hi + margin * span
-
-        for ax_ts, arr, ylabel, _ in [
-            (ax_icr,  x_icr_all, "x_ICR (m)",          'tab:blue'),
-            (ax_dy,   dy_all,    "lateral vel (m/s)",   'tab:green'),
-            (ax_dyaw, dyaw_all,  "yaw rate (rad/s)",    'tab:red'),
-        ]:
-            ax_ts.set_xlim(t_all[0], t_all[-1])
-            ax_ts.set_ylim(*_ylim(arr))
-            ax_ts.set_ylabel(ylabel)
-            ax_ts.grid(True)
-
-        ax_dyaw.set_xlabel("time (s)")
-
-        line_icr,  = ax_icr.plot([], [], color='tab:blue',  linewidth=1.5)
-        line_dy,   = ax_dy.plot([], [],  color='tab:green', linewidth=1.5)
-        line_dyaw, = ax_dyaw.plot([], [], color='tab:red',  linewidth=1.5)
-
-        def update(i):
-            trail.set_data(data[:i+1, 1], data[:i+1, 2])
-            trail.set_3d_properties(data[:i+1, 3])
-
-            for line in box_lines:
-                if line is not None:
-                    line.remove()
-            for line in box_lines_top:
-                if line is not None:
-                    line.remove()
-            for line in box_lines_side:
-                if line is not None:
-                    line.remove()
-
-            R   = sim.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
-            pos = data[i, 1:4]
-            c_g = pos + (R @ c_local.T).T
-
-            for j, (ia, ib) in enumerate(box_edges):
-                p1, p2 = c_g[ia], c_g[ib]
-                box_lines[j], = ax.plot(
-                    [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                    color='red', linewidth=1.5)
-
-            ax.set_title(f"t = {data[i, 0]:.2f} s")
-
-            line_icr.set_data(t_all[:i+1],  x_icr_all[:i+1])
-            line_dy.set_data(t_all[:i+1],   dy_all[:i+1])
-            line_dyaw.set_data(t_all[:i+1], dyaw_all[:i+1])
-
-            return trail,
-
-        anim = animation.FuncAnimation(
-            fig, update, frames=n_frames, blit=False, interval=50
-        )
-        fname = "simulation.gif"
-        anim.save(fname, writer=animation.PillowWriter(fps=20))
-        plt.close(fig)
-        print(f"Saved {fname}")
-    
-    def post_process_and_plot(self):
-        data = np.array(self.log)
-        time = data[:, 0]
-
-        roll_error  = data[:, 7]
-        depth_error = data[:, 8]
-        yaw_error   = data[:, 9]
-
-        def rmse_me(x):
-            rmse = np.sqrt(np.mean(x ** 2))
-            me   = np.max(np.abs(x))
-            return rmse, me
-
-        rmse_r, me_r = rmse_me(roll_error)
-        rmse_d, me_d = rmse_me(depth_error)
-        rmse_y, me_y = rmse_me(yaw_error)
-
-        print(f"RMSE  roll={rmse_r*1000:.4f} mrad  "
-              f"depth={rmse_d*1000:.4f} mm  "
-              f"yaw={rmse_y*1000:.4f} mrad")
-        print(f"Max-E roll={me_r*1000:.4f}        "
-              f"depth={me_d*1000:.4f}       "
-              f"yaw={me_y*1000:.4f}")
-
-        fig = plt.figure(figsize=(14, 6))
-        gs = fig.add_gridspec(2, 2, width_ratios=[2, 1], hspace=0.4, wspace=0.35)
-        ax3d = fig.add_subplot(gs[:, 0], projection='3d')
-
-        # Surface plane: normal is col 2 of R_lg = rotation_lg(surface_abg)
-        a, B, g = self.surface_abg
-        sa, ca = np.sin(a), np.cos(a)
-        sB, cB = np.sin(B), np.cos(B)
-        sg, cg = np.sin(g), np.cos(g)
-        nx, ny, nz = ca*sB*cg + sa*sg, ca*sB*sg - sa*cg, ca*cB
-        margin = 1.0
-        cx = (data[:,1].max() + data[:,1].min()) / 2
-        cy = (data[:,2].max() + data[:,2].min()) / 2
-        cz = (data[:,3].max() + data[:,3].min()) / 2
-        half_s = max(data[:,1].max() - data[:,1].min(),
-                     data[:,2].max() - data[:,2].min(),
-                     data[:,3].max() - data[:,3].min()) / 2 + margin
-        xs = np.linspace(cx - half_s, cx + half_s, 30)
-        ys = np.linspace(cy - half_s, cy + half_s, 30)
-        Xs, Ys = np.meshgrid(xs, ys)
-        Zs = -(nx * Xs + ny * Ys) / nz
-        ax3d.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan')
-    
-        ax3d.plot(data[:,1], data[:,2], data[:,3],
-                  color='blue', linewidth=2)
-        print(data[:,1].min(), data[:,1].max())
-        ax3d.set_xlim(cx - half_s, cx + half_s)
-        ax3d.set_ylim(cy - half_s, cy + half_s)
-        ax3d.set_zlim(cz - half_s, cz + half_s)
-        ax3d.set_xlabel("X (m)")
-        ax3d.set_ylabel("Y (m)")
-        ax3d.set_zlabel("Z (m)")
-
-        ax_roll = fig.add_subplot(gs[0, 1])
-        ax_roll.plot(time, data[:,4])
-        ax_roll.set_ylabel("Roll (rad)")
-
-        ax_yaw = fig.add_subplot(gs[1, 1])
-        ax_yaw.plot(time, data[:,6])
-        ax_yaw.set_ylabel("Yaw (rad)")
-        plt.savefig("simulation_results.png", dpi=150)
-
-    def plot_path_tracking(self):
-        data  = np.array(self.log)
-        time  = data[:, 0]
-        x_traj, y_traj = data[:, 1], data[:, 2]
-        cross_track     = data[:, 7]
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-        ax1.plot(self.path_points[:, 0], self.path_points[:, 1],
-                 'g--', linewidth=1.5, label='Figure-8 reference')
-        ax1.plot(x_traj, y_traj, 'b-', linewidth=1.5, label='Vehicle')
-        ax1.plot(x_traj[0], y_traj[0], 'ko', markersize=7, label='Start')
-        ax1.set_xlabel("X (m)")
-        ax1.set_ylabel("Y (m)")
-        ax1.set_title("Top-down path tracking")
-        ax1.legend()
-        ax1.set_aspect('equal')
-        ax1.grid(True)
-
-        ax2.plot(time, cross_track, 'r-', linewidth=1.2)
-        ax2.axhline(0, color='k', linestyle='--', linewidth=0.8)
-        ax2.set_xlabel("Time (s)")
-        ax2.set_ylabel("Cross-track error (m)")
-        ax2.set_title("Perpendicular path error")
-        ax2.grid(True)
-
-        plt.tight_layout()
-        plt.savefig("path_tracking.png", dpi=150)
-        plt.close(fig)
-        print("Saved path_tracking.png")
-
     def make_position_gif(self):
-        data = np.array(self.log)[::5]
+        sim = BulldozerSimulation()
+        sim.run()
+        data = np.array(sim.log)[::5]
 
         fig = plt.figure(figsize=(7, 7))
         ax  = fig.add_subplot(111, projection='3d')
@@ -890,9 +651,9 @@ def main():
     sim = BulldozerSimulation()
     # sim.plot_track_force_sweep()
     # sim.find_straight_threshold()
-    sim.demo_log_controller()
-    # sim.run_and_plot(stop_time=2.0, first_frame_only=False)
     
+    sim.make_position_gif()
+    # sim.demo_log_controller()
 
 if __name__ == "__main__":
     main()
