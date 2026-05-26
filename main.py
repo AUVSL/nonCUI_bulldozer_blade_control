@@ -28,10 +28,10 @@ class BulldozerSimulation:
         self.Kp            = -3.0       # Controller gains
 
         # Dozer body parameters
-        m                            = 10156.0 # scaled down by Sam
+        m                            = 10156.0 
         self.h                       = 2.762/2 # scaled down by Sam
-        self.l                       = 2.349   # scaled down by Sam
-        self.b                       = 1.75    # scaled down by Sam
+        self.l                       = 2.349  
+        self.b                       = 1.75
         self.velocity_limit          = 2.222
         self.laterial_velocity_limit = 0.0     # this governs how much the dozer can "slide" laterally
         self.angular_velocity_limit  = 2 * self.velocity_limit / self.b
@@ -63,34 +63,35 @@ class BulldozerSimulation:
         self.elim = np.diag([1, 1, 1, 0, 0, 1])
 
         # Initial conditions
-        self.dxyz                = np.zeros(3)
-        self.daBg                = np.zeros(3)
-        self.bld_ang             = np.zeros(3)  # [roll, pitch, yaw]
-        self.q                   = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
-        self.q_dot               = np.zeros(6)
-        self.v                   = np.zeros(2)
-        self.R_lg                = self.rotation_lg(self.q[3], self.q[4], self.q[5])
-        _, self.J_lg             = self.rotation_derivatives(self.q[3], self.q[4])
-        self.x_ICR               = 0.0
-        self.x_ICR_dot           = 0.0
-        self.Fb                  = 0.0
-        self.Mb                  = 0.0
-        self.Rl                  = np.zeros(2)
-        self.Fy                  = 0.0
-        self.Mr                  = 0.0
-        self.vtL                 = 0.0
-        self.vtR                 = 0.0
-        self.v_dot               = np.zeros(2)
-        self.log                 = []
-        self.cross_track_err     = 0.0
-        self.heading_err         = 0.0
-        self._4pl_coeffs         = None
-        self._4pl_knots          = None
-        self._4pl_ang_max        = None
-        self._4pl_threshold      = None
-        self._lookahead_dist     = 1.5
-        self._nearest_path_idx   = 0
-        self.path_points         = self.figure8_path(A=5.0, B=2.5)
+        self.dxyz               = np.zeros(3)
+        self.daBg               = np.zeros(3)
+        self.bld_ang            = np.zeros(3)  # [roll, pitch, yaw]
+        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
+        self.q_dot              = np.zeros(6)
+        self.v                  = np.zeros(2)
+        self.R_lg               = self.rotation_lg(self.q[3], self.q[4], self.q[5])
+        _, self.J_lg            = self.rotation_derivatives(self.q[3], self.q[4])
+        self.x_ICR              = 0.0
+        self.x_ICR_dot          = 0.0
+        self.Fb                 = 0.0
+        self.Mb                 = 0.0
+        self.Rl                 = np.zeros(2)
+        self.Fy                 = 0.0
+        self.Mr                 = 0.0
+        self.vtL                = 0.0
+        self.vtR                = 0.0
+        self.v_dot              = np.zeros(2)
+        self.log                = []
+        self.cross_track_err    = 0.0
+        self.heading_err        = 0.0
+        self._4pl_coeffs        = np.array([0.1499756, 1.87300871, 3.47736035, 5.59836133])
+        self._4pl_knots         = (1.0593712690788024, 1.1706408294732875, 1.2077716115263897)
+        self._4pl_threshold     = 0.799
+        self._4pl_ang_max       = 1.2256907107093555
+        self._use_path_controller = False
+        self._lookahead_dist    = 1.5
+        self._nearest_path_idx  = 0
+        self.path_points        = self.figure8_path(A=5.0, B=2.5)
 
     # ---------------- Helpers ----------------
     @staticmethod
@@ -356,13 +357,6 @@ class BulldozerSimulation:
         self.F_track[0] = float(np.clip(self.F_track_base + delta, 0.0, F_max))
         self.F_track[1] = float(np.clip(self.F_track_base - delta, 0.0, F_max))
 
-    def use_4pl_controller(self, coeffs, knots, threshold, ang_max, lookahead_dist=1):
-        self._4pl_coeffs      = np.asarray(coeffs)
-        self._4pl_knots       = knots          # (k1, k2, k3) percentile knots
-        self._4pl_threshold   = float(threshold)
-        self._4pl_ang_max     = float(ang_max)
-        self._lookahead_dist  = float(lookahead_dist)
-
     def _eval_4pl(self, ang):
         k1, k2, k3 = self._4pl_knots
         c = self._4pl_coeffs
@@ -435,18 +429,18 @@ class BulldozerSimulation:
         n_pts   = len(self.path_points)
         max_idx = 0
         for _ in range(int(self.stop_time / self.dt)):
-            if self._4pl_coeffs is not None:
+            if self._use_path_controller:
                 self.angular_path_controller()
                 max_idx = max(max_idx, self._nearest_path_idx)
                 if max_idx > n_pts * 0.9 and self._nearest_path_idx < n_pts * 0.1:
                     break
-            errors, plot_err = self.controller_errors()
-
+            
+            errors, _     = self.controller_errors()
             self.bld_ang += self.gain * self.Kp * errors
 
             self.v_dot = self.vehicle_dynamics()
             self.v    += self.dt * self.v_dot
-            self.v[0] = max(min(self.v[0], self.velocity_limit), 0)
+            self.v[0]  = max(min(self.v[0], self.velocity_limit), 0)
             self.v[1]  = self.saturation(self.v[1], self.angular_velocity_limit)
             self.q_dot = self.S_matrix() @ self.v
 
@@ -468,31 +462,6 @@ class BulldozerSimulation:
                              self.v[0], self.v[1]])
             t += self.dt
 
-    def build_4pl(self, threshold=0.799, n_samples=60):
-        """Fit 4PL-q25/50/75 piecewise-linear model and return (coeffs, knots, threshold, ang_max)."""
-        fractions = np.linspace(0.0, threshold, n_samples)
-        yaws = []
-        for frac in fractions:
-            sim = BulldozerSimulation()
-            sim.stop_time  = 0.5          # short calibration run, constant forces
-            sim.F_track[0] = sim.F_track_base
-            sim.F_track[1] = frac * sim.F_track_base
-            sim.run()
-            yaws.append(np.array(sim.log)[-1, 6])
-        ang     = np.abs(np.array(yaws))
-        ang_max = ang.max()
-        T       = threshold - fractions
-
-        k1, k2, k3 = np.percentile(ang, [25, 50, 75])
-        X = np.c_[ang,
-                  np.maximum(ang - k1, 0),
-                  np.maximum(ang - k2, 0),
-                  np.maximum(ang - k3, 0)]
-        coeffs, _, _, _ = np.linalg.lstsq(X, T, rcond=None)
-        print(f"4PL built  ang_max={ang_max:.4f} rad  knots=({k1:.4f},{k2:.4f},{k3:.4f})  "
-              f"coeffs={np.array2string(coeffs, precision=4)}")
-        return coeffs, (k1, k2, k3), threshold, ang_max
-    
     # ---------------- Visualization ----------------
     @staticmethod
     def _plot_forces(log_arr, fname="figures/forces.png"):
@@ -538,10 +507,9 @@ class BulldozerSimulation:
         sim.stop_time = stop_time
 
         if use_path_controller:
-            print("Building 4PL lookup table...")
-            coeffs, knots, threshold, ang_max = self.build_4pl()
             print(f"Running figure-8 for {stop_time}s  lookahead={lookahead_dist}m ...")
-            sim.use_4pl_controller(coeffs, knots, threshold, ang_max, lookahead_dist=lookahead_dist)
+            sim._lookahead_dist      = float(lookahead_dist)
+            sim._use_path_controller = True
         sim.run()
 
         if use_path_controller:

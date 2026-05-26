@@ -67,6 +67,33 @@ class BulldozerCalibration:
         print(f"Converged to straight threshold: {(lo + hi) / 2}")
         return (lo + hi) / 2
 
+    def build_4pl(self, threshold=0.799, n_samples=100):
+        """Fit 4PL-q25/50/75 piecewise-linear model and return (coeffs, knots, threshold, ang_max)."""
+        from main import BulldozerSimulation
+
+        fractions = np.linspace(0.0, threshold, n_samples)
+        yaws = []
+        for frac in fractions:
+            sim = BulldozerSimulation()
+            sim.stop_time  = 0.5
+            sim.F_track[0] = sim.F_track_base
+            sim.F_track[1] = frac * sim.F_track_base
+            sim.run()
+            yaws.append(np.array(sim.log)[-1, 6])
+        ang     = np.abs(np.array(yaws))
+        ang_max = ang.max()
+        T       = threshold - fractions
+
+        k1, k2, k3 = np.percentile(ang, [25, 50, 75])
+        X = np.c_[ang,
+                  np.maximum(ang - k1, 0),
+                  np.maximum(ang - k2, 0),
+                  np.maximum(ang - k3, 0)]
+        coeffs, _, _, _ = np.linalg.lstsq(X, T, rcond=None)
+        print(f"4PL built  ang_max={ang_max:.4f} rad  knots=({k1:.4f},{k2:.4f},{k3:.4f})  "
+              f"coeffs={np.array2string(coeffs, precision=4)}")
+        return coeffs, (k1, k2, k3), threshold, ang_max
+
     def fit_torque(self, threshold=0.799, n_samples=600):
         """
         Fit angle→torque-fraction mappings using three approaches:
