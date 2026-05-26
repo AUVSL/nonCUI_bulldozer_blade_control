@@ -344,19 +344,6 @@ class BulldozerSimulation:
         left_normal = np.cross(n_surf, tangent)  # left of tangent within surface plane
         return float(np.dot(pos_xyz - self.path_points[idx], left_normal))
 
-    def path_controller(self):
-        """Proportional controller: differential track forces to reduce cross-track error.
-
-        Sign convention: left_normal points left of the path direction.
-        e > 0  → vehicle is left  → increase F_left  → turn right toward path.
-        e < 0  → vehicle is right → increase F_right → turn left toward path.
-        """
-        self.cross_track_err = self.signed_cross_track_error(self.q[:3])
-        delta         = self.Kp_path * self.cross_track_err
-        F_max         = 2* self.F_track_base
-        self.F_track[0] = float(np.clip(self.F_track_base + delta, 0.0, F_max))
-        self.F_track[1] = float(np.clip(self.F_track_base - delta, 0.0, F_max))
-
     def _eval_4pl(self, ang):
         k1, k2, k3 = self._4pl_knots
         c = self._4pl_coeffs
