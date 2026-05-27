@@ -176,6 +176,39 @@ class TestRotationDerivatives:
         J_gl, J_lg = sim.rotation_derivatives(a, B)
         np.testing.assert_allclose(J_gl @ J_lg, np.eye(3), atol=1e-10)
 
+# ───────────────── S Matrices ─────────────────
+class TestSMatrix:
+    def test_shape(self, sim):
+        S = sim.S_matrix()
+        assert S.shape == (6, 2)
+
+    def test_S_at_zero_angles(self, sim):
+        S = sim.S_matrix()
+        expected = np.zeros((6, 2))
+        expected[0, 0] = 1.0
+        expected[5, 1] = 1.0
+        np.testing.assert_allclose(S, expected, atol=1e-12)
+    
+    def test_S_at_zero_angles_nonzero_x_icr(self, sim):
+        sim.x_ICR = 1.0
+        S = sim.S_matrix()
+        expected = np.zeros((6, 2))
+        expected[0, 0] = 1.0
+        expected[1, 1] = -1.0  # due to x_ICR
+        expected[5, 1] = 1.0
+        np.testing.assert_allclose(S, expected, atol=1e-12)
+
+    def test_S_in_nullspace(self, sim):
+        # Equivalent to the matlab file test
+        sim.x_ICR = 1.0
+        a, B, g = -0.3, 0.15, -0.4
+        sim.R_lg    = sim.rotation_lg(a, B, g)
+        R_gl    = sim.rotation_gl(a, B, g)
+        J_gl, sim.J_lg = sim.rotation_derivatives(a, B)
+        A = np.array([R_gl[1, :],  sim.x_ICR * J_gl[2,:]]).flatten()
+        S = sim.S_matrix()
+        expected = np.zeros((1, 2))
+        np.testing.assert_allclose(A@S, expected[0], atol=1e-12)
 
 # ───────────────── ICR helper ─────────────────
 class TestGetXIcr:

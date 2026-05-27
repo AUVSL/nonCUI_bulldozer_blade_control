@@ -132,6 +132,10 @@ class BulldozerSimulation:
             [-sB,                      sa * cB,                  ca * cB]
         ]).T
 
+    def rotation_lg(self, a, B, g):
+        """Rotation matrix: local → global frame"""
+        return self.rotation_gl(a, B, g).T
+
     def rotation_derivatives(self, a, B):
         """Rotation derivative matrices"""
         # change to accept input array
@@ -151,10 +155,6 @@ class BulldozerSimulation:
         ])
 
         return J_gl, J_lg
-
-    def rotation_lg(self, a, B, g):
-        """Rotation matrix: local → global frame"""
-        return self.rotation_gl(a, B, g).T
 
     def S_matrix(self):
         """
