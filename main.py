@@ -21,9 +21,10 @@ class BulldozerSimulation:
         self.dt            = 1/100
         self.stop_time     = 0.7
         grav               = 9.81
+        # TODO: limit surface angle by soil slope max angle self.beta0
         self.surface_abg   = np.array([ 0, 0, 0])
         self.desired_depth = -0.05
-        self.desired_abg   = np.array([ 0, 0, 0.0])
+        self.desired_abg   = np.array([ 0.1, 0, 0.0])
         self.fill_distance = 8.0
         self.Kp            = -3.0       # Controller gains
 
@@ -36,7 +37,7 @@ class BulldozerSimulation:
         self.laterial_velocity_limit = 0.0     # this governs how much the dozer can "slide" laterally
         self.angular_velocity_limit  = 2 * self.velocity_limit / self.b
         self.F_track_base            = 600000.0
-        self.F_track                 = np.array([self.F_track_base, 0])
+        self.F_track                 = np.array([self.F_track_base, self.F_track_base])
 
         # Bulldozer blade parameters
         self.B1   = 2.921
@@ -116,7 +117,7 @@ class BulldozerSimulation:
         """Centroid of a trapezoid where left is posative and right is negative."""
         if (D1 == 0 and D2 == 0):
             return 0.0
-        return (2 * D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
+        return (2*D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
     
     # ---------------- Kinematics ----------------
     def rotation_gl(self, a, B, g):
@@ -177,7 +178,12 @@ class BulldozerSimulation:
     
     # ---------------- Dynamics ----------------
     def blade_terrain_interaction(self):
+        # TODO: update this to be surface - body angle + blade angle, to account for non-flat surfaces
         a_rel = self.bld_ang[0]
+        # TODO: update to account for contact to load volume 
+        # (positive values can still maintain contact only if a load of sufficient height is present)
+        # the abs is needed so the primary task of digging results in a positive blade dig blade height, hp
+        # when implementing soil deformation tracking make sure to set positive surface heights for the load
         hp    = abs(self.L * np.sin(self.bld_ang[1]))
         
         H1     = self.B1 * np.tan(abs(a_rel))
@@ -206,7 +212,7 @@ class BulldozerSimulation:
         F2       = Gt * self.mu_ss
         self.Fb  = -F1 - F2 
 
-        yc1     = self.yc(H3 / np.tan(self.beta0), H4 / np.tan(self.beta0), self.B1)
+        yc1     = self.yc(     H3,      H4, self.B1)
         yc2     = self.yc(-H3_sub, -H4_sub, self.B1)
         self.Mb = yc1 * F1 + yc2 * F2
 
@@ -668,7 +674,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=0.8)
+    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, first_frame_only=True, stop_time=0.1)
 
 
 if __name__ == "__main__":

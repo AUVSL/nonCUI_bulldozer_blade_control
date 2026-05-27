@@ -2,10 +2,9 @@
 import numpy as np
 import pytest
 from main import BulldozerSimulation
-
+# to run: pytest test_main.py
 
 # ───────────────── Fixtures ─────────────────
-
 @pytest.fixture
 def sim():
     return BulldozerSimulation()
@@ -102,10 +101,13 @@ class TestYc:
         D1, D2, B1 = 1.0, 1.0, 4.0
         assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(0.0)
 
-    def test_triangle_D1_zero(self):
+    def test_triangle_D1_right(self):
         D1, D2, B1 = 0.0, 2.0, 3.0
-        expected = (2 * D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
-        assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(expected)
+        assert BulldozerSimulation.yc(D1, D2, B1) < 0
+
+    def test_triangle_D1_left(self):
+        D1, D2, B1 = 2.0, 0.0, 3.0
+        assert BulldozerSimulation.yc(D1, D2, B1) > 0
 
     def test_result_in_valid_range(self):
         # Centroid must be within [-B1/2, B1/2]
@@ -230,72 +232,6 @@ class TestGetXIcr:
         result = sim.get_x_icr()
         assert abs(result) <= sim.l / 2 + 1e-10
 
-
-# ───────────────── Cross-track error ─────────────────
-class TestSignedCrossTrackError:
-    def test_on_path_returns_near_zero(self, sim):
-        # Place vehicle exactly on a path point
-        pos = sim.path_points[0].copy()
-        err = sim.signed_cross_track_error(pos)
-        assert abs(err) < 0.5  # within half a metre of path
-
-    def test_symmetry(self, sim):
-        # A displacement perpendicular to path should flip sign
-        tangent_idx = len(sim.path_points) // 4
-        tangent = sim.path_points[tangent_idx + 1] - sim.path_points[tangent_idx]
-        tangent /= np.linalg.norm(tangent)
-        n_surf = sim.rotation_lg(*sim.surface_abg)[:, 2]
-        left_normal = np.cross(n_surf, tangent)
-        left_normal /= np.linalg.norm(left_normal)
-        base = sim.path_points[tangent_idx].copy()
-        err_left  = sim.signed_cross_track_error(base + 0.5 * left_normal)
-        err_right = sim.signed_cross_track_error(base - 0.5 * left_normal)
-        assert err_left > 0
-        assert err_right < 0
-
-
-# ───────────────── Track terrain interaction ─────────────────
-class TestTrackTerrainInteraction:
-    def test_symmetric_velocities_at_rest(self, sim):
-        sim.dxyz  = np.zeros(3)
-        sim.daBg  = np.zeros(3)
-        sim.track_terrain_interaction()
-        assert sim.vtL == pytest.approx(0.0)
-        assert sim.vtR == pytest.approx(0.0)
-
-    def test_track_velocities_saturated(self, sim):
-        sim.dxyz  = np.array([100.0, 0.0, 0.0])
-        sim.daBg  = np.zeros(3)
-        sim.track_terrain_interaction()
-        assert abs(sim.vtL) <= sim.velocity_limit + 1e-10
-        assert abs(sim.vtR) <= sim.velocity_limit + 1e-10
-
-    def test_Rl_shape(self, sim):
-        sim.track_terrain_interaction()
-        assert sim.Rl.shape == (2,)
-
-
-# ───────────────── Integration smoke test ─────────────────
-
-class TestRun:
-    def test_log_populated(self, sim):
-        sim.stop_time = 0.05
-        sim.run()
-        assert len(sim.log) > 0
-
-    def test_log_entry_length(self, sim):
-        sim.stop_time = 0.05
-        sim.run()
-        assert len(sim.log[0]) == 17  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1
-
-    def test_position_changes_when_running(self, sim):
-        sim.stop_time = 0.2
-        sim.run()
-        log_arr = np.array(sim.log)
-        # At least one position coordinate must have changed
-        assert not np.allclose(log_arr[-1, 1:4], np.zeros(3))
-
-
 # ───────────────── Blade terrain interaction ─────────────────
 
 class TestBladeTerrainInteraction:
@@ -307,14 +243,14 @@ class TestBladeTerrainInteraction:
         assert sim.Mb == pytest.approx(0.0)
 
     def test_pitch_produces_negative_force(self, sim):
-        sim.bld_ang = np.array([0.0, 0.1, 0.0])
+        sim.bld_ang = np.array([0.0, -0.1, 0.0])
         sim.q[:3]   = np.zeros(3)
         sim.blade_terrain_interaction()
         assert sim.Fb < 0
 
     def test_pure_pitch_zero_moment(self, sim):
         # Symmetric contact (no roll) → zero net moment
-        sim.bld_ang = np.array([0.0, 0.1, 0.0])
+        sim.bld_ang = np.array([0.0, -0.1, 0.0])
         sim.q[:3]   = np.zeros(3)
         sim.blade_terrain_interaction()
         assert sim.Mb == pytest.approx(0.0, abs=1e-8)
@@ -339,23 +275,89 @@ class TestBladeTerrainInteraction:
         assert Mb_neg < 0
 
     def test_Fb_always_nonpositive(self, sim):
-        for roll, pitch in [(0.0, 0.0), (0.1, 0.0), (-0.1, 0.0), (0.0, 0.1), (0.1, 0.05)]:
+        for roll, pitch in [(0.0, 0.0), (0.1, 0.0), (-0.1, 0.0), (0.0, -0.1), (0.1, -0.05)]:
             sim.bld_ang = np.array([roll, pitch, 0.0])
             sim.q[:3]   = np.zeros(3)
             sim.blade_terrain_interaction()
             assert sim.Fb <= 0.0
 
     def test_larger_pitch_larger_force(self, sim):
-        sim.bld_ang = np.array([0.0, 0.05, 0.0])
+        sim.bld_ang = np.array([0.0, -0.05, 0.0])
         sim.q[:3]   = np.zeros(3)
         sim.blade_terrain_interaction()
         Fb_small = sim.Fb
 
-        sim.bld_ang = np.array([0.0, 0.15, 0.0])
+        sim.bld_ang = np.array([0.0, -0.15, 0.0])
         sim.blade_terrain_interaction()
         Fb_large = sim.Fb
 
         assert Fb_large < Fb_small  # both ≤ 0; more pitch → more negative
+
+# ───────────────── Track terrain interaction ─────────────────
+
+class TestTrackTerrainInteraction:
+    def test_symmetric_velocities_at_rest(self, sim):
+        sim.dxyz  = np.zeros(3)
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert sim.vtL == pytest.approx(0.0)
+        assert sim.vtR == pytest.approx(0.0)
+
+    def test_track_velocities_saturated(self, sim):
+        sim.dxyz  = np.array([100.0, 0.0, 0.0])
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert abs(sim.vtL) <= sim.velocity_limit + 1e-10
+        assert abs(sim.vtR) <= sim.velocity_limit + 1e-10
+
+    def test_Rl_shape(self, sim):
+        sim.track_terrain_interaction()
+        assert sim.Rl.shape == (2,)
+
+    def test_Rl_nonpositive(self, sim):
+        sim.dxyz  = np.array([100.0, 0.0, 0.0])
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert sim.Rl[0] <= 0
+        assert sim.Rl[1] <= 0
+
+    def test_Fy_and_Mr_zero_when_stationary(self, sim):
+        sim.dxyz  = np.zeros(3)
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert sim.Fy == pytest.approx(0.0)
+        assert sim.Mr == pytest.approx(0.0)
+
+    def test_Fy_and_Mr_sign_when_turning(self, sim):
+        sim.F_track  = np.array([sim.F_track_base, 0.0])
+        sim.x_ICR    = -1.0  # nonzero ICR → turning → should produce lateral forces
+        sim.dxyz      = np.array([1.0, -1.0, 0.0])
+        sim.daBg      = np.array([0.0, 0.0, 1.0])
+        sim.track_terrain_interaction()
+        assert sim.Fy > 0.0
+        assert sim.Mr < 0.0
+
+# ───────────────── Cross-track error ─────────────────
+class TestSignedCrossTrackError:
+    def test_on_path_returns_near_zero(self, sim):
+        # Place vehicle exactly on a path point
+        pos = sim.path_points[0].copy()
+        err = sim.signed_cross_track_error(pos)
+        assert abs(err) < 0.5  # within half a metre of path
+
+    def test_symmetry(self, sim):
+        # A displacement perpendicular to path should flip sign
+        tangent_idx = len(sim.path_points) // 4
+        tangent = sim.path_points[tangent_idx + 1] - sim.path_points[tangent_idx]
+        tangent /= np.linalg.norm(tangent)
+        n_surf = sim.rotation_lg(*sim.surface_abg)[:, 2]
+        left_normal = np.cross(n_surf, tangent)
+        left_normal /= np.linalg.norm(left_normal)
+        base = sim.path_points[tangent_idx].copy()
+        err_left  = sim.signed_cross_track_error(base + 0.5 * left_normal)
+        err_right = sim.signed_cross_track_error(base - 0.5 * left_normal)
+        assert err_left > 0
+        assert err_right < 0
 
 
 # ───────────────── Pure pursuit heading error ─────────────────
@@ -432,3 +434,23 @@ class TestAngularPathController:
         assert sim.F_track[1] < sim.F_track_base
         assert sim.F_track[0] == pytest.approx(sim.F_track_base)
 
+
+# ───────────────── Integration smoke test ─────────────────
+
+class TestRun:
+    def test_log_populated(self, sim):
+        sim.stop_time = 0.05
+        sim.run()
+        assert len(sim.log) > 0
+
+    def test_log_entry_length(self, sim):
+        sim.stop_time = 0.05
+        sim.run()
+        assert len(sim.log[0]) == 17  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1
+
+    def test_position_changes_when_running(self, sim):
+        sim.stop_time = 0.2
+        sim.run()
+        log_arr = np.array(sim.log)
+        # At least one position coordinate must have changed
+        assert not np.allclose(log_arr[-1, 1:4], np.zeros(3))
