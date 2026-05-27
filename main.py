@@ -27,7 +27,7 @@ class BulldozerSimulation:
         self.desired_depth = -0.05
         self.desired_abg   = np.array([ 0.1, 0, 0.0])
         self.fill_distance = 8.0
-        self.Kp            = -3.0       # Controller gains
+        self.Kp            = 3.0       # Controller gains
 
         # Dozer body parameters
         m                            = 10156.0 
@@ -329,7 +329,7 @@ class BulldozerSimulation:
         # TODO: update blade angle limits from -1 to 1 to something more realistic, and update the test cases accordingly
         desired_pitch = des_pitch_mult * np.arcsin(np.clip(self.desired_depth / self.L, -1.0, 1.0))
 
-        errors  = -np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
+        errors  = np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
         plot_out = np.array(          [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
 
         return errors, plot_out
@@ -459,7 +459,7 @@ class BulldozerSimulation:
 
             self.log.append([t, *self.q, self.cross_track_err, self.heading_err,
                              self.Mb, self.Fb, self.Rl[0], self.Rl[1], self.Fy, self.Mr,
-                             self.v[0], self.v[1], *self.bld_ang])
+                             self.v[0], self.v[1], *self.bld_ang, errors[0]])
             t += self.dt
 
     # ---------------- Visualization ----------------
@@ -474,8 +474,9 @@ class BulldozerSimulation:
         Mr    = log_arr[:, 14]
         v_fwd = log_arr[:, 15]
         v_trn = log_arr[:, 16]
+        rl_er = log_arr[:, 20]
 
-        fig, axes = plt.subplots(3, 2, figsize=(12, 9), sharex=True)
+        fig, axes = plt.subplots(4, 2, figsize=(12, 9), sharex=True)
         fig.suptitle("Forces & Moments over Time")
 
         axes[0, 0].plot(t, Fb);  axes[0, 0].set_ylabel("Fb (N)");   axes[0, 0].set_title("Blade force")
@@ -486,7 +487,8 @@ class BulldozerSimulation:
         axes[2, 0].plot(t, Mr);  axes[2, 0].set_ylabel("Mr (N·m)"); axes[2, 0].set_title("Track turning moment")
         axes[2, 1].plot(t, v_fwd, label="forward"); axes[2, 1].plot(t, v_trn, label="turn")
         axes[2, 1].set_ylabel("v (m/s  or  rad/s)"); axes[2, 1].set_title("v"); axes[2, 1].legend()
-
+        axes[3, 0].plot(t, rl_er); axes[3, 0].set_ylabel("Rolling Error"); axes[3, 0].set_title("Rolling Error")
+        axes[3, 1].axis("off")
         for ax in axes.flat:
             ax.set_xlabel("Time (s)")
             ax.grid(True, linewidth=0.4)
@@ -720,7 +722,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=10)
+    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=1)
 
 
 if __name__ == "__main__":

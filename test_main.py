@@ -334,6 +334,15 @@ class TestTrackTerrainInteraction:
         assert sim.Fy > 0.0
         assert sim.Mr < 0.0
 
+
+# ───────────────── Sd Matrix ─────────────────
+class TestSdMatrix:
+    def test_shape(self, sim):
+        Sd = sim.Sd_matrix()
+        assert Sd.shape == (6, 2)
+
+
+
 # ───────────────── Cross-track error ─────────────────
 class TestSignedCrossTrackError:
     def test_on_path_returns_near_zero(self, sim):
@@ -355,13 +364,6 @@ class TestSignedCrossTrackError:
         err_right = sim.signed_cross_track_error(base - 0.5 * left_normal)
         assert err_left > 0
         assert err_right < 0
-
-
-# ───────────────── Sd Matrix ─────────────────
-class TestSdMatrix:
-    def test_shape(self, sim):
-        Sd = sim.Sd_matrix()
-        assert Sd.shape == (6, 2)
 
 
 # ───────────────── Pure pursuit heading error ─────────────────
