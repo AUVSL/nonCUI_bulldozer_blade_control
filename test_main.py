@@ -254,18 +254,18 @@ class TestBladeTerrainInteraction:
         assert sim.Mb == pytest.approx(0.0, abs=1e-8)
 
     def test_positive_roll_positive_moment(self, sim):
-        sim.bld_ang = np.array([0.1, 0.0, 0.0])
+        sim.bld_ang = np.array([-0.1, 0.0, 0.0])
         sim.q[:3]   = np.zeros(3)
         sim.blade_terrain_interaction()
         assert sim.Mb > 0
 
     def test_roll_moment_sign_flips_with_roll_sign(self, sim):
-        sim.bld_ang = np.array([0.1, 0.0, 0.0])
+        sim.bld_ang = np.array([-0.1, 0.0, 0.0])
         sim.q[:3]   = np.zeros(3)
         sim.blade_terrain_interaction()
         Mb_pos = sim.Mb
 
-        sim.bld_ang = np.array([-0.1, 0.0, 0.0])
+        sim.bld_ang = np.array([0.1, 0.0, 0.0])
         sim.blade_terrain_interaction()
         Mb_neg = sim.Mb
 
@@ -336,10 +336,88 @@ class TestTrackTerrainInteraction:
 
 
 # ───────────────── Sd Matrix ─────────────────
+def _sd_from_formula(a, B, g, Ad, Bd, Gd, x_ICR, x_ICR_dot):
+    """Direct transcription of the closed-form Sd expression.
+
+    Variables map to the LaTeX notation as:
+      A=alpha(a), B=beta(B), C=gamma(g);  dot → time derivative;
+      x = x_ICR,  ẋ = x_ICR_dot
+    """
+    sa, ca = np.sin(a), np.cos(a)
+    sB, cB = np.sin(B), np.cos(B)
+    sg, cg = np.sin(g), np.cos(g)
+    tB = np.tan(B)
+    x  = x_ICR
+    xd = x_ICR_dot
+
+    # Column 1
+    s11 = -sB * cg * Bd - cB * sg * Gd
+    s21 =  cB * cg * Gd - sB * sg * Bd
+    s31 = -cB * Bd
+
+    # Column 2
+    s12 = xd * (ca * sg - sa * sB * cg) + x * (
+            -sa * cB * cg * Bd
+            - (ca * sB * cg + sa * sg) * Ad
+            + (sa * sB * sg + ca * cg) * Gd)
+    s22 = x * (
+            -sa * cB * sg * Bd
+            + (ca * sg - sa * sB * cg) * Gd
+            + (sa * cg - ca * sB * sg) * Ad) - xd * (sa * sB * sg + ca * cg)
+    s32 = x * sa * sB * Bd - cB * (x * ca * Ad + xd * sa)
+
+    s42 =  ca / cB**2 * Bd - sa * tB * Ad
+    s52 = -ca * Ad
+    s62 = (1 / cB) * (ca * tB * Bd - sa * Ad)
+
+    return np.array([
+        [s11, s12],
+        [s21, s22],
+        [s31, s32],
+        [0.0, s42],
+        [0.0, s52],
+        [0.0, s62]
+    ])
+
+
+def _configure_sim_for_sd(sim, a, B, g, Ad, Bd, Gd, x_ICR, x_ICR_dot):
+    sim.q[3:6]     = [a, B, g]
+    sim.q_dot[3:6] = [Ad, Bd, Gd]
+    sim.R_lg       = sim.rotation_lg(a, B, g)
+    sim.x_ICR      = x_ICR
+    sim.x_ICR_dot  = x_ICR_dot
+
+
 class TestSdMatrix:
     def test_shape(self, sim):
         Sd = sim.Sd_matrix()
         assert Sd.shape == (6, 2)
+
+    def test_matches_formula_at_zero(self, sim):
+        Sd_sim     = sim.Sd_matrix()
+        Sd_formula = _sd_from_formula(0, 0, 0, 0, 0, 0, 0, 0)
+        np.testing.assert_allclose(Sd_sim, Sd_formula, atol=1e-12)
+
+    def test_matches_formula_nonzero(self, sim):
+        a, B, g         = 0.2, 0.15, -0.1
+        Ad, Bd, Gd      = 0.3, -0.2, 0.1
+        x, xd           = 0.5, 0.05
+        _configure_sim_for_sd(sim, a, B, g, Ad, Bd, Gd, x, xd)
+        Sd_sim     = sim.Sd_matrix()
+        Sd_formula = _sd_from_formula(a, B, g, Ad, Bd, Gd, x, xd)
+        np.testing.assert_allclose(Sd_sim, Sd_formula, atol=1e-12)
+
+    @pytest.mark.parametrize("seed", [0, 1, 2, 42])
+    def test_matches_formula_random(self, sim, seed):
+        rng             = np.random.default_rng(seed)
+        a, B, g         = rng.uniform(-0.3, 0.3, 3)
+        Ad, Bd, Gd      = rng.uniform(-1.0, 1.0, 3)
+        x               = float(rng.uniform(-1.0, 1.0))
+        xd              = float(rng.uniform(-0.5, 0.5))
+        _configure_sim_for_sd(sim, a, B, g, Ad, Bd, Gd, x, xd)
+        Sd_sim     = sim.Sd_matrix()
+        Sd_formula = _sd_from_formula(a, B, g, Ad, Bd, Gd, x, xd)
+        np.testing.assert_allclose(Sd_sim, Sd_formula, atol=1e-12)
 
 
 

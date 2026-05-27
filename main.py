@@ -724,7 +724,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=1)
+    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=3)
 
 
 if __name__ == "__main__":
