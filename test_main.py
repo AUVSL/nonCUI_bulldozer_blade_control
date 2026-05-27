@@ -117,7 +117,6 @@ class TestYc:
 
 
 # ───────────────── Kinematics ─────────────────
-
 class TestRotationMatrices:
     def test_rotation_gl_identity_at_zero(self, sim):
         R = sim.rotation_gl(0.0, 0.0, 0.0)
@@ -233,7 +232,6 @@ class TestGetXIcr:
         assert abs(result) <= sim.l / 2 + 1e-10
 
 # ───────────────── Blade terrain interaction ─────────────────
-
 class TestBladeTerrainInteraction:
     def test_zero_angles_at_origin_no_force(self, sim):
         sim.bld_ang = np.zeros(3)
@@ -294,7 +292,6 @@ class TestBladeTerrainInteraction:
         assert Fb_large < Fb_small  # both ≤ 0; more pitch → more negative
 
 # ───────────────── Track terrain interaction ─────────────────
-
 class TestTrackTerrainInteraction:
     def test_symmetric_velocities_at_rest(self, sim):
         sim.dxyz  = np.zeros(3)
@@ -360,8 +357,14 @@ class TestSignedCrossTrackError:
         assert err_right < 0
 
 
-# ───────────────── Pure pursuit heading error ─────────────────
+# ───────────────── Sd Matrix ─────────────────
+class TestSdMatrix:
+    def test_shape(self, sim):
+        Sd = sim.Sd_matrix()
+        assert Sd.shape == (6, 2)
 
+
+# ───────────────── Pure pursuit heading error ─────────────────
 class TestPurePursuitHeadingError:
     def test_output_in_range(self, sim):
         err = sim.pure_pursuit_heading_error()
@@ -400,7 +403,6 @@ class TestPurePursuitHeadingError:
 
 
 # ───────────────── Angular path controller ─────────────────
-
 class TestAngularPathController:
     def test_forces_in_valid_range(self, sim):
         sim.angular_path_controller()
@@ -436,7 +438,6 @@ class TestAngularPathController:
 
 
 # ───────────────── Integration smoke test ─────────────────
-
 class TestRun:
     def test_log_populated(self, sim):
         sim.stop_time = 0.05
@@ -446,7 +447,7 @@ class TestRun:
     def test_log_entry_length(self, sim):
         sim.stop_time = 0.05
         sim.run()
-        assert len(sim.log[0]) == 17  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1
+        assert len(sim.log[0]) == 20  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1 + bld_ang(3)
 
     def test_position_changes_when_running(self, sim):
         sim.stop_time = 0.2

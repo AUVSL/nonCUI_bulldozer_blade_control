@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.animation as animation
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 matplotlib.use("Agg")   # headless; remove if running interactively
 
 os.makedirs("figures", exist_ok=True)
@@ -43,7 +44,8 @@ class BulldozerSimulation:
         self.B1   = 2.921
         self.H    = 0.955
         self.L    = 1.2
-        self.gain = 1/40
+        self.blade_body_offset = 0.5
+        self.gain = 1/100
 
         # Soil parameters
         self.mu_l    = 0.1
@@ -215,7 +217,7 @@ class BulldozerSimulation:
         yc1     = self.yc(     H3,      H4, self.B1)
         yc2     = self.yc(-H3_sub, -H4_sub, self.B1)
         self.Mb = yc1 * F1 + yc2 * F2
-
+       
     def track_terrain_interaction(self):
         self.vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
         self.vtR = self.saturation(self.dxyz[0] + self.b / 2 * self.daBg[2], self.velocity_limit)
@@ -257,7 +259,7 @@ class BulldozerSimulation:
         S_42 = -sa * tB * Ad + ca / (cB**2) * Bd
         S_52 = -ca * Ad
         S_62 = -sa / cB * Ad + ca * tB / cB * Bd
-
+    
         Sd = np.array([
             [S_11, S_12],
             [S_21, S_22],
@@ -302,7 +304,7 @@ class BulldozerSimulation:
         R6_lg = np.zeros((6, 6))
         R6_lg[0:3, 0:3] = self.R_lg
         R6_lg[3:6, 3:6] = self.R_lg
-        C = R6_lg @ (Ct_vec + Cb_vec)
+        C = R6_lg @ (Ct_vec+ Cb_vec)
         
         S  = self.S_matrix()
         Sd = self.Sd_matrix()
@@ -327,7 +329,7 @@ class BulldozerSimulation:
         # TODO: update blade angle limits from -1 to 1 to something more realistic, and update the test cases accordingly
         desired_pitch = des_pitch_mult * np.arcsin(np.clip(self.desired_depth / self.L, -1.0, 1.0))
 
-        errors  = np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
+        errors  = -np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
         plot_out = np.array(          [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
 
         return errors, plot_out
@@ -457,7 +459,7 @@ class BulldozerSimulation:
 
             self.log.append([t, *self.q, self.cross_track_err, self.heading_err,
                              self.Mb, self.Fb, self.Rl[0], self.Rl[1], self.Fy, self.Mr,
-                             self.v[0], self.v[1]])
+                             self.v[0], self.v[1], *self.bld_ang])
             t += self.dt
 
     # ---------------- Visualization ----------------
@@ -619,6 +621,21 @@ class BulldozerSimulation:
         box_lines_top  = [None] * 12
         box_lines_side = [None] * 12
 
+        # Blade geometry: pivot at front of body, L above ground.
+        # Corners in blade frame (relative to pivot): x=0 (blade face), y=lateral, z=vertical.
+        # At bld_ang=[0,0,0] the bottom lip (z=-L relative to pivot) sits at z=0 in global frame.
+        blade_pivot_body    = np.array([hl + self.blade_body_offset, 0.0, 0])
+        blade_corners_blade = np.array([
+            [0.0, -sim.B1/2, 0],  # bottom-left
+            [0.0, +sim.B1/2, 0],  # bottom-right
+            [0.0, +sim.B1/2, sim.H],  # top-right
+            [0.0, -sim.B1/2, sim.H],  # top-left
+        ])
+        blade_edge_pairs = [(0, 1), (1, 2), (2, 3), (3, 0)]
+        blade_poly_3d    = [None]
+        blade_lines_top  = [None] * 4
+        blade_lines_side = [None] * 4
+
         ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
         ax_top.scatter(data[0, 1], data[0, 2], color='blue', s=60, zorder=5)
         ax_side.scatter(data[0, 1], data[0, 3], color='blue', s=60, zorder=5)
@@ -651,13 +668,42 @@ class BulldozerSimulation:
                 p1, p2 = c_g[ia], c_g[ib]
                 box_lines[j], = ax.plot(
                     [p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                    color='red', linewidth=1.5)
+                    color='darkgoldenrod', linewidth=1.5)
                 box_lines_top[j], = ax_top.plot(
                     [p1[0], p2[0]], [p1[1], p2[1]],
-                    color='red', linewidth=1.5)
+                    color='darkgoldenrod', linewidth=1.5)
                 box_lines_side[j], = ax_side.plot(
                     [p1[0], p2[0]], [p1[2], p2[2]],
-                    color='red', linewidth=1.5)
+                    color='darkgoldenrod', linewidth=1.5)
+
+            # Remove previous blade objects
+            if blade_poly_3d[0] is not None:
+                blade_poly_3d[0].remove()
+                blade_poly_3d[0] = None
+            for k in range(4):
+                if blade_lines_top[k] is not None:
+                    blade_lines_top[k].remove()
+                    blade_lines_top[k] = None
+                if blade_lines_side[k] is not None:
+                    blade_lines_side[k].remove()
+                    blade_lines_side[k] = None
+
+            # Blade corners in global frame
+            R_bld = sim.rotation_lg(data[i, 17], data[i, 18], data[i, 19])
+            corners_body_rel = (R_bld @ blade_corners_blade.T).T + blade_pivot_body
+            blade_g = data[i, 1:4] + (R @ corners_body_rel.T).T
+
+            poly = Poly3DCollection([blade_g.tolist()], alpha=0.5,
+                                    facecolor='gold', edgecolor='goldenrod', linewidth=1.5)
+            ax.add_collection3d(poly)
+            blade_poly_3d[0] = poly
+
+            for k, (ia, ib) in enumerate(blade_edge_pairs):
+                p1, p2 = blade_g[ia], blade_g[ib]
+                blade_lines_top[k],  = ax_top.plot([p1[0], p2[0]], [p1[1], p2[1]],
+                                                    color='gold', linewidth=2)
+                blade_lines_side[k], = ax_side.plot([p1[0], p2[0]], [p1[2], p2[2]],
+                                                     color='gold', linewidth=2)
 
             ax.set_title(f"t = {data[i, 0]:.2f} s")
             return trail,
@@ -674,7 +720,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, first_frame_only=True, stop_time=0.1)
+    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=10)
 
 
 if __name__ == "__main__":
