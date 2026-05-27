@@ -337,8 +337,8 @@ class TestTrackTerrainInteraction:
 
 # ───────────────── Sd Matrix ─────────────────
 def _sd_from_formula(a, B, g, Ad, Bd, Gd, x_ICR, x_ICR_dot):
-    """Direct transcription of the closed-form Sd expression.
-
+    """Direct transcription of the closed-form Sd expression. 
+    (Output of wolfram file s_derivative.nb)
     Variables map to the LaTeX notation as:
       A=alpha(a), B=beta(B), C=gamma(g);  dot → time derivative;
       x = x_ICR,  ẋ = x_ICR_dot
@@ -420,6 +420,11 @@ class TestSdMatrix:
         np.testing.assert_allclose(Sd_sim, Sd_formula, atol=1e-12)
 
 
+# ───────────────── Vehicle Dynamics ─────────────────
+class TestVehicleDynamics:
+    def test_shape(self, sim):
+        v_dot = sim.vehicle_dynamics()
+        assert v_dot.shape == (2,)
 
 # ───────────────── Cross-track error ─────────────────
 class TestSignedCrossTrackError:

@@ -279,8 +279,8 @@ class BulldozerSimulation:
         self.blade_terrain_interaction()
 
         B_mat = np.zeros((6, 2))
-        B_mat[0:3, 0] = self.R_lg[:, 0]
-        B_mat[0:3, 1] = self.R_lg[:, 0]
+        B_mat[0:3, 0] =  self.R_lg[:, 0]
+        B_mat[0:3, 1] =  self.R_lg[:, 0]
         B_mat[3:6, 0] = -self.R_lg[:, 2] * self.b / 2
         B_mat[3:6, 1] =  self.R_lg[:, 2] * self.b / 2
 
