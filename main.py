@@ -205,6 +205,7 @@ class BulldozerSimulation:
             V     = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val * self.B1 ** 3 + c_val ** 2 * self.B1)
 
         # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
+        # fill percent should be proportional to the depth of soil dug
         fill_percent = np.linalg.norm(self.q[:3]) / self.fill_distance
         Gt           = V * self.gamma_g * fill_percent
         
@@ -214,8 +215,9 @@ class BulldozerSimulation:
         F2       = Gt * self.mu_ss
         self.Fb  = -F1 - F2 
 
-        yc1     = self.yc(     H3,      H4, self.B1)
-        yc2     = self.yc(-H3_sub, -H4_sub, self.B1)
+        yc1     = self.yc(-H3_sub, -H4_sub, self.B1)
+        yc2     = self.yc(     H3,      H4, self.B1)
+        
         self.Mb = yc1 * F1 + yc2 * F2
        
     def track_terrain_interaction(self):

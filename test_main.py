@@ -97,7 +97,7 @@ class TestYc:
         assert BulldozerSimulation.yc(0.0, 0.0, 2.0) == pytest.approx(0.0)
 
     def test_symmetric_trapezoid(self):
-        # D1 == D2 → centroid at (D1 + 2*D2) / (3*(D1+D2)) * B1 - B1/2
+        # D1 == D2 → centroid at (2*D1 + D2) / (3*(D1+D2)) * B1 - B1/2
         D1, D2, B1 = 1.0, 1.0, 4.0
         assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(0.0)
 
@@ -449,7 +449,7 @@ class TestRun:
     def test_log_entry_length(self, sim):
         sim.stop_time = 0.05
         sim.run()
-        assert len(sim.log[0]) == 20  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1 + bld_ang(3)
+        assert len(sim.log[0]) == 21  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1 + bld_ang(3)
 
     def test_position_changes_when_running(self, sim):
         sim.stop_time = 0.2
