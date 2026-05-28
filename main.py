@@ -26,7 +26,7 @@ class BulldozerSimulation:
         # TODO: limit surface angle by soil slope max angle self.beta0
         self.surface_abg   = np.array([ 0, 0, 0])
         self.desired_depth = -0.05
-        self.desired_abg   = np.array([ 0.08, 0, 0.0])
+        self.desired_abg   = np.array([ 0.06, 0, 0.0])
         self.fill_distance = 8.0
         self.Kp            = 3.0       # Controller gains
 
@@ -653,10 +653,10 @@ class BulldozerSimulation:
         # At bld_ang=[0,0,0] the bottom lip (z=-L relative to pivot) sits at z=0 in global frame.
         blade_pivot_body    = np.array([hl + self.blade_body_offset, 0.0, 0])
         blade_corners_blade = np.array([
-            [0.0, -sim.B1/2, 0],  # bottom-left
             [0.0, +sim.B1/2, 0],  # bottom-right
-            [0.0, +sim.B1/2, sim.H],  # top-right
+            [0.0, -sim.B1/2, 0],  # bottom-left
             [0.0, -sim.B1/2, sim.H],  # top-left
+            [0.0, +sim.B1/2, sim.H],  # top-right
         ])
         blade_edge_pairs = [(0, 1), (1, 2), (2, 3), (3, 0)]
         blade_poly_3d    = [None]
@@ -765,12 +765,12 @@ class BulldozerSimulation:
                 d3    = H3_i / tan_b
                 d4    = H4_i / tan_b
                 pile_verts = np.array([
-                    [0,  -sim.B1/2, H3_i_sub],  # p0 blade-face, ground, left
-                    [0,  -sim.B1/2, H3_i+H3_i_sub],  # p1 blade-face, top, left
-                    [d3, -sim.B1/2, 0   ],  # p2 forward, ground, left
-                    [0,  +sim.B1/2, H4_i_sub],  # p3 blade-face, ground, right
-                    [0,  +sim.B1/2, H4_i+H4_i_sub],  # p4 blade-face, top, right
-                    [d4, +sim.B1/2, 0],  # p5 forward, ground, right
+                    [0,  sim.B1/2, H3_i_sub],  # p0 blade-face, ground, left
+                    [0,  sim.B1/2, H3_i+H3_i_sub],  # p1 blade-face, top, left
+                    [d3, sim.B1/2, 0   ],  # p2 forward, ground, left
+                    [0,  -sim.B1/2, H4_i_sub],  # p3 blade-face, ground, right
+                    [0,  -sim.B1/2, H4_i+H4_i_sub],  # p4 blade-face, top, right
+                    [d4, -sim.B1/2, 0],  # p5 forward, ground, right
                 ])
                 pile_body = (R_bld @ pile_verts.T).T + blade_pivot_body
                 pile_g    = pos + (R @ pile_body.T).T
