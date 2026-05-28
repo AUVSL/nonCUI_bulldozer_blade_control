@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.animation as animation
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from matplotlib.patches import Polygon as MplPolygon
 matplotlib.use("Agg")   # headless; remove if running interactively
 
 os.makedirs("figures", exist_ok=True)
@@ -25,7 +26,7 @@ class BulldozerSimulation:
         # TODO: limit surface angle by soil slope max angle self.beta0
         self.surface_abg   = np.array([ 0, 0, 0])
         self.desired_depth = -0.05
-        self.desired_abg   = np.array([ 0.1, 0, 0.0])
+        self.desired_abg   = np.array([ 0.08, 0, 0.0])
         self.fill_distance = 8.0
         self.Kp            = 3.0       # Controller gains
 
@@ -78,6 +79,10 @@ class BulldozerSimulation:
         self.x_ICR_dot          = 0.0
         self.Fb                 = 0.0
         self.Mb                 = 0.0
+        self.H3                 = 0.0
+        self.H4                 = 0.0
+        self.H3_sub             = 0.0
+        self.H4_sub             = 0.0
         self.Rl                 = np.zeros(2)
         self.Fy                 = 0.0
         self.Mr                 = 0.0
@@ -198,15 +203,23 @@ class BulldozerSimulation:
         a_val = np.tan(abs(a_rel)) ** 2
         c_val = (H3 + H4) / 2
 
+        # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
+        # fill percent should be proportional to the depth of soil dug and total distance traveled not location based
+        fill_percent = min(1.0, np.linalg.norm(self.q[:3]) / self.fill_distance)
+        
         # TODO: update to account for later dump cycles
+        self.H3_sub = -H3_sub
+        self.H4_sub = -H4_sub
+
         if((H3_sub == 0) and (H4_sub == 0)):
             V = 0.0
+            self.H3 = 0.0
+            self.H4 = 0.0
         else:
-            V     = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val * self.B1 ** 3 + c_val ** 2 * self.B1)
+            V       = 0.5 / np.tan(self.beta0) * (1 / 12 * a_val * self.B1 ** 3 + c_val ** 2 * self.B1)
+            self.H3 = max(H3, 0.0) * fill_percent
+            self.H4 = max(H4, 0.0) * fill_percent
 
-        # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
-        # fill percent should be proportional to the depth of soil dug
-        fill_percent = np.linalg.norm(self.q[:3]) / self.fill_distance
         Gt           = V * self.gamma_g * fill_percent
         
         hyp      = self.B1 / np.cos(abs(a_rel))
@@ -409,7 +422,7 @@ class BulldozerSimulation:
         d_vec   = lookahead_pt - pos
         d_proj  = d_vec - np.dot(d_vec, n_surf) * n_surf   # project onto surface plane
         angle   = np.arctan2(np.dot(d_proj, e2_surf), np.dot(d_proj, e1_surf))
-        err     = angle - self.q[5]
+        err     = angle - self.q[5] # TODO: change this to the local yaw angle
         return float((err + np.pi) % (2 * np.pi) - np.pi)
 
     def angular_path_controller(self):
@@ -461,7 +474,8 @@ class BulldozerSimulation:
 
             self.log.append([t, *self.q, self.cross_track_err, self.heading_err,
                              self.Mb, self.Fb, self.Rl[0], self.Rl[1], self.Fy, self.Mr,
-                             self.v[0], self.v[1], *self.bld_ang, errors[0]])
+                             self.v[0], self.v[1], *self.bld_ang, errors[0],
+                             self.H3, self.H4, self.H3_sub, self.H4_sub])
             t += self.dt
 
     # ---------------- Visualization ----------------
@@ -624,6 +638,15 @@ class BulldozerSimulation:
         box_lines      = [None] * 12
         box_lines_top  = [None] * 12
         box_lines_side = [None] * 12
+        box_poly_3d    = [None]
+        box_faces_idx  = [
+            [0, 1, 2, 3],  # bottom
+            [4, 5, 6, 7],  # top
+            [1, 2, 6, 5],  # front
+            [0, 3, 7, 4],  # back
+            [0, 1, 5, 4],  # left
+            [2, 3, 7, 6],  # right
+        ]
 
         # Blade geometry: pivot at front of body, L above ground.
         # Corners in blade frame (relative to pivot): x=0 (blade face), y=lateral, z=vertical.
@@ -639,6 +662,10 @@ class BulldozerSimulation:
         blade_poly_3d    = [None]
         blade_lines_top  = [None] * 4
         blade_lines_side = [None] * 4
+
+        pile_poly_3d    = [None]
+        pile_patch_top  = [None]
+        pile_patch_side = [None]
 
         ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
         ax_top.scatter(data[0, 1], data[0, 2], color='blue', s=60, zorder=5)
@@ -663,10 +690,19 @@ class BulldozerSimulation:
             for line in box_lines_side:
                 if line is not None:
                     line.remove()
+            if box_poly_3d[0] is not None:
+                box_poly_3d[0].remove()
+                box_poly_3d[0] = None
 
             R   = sim.rotation_lg(data[i, 4], data[i, 5], data[i, 6])
             pos = data[i, 1:4]
             c_g = pos + (R @ c_local.T).T
+
+            faces = [c_g[f].tolist() for f in box_faces_idx]
+            bp = Poly3DCollection(faces, alpha=0.35,
+                                  facecolor='gold', edgecolor='none')
+            ax.add_collection3d(bp)
+            box_poly_3d[0] = bp
 
             for j, (ia, ib) in enumerate(box_edges):
                 p1, p2 = c_g[ia], c_g[ib]
@@ -709,6 +745,62 @@ class BulldozerSimulation:
                 blade_lines_side[k], = ax_side.plot([p1[0], p2[0]], [p1[2], p2[2]],
                                                      color='gold', linewidth=2)
 
+            # Remove previous pile
+            if pile_poly_3d[0] is not None:
+                pile_poly_3d[0].remove()
+                pile_poly_3d[0] = None
+            if pile_patch_top[0] is not None:
+                pile_patch_top[0].remove()
+                pile_patch_top[0] = None
+            if pile_patch_side[0] is not None:
+                pile_patch_side[0].remove()
+                pile_patch_side[0] = None
+
+            H3_i = data[i, 21]
+            H4_i = data[i, 22]
+            H3_i_sub = data[i, 23]
+            H4_i_sub = data[i, 24]
+            if H3_i > 1e-6 or H4_i > 1e-6:
+                tan_b = np.tan(sim.beta0)
+                d3    = H3_i / tan_b
+                d4    = H4_i / tan_b
+                pile_verts = np.array([
+                    [0,  -sim.B1/2, H3_i_sub],  # p0 blade-face, ground, left
+                    [0,  -sim.B1/2, H3_i+H3_i_sub],  # p1 blade-face, top, left
+                    [d3, -sim.B1/2, 0   ],  # p2 forward, ground, left
+                    [0,  +sim.B1/2, H4_i_sub],  # p3 blade-face, ground, right
+                    [0,  +sim.B1/2, H4_i+H4_i_sub],  # p4 blade-face, top, right
+                    [d4, +sim.B1/2, 0],  # p5 forward, ground, right
+                ])
+                pile_body = (R_bld @ pile_verts.T).T + blade_pivot_body
+                pile_g    = pos + (R @ pile_body.T).T
+                p0, p1, p2, p3, p4, p5 = pile_g
+
+                pile_faces = [
+                    [p0, p1, p4, p3],   # back face (blade contact)
+                    [p0, p1, p2],        # left end cap
+                    [p3, p5, p4],        # right end cap
+                    [p0, p3, p5, p2],   # bottom
+                    [p1, p2, p5, p4],   # top slope
+                ]
+                pile_faces_list = [[v.tolist() for v in f] for f in pile_faces]
+                pp = Poly3DCollection(pile_faces_list, alpha=0.55,
+                                      facecolor='saddlebrown', edgecolor='sienna', linewidth=0.8)
+                ax.add_collection3d(pp)
+                pile_poly_3d[0] = pp
+
+                top_xy = pile_g[[0, 3, 5, 2], :2]
+                pt = MplPolygon(top_xy, alpha=0.4, closed=True,
+                                facecolor='saddlebrown', edgecolor='sienna', linewidth=0.8)
+                ax_top.add_patch(pt)
+                pile_patch_top[0] = pt
+
+                side_xz = pile_g[[0, 1, 2]][:, [0, 2]]
+                ps = MplPolygon(side_xz, alpha=0.4, closed=True,
+                                facecolor='saddlebrown', edgecolor='sienna', linewidth=0.8)
+                ax_side.add_patch(ps)
+                pile_patch_side[0] = ps
+
             ax.set_title(f"t = {data[i, 0]:.2f} s")
             return trail,
 
@@ -724,7 +816,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=3)
+    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=10)
 
 
 if __name__ == "__main__":
