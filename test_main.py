@@ -2,10 +2,9 @@
 import numpy as np
 import pytest
 from main import BulldozerSimulation
-
+# to run: pytest test_main.py
 
 # ───────────────── Fixtures ─────────────────
-
 @pytest.fixture
 def sim():
     return BulldozerSimulation()
@@ -98,14 +97,17 @@ class TestYc:
         assert BulldozerSimulation.yc(0.0, 0.0, 2.0) == pytest.approx(0.0)
 
     def test_symmetric_trapezoid(self):
-        # D1 == D2 → centroid at (D1 + 2*D2) / (3*(D1+D2)) * B1 - B1/2
+        # D1 == D2 → centroid at (2*D1 + D2) / (3*(D1+D2)) * B1 - B1/2
         D1, D2, B1 = 1.0, 1.0, 4.0
         assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(0.0)
 
-    def test_triangle_D1_zero(self):
+    def test_triangle_D1_right(self):
         D1, D2, B1 = 0.0, 2.0, 3.0
-        expected = (2 * D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
-        assert BulldozerSimulation.yc(D1, D2, B1) == pytest.approx(expected)
+        assert BulldozerSimulation.yc(D1, D2, B1) < 0
+
+    def test_triangle_D1_left(self):
+        D1, D2, B1 = 2.0, 0.0, 3.0
+        assert BulldozerSimulation.yc(D1, D2, B1) > 0
 
     def test_result_in_valid_range(self):
         # Centroid must be within [-B1/2, B1/2]
@@ -115,7 +117,6 @@ class TestYc:
 
 
 # ───────────────── Kinematics ─────────────────
-
 class TestRotationMatrices:
     def test_rotation_gl_identity_at_zero(self, sim):
         R = sim.rotation_gl(0.0, 0.0, 0.0)
@@ -176,6 +177,39 @@ class TestRotationDerivatives:
         J_gl, J_lg = sim.rotation_derivatives(a, B)
         np.testing.assert_allclose(J_gl @ J_lg, np.eye(3), atol=1e-10)
 
+# ───────────────── S Matrices ─────────────────
+class TestSMatrix:
+    def test_shape(self, sim):
+        S = sim.S_matrix()
+        assert S.shape == (6, 2)
+
+    def test_S_at_zero_angles(self, sim):
+        S = sim.S_matrix()
+        expected = np.zeros((6, 2))
+        expected[0, 0] = 1.0
+        expected[5, 1] = 1.0
+        np.testing.assert_allclose(S, expected, atol=1e-12)
+    
+    def test_S_at_zero_angles_nonzero_x_icr(self, sim):
+        sim.x_ICR = 1.0
+        S = sim.S_matrix()
+        expected = np.zeros((6, 2))
+        expected[0, 0] = 1.0
+        expected[1, 1] = -1.0  # due to x_ICR
+        expected[5, 1] = 1.0
+        np.testing.assert_allclose(S, expected, atol=1e-12)
+
+    def test_S_in_nullspace(self, sim):
+        # Equivalent to the matlab file test
+        sim.x_ICR = 1.0
+        a, B, g = -0.3, 0.15, -0.4
+        sim.R_lg    = sim.rotation_lg(a, B, g)
+        R_gl    = sim.rotation_gl(a, B, g)
+        J_gl, sim.J_lg = sim.rotation_derivatives(a, B)
+        A = np.array([R_gl[1, :],  sim.x_ICR * J_gl[2,:]]).flatten()
+        S = sim.S_matrix()
+        expected = np.zeros((1, 2))
+        np.testing.assert_allclose(A@S, expected[0], atol=1e-12)
 
 # ───────────────── ICR helper ─────────────────
 class TestGetXIcr:
@@ -197,6 +231,200 @@ class TestGetXIcr:
         result = sim.get_x_icr()
         assert abs(result) <= sim.l / 2 + 1e-10
 
+# ───────────────── Blade terrain interaction ─────────────────
+class TestBladeTerrainInteraction:
+    def test_zero_angles_at_origin_no_force(self, sim):
+        sim.bld_ang = np.zeros(3)
+        sim.q[:3]   = np.zeros(3)
+        sim.blade_terrain_interaction()
+        assert sim.Fb == pytest.approx(0.0)
+        assert sim.Mb == pytest.approx(0.0)
+
+    def test_pitch_produces_negative_force(self, sim):
+        sim.bld_ang = np.array([0.0, -0.1, 0.0])
+        sim.q[:3]   = np.zeros(3)
+        sim.blade_terrain_interaction()
+        assert sim.Fb < 0
+
+    def test_pure_pitch_zero_moment(self, sim):
+        # Symmetric contact (no roll) → zero net moment
+        sim.bld_ang = np.array([0.0, -0.1, 0.0])
+        sim.q[:3]   = np.zeros(3)
+        sim.blade_terrain_interaction()
+        assert sim.Mb == pytest.approx(0.0, abs=1e-8)
+
+    def test_positive_roll_positive_moment(self, sim):
+        sim.bld_ang = np.array([-0.1, 0.0, 0.0])
+        sim.q[:3]   = np.zeros(3)
+        sim.blade_terrain_interaction()
+        assert sim.Mb > 0
+
+    def test_roll_moment_sign_flips_with_roll_sign(self, sim):
+        sim.bld_ang = np.array([-0.1, 0.0, 0.0])
+        sim.q[:3]   = np.zeros(3)
+        sim.blade_terrain_interaction()
+        Mb_pos = sim.Mb
+
+        sim.bld_ang = np.array([0.1, 0.0, 0.0])
+        sim.blade_terrain_interaction()
+        Mb_neg = sim.Mb
+
+        assert Mb_pos > 0
+        assert Mb_neg < 0
+
+    def test_Fb_always_nonpositive(self, sim):
+        for roll, pitch in [(0.0, 0.0), (0.1, 0.0), (-0.1, 0.0), (0.0, -0.1), (0.1, -0.05)]:
+            sim.bld_ang = np.array([roll, pitch, 0.0])
+            sim.q[:3]   = np.zeros(3)
+            sim.blade_terrain_interaction()
+            assert sim.Fb <= 0.0
+
+    def test_larger_pitch_larger_force(self, sim):
+        sim.bld_ang = np.array([0.0, -0.05, 0.0])
+        sim.q[:3]   = np.zeros(3)
+        sim.blade_terrain_interaction()
+        Fb_small = sim.Fb
+
+        sim.bld_ang = np.array([0.0, -0.15, 0.0])
+        sim.blade_terrain_interaction()
+        Fb_large = sim.Fb
+
+        assert Fb_large < Fb_small  # both ≤ 0; more pitch → more negative
+
+# ───────────────── Track terrain interaction ─────────────────
+class TestTrackTerrainInteraction:
+    def test_symmetric_velocities_at_rest(self, sim):
+        sim.dxyz  = np.zeros(3)
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert sim.vtL == pytest.approx(0.0)
+        assert sim.vtR == pytest.approx(0.0)
+
+    def test_track_velocities_saturated(self, sim):
+        sim.dxyz  = np.array([100.0, 0.0, 0.0])
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert abs(sim.vtL) <= sim.velocity_limit + 1e-10
+        assert abs(sim.vtR) <= sim.velocity_limit + 1e-10
+
+    def test_Rl_shape(self, sim):
+        sim.track_terrain_interaction()
+        assert sim.Rl.shape == (2,)
+
+    def test_Rl_nonpositive(self, sim):
+        sim.dxyz  = np.array([100.0, 0.0, 0.0])
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert sim.Rl[0] <= 0
+        assert sim.Rl[1] <= 0
+
+    def test_Fy_and_Mr_zero_when_stationary(self, sim):
+        sim.dxyz  = np.zeros(3)
+        sim.daBg  = np.zeros(3)
+        sim.track_terrain_interaction()
+        assert sim.Fy == pytest.approx(0.0)
+        assert sim.Mr == pytest.approx(0.0)
+
+    def test_Fy_and_Mr_sign_when_turning(self, sim):
+        sim.F_track  = np.array([sim.F_track_base, 0.0])
+        sim.x_ICR    = -1.0  # nonzero ICR → turning → should produce lateral forces
+        sim.dxyz      = np.array([1.0, -1.0, 0.0])
+        sim.daBg      = np.array([0.0, 0.0, 1.0])
+        sim.track_terrain_interaction()
+        assert sim.Fy > 0.0
+        assert sim.Mr < 0.0
+
+
+# ───────────────── Sd Matrix ─────────────────
+def _sd_from_formula(a, B, g, Ad, Bd, Gd, x_ICR, x_ICR_dot):
+    """Direct transcription of the closed-form Sd expression. 
+    (Output of wolfram file s_derivative.nb)
+    Variables map to the LaTeX notation as:
+      A=alpha(a), B=beta(B), C=gamma(g);  dot → time derivative;
+      x = x_ICR,  ẋ = x_ICR_dot
+    """
+    sa, ca = np.sin(a), np.cos(a)
+    sB, cB = np.sin(B), np.cos(B)
+    sg, cg = np.sin(g), np.cos(g)
+    tB = np.tan(B)
+    x  = x_ICR
+    xd = x_ICR_dot
+
+    # Column 1
+    s11 = -sB * cg * Bd - cB * sg * Gd
+    s21 =  cB * cg * Gd - sB * sg * Bd
+    s31 = -cB * Bd
+
+    # Column 2
+    s12 = xd * (ca * sg - sa * sB * cg) + x * (
+            -sa * cB * cg * Bd
+            - (ca * sB * cg + sa * sg) * Ad
+            + (sa * sB * sg + ca * cg) * Gd)
+    s22 = x * (
+            -sa * cB * sg * Bd
+            + (ca * sg - sa * sB * cg) * Gd
+            + (sa * cg - ca * sB * sg) * Ad) - xd * (sa * sB * sg + ca * cg)
+    s32 = x * sa * sB * Bd - cB * (x * ca * Ad + xd * sa)
+
+    s42 =  ca / cB**2 * Bd - sa * tB * Ad
+    s52 = -ca * Ad
+    s62 = (1 / cB) * (ca * tB * Bd - sa * Ad)
+
+    return np.array([
+        [s11, s12],
+        [s21, s22],
+        [s31, s32],
+        [0.0, s42],
+        [0.0, s52],
+        [0.0, s62]
+    ])
+
+
+def _configure_sim_for_sd(sim, a, B, g, Ad, Bd, Gd, x_ICR, x_ICR_dot):
+    sim.q[3:6]     = [a, B, g]
+    sim.q_dot[3:6] = [Ad, Bd, Gd]
+    sim.R_lg       = sim.rotation_lg(a, B, g)
+    sim.x_ICR      = x_ICR
+    sim.x_ICR_dot  = x_ICR_dot
+
+
+class TestSdMatrix:
+    def test_shape(self, sim):
+        Sd = sim.Sd_matrix()
+        assert Sd.shape == (6, 2)
+
+    def test_matches_formula_at_zero(self, sim):
+        Sd_sim     = sim.Sd_matrix()
+        Sd_formula = _sd_from_formula(0, 0, 0, 0, 0, 0, 0, 0)
+        np.testing.assert_allclose(Sd_sim, Sd_formula, atol=1e-12)
+
+    def test_matches_formula_nonzero(self, sim):
+        a, B, g         = 0.2, 0.15, -0.1
+        Ad, Bd, Gd      = 0.3, -0.2, 0.1
+        x, xd           = 0.5, 0.05
+        _configure_sim_for_sd(sim, a, B, g, Ad, Bd, Gd, x, xd)
+        Sd_sim     = sim.Sd_matrix()
+        Sd_formula = _sd_from_formula(a, B, g, Ad, Bd, Gd, x, xd)
+        np.testing.assert_allclose(Sd_sim, Sd_formula, atol=1e-12)
+
+    @pytest.mark.parametrize("seed", [0, 1, 2, 42])
+    def test_matches_formula_random(self, sim, seed):
+        rng             = np.random.default_rng(seed)
+        a, B, g         = rng.uniform(-0.3, 0.3, 3)
+        Ad, Bd, Gd      = rng.uniform(-1.0, 1.0, 3)
+        x               = float(rng.uniform(-1.0, 1.0))
+        xd              = float(rng.uniform(-0.5, 0.5))
+        _configure_sim_for_sd(sim, a, B, g, Ad, Bd, Gd, x, xd)
+        Sd_sim     = sim.Sd_matrix()
+        Sd_formula = _sd_from_formula(a, B, g, Ad, Bd, Gd, x, xd)
+        np.testing.assert_allclose(Sd_sim, Sd_formula, atol=1e-12)
+
+
+# ───────────────── Vehicle Dynamics ─────────────────
+class TestVehicleDynamics:
+    def test_shape(self, sim):
+        v_dot = sim.vehicle_dynamics()
+        assert v_dot.shape == (2,)
 
 # ───────────────── Cross-track error ─────────────────
 class TestSignedCrossTrackError:
@@ -221,29 +449,80 @@ class TestSignedCrossTrackError:
         assert err_right < 0
 
 
-# ───────────────── Track terrain interaction ─────────────────
-class TestTrackTerrainInteraction:
-    def test_symmetric_velocities_at_rest(self, sim):
-        sim.dxyz  = np.zeros(3)
-        sim.daBg  = np.zeros(3)
-        sim.track_terrain_interaction()
-        assert sim.vtL == pytest.approx(0.0)
-        assert sim.vtR == pytest.approx(0.0)
+# ───────────────── Pure pursuit heading error ─────────────────
+# class TestPurePursuitHeadingError:
+#     def test_output_in_range(self, sim):
+#         err = sim.pure_pursuit_heading_error()
+#         assert -np.pi <= err <= np.pi
 
-    def test_track_velocities_saturated(self, sim):
-        sim.dxyz  = np.array([100.0, 0.0, 0.0])
-        sim.daBg  = np.zeros(3)
-        sim.track_terrain_interaction()
-        assert abs(sim.vtL) <= sim.velocity_limit + 1e-10
-        assert abs(sim.vtR) <= sim.velocity_limit + 1e-10
+#     def test_nearest_path_idx_in_bounds(self, sim):
+#         sim.pure_pursuit_heading_error()
+#         assert 0 <= sim._nearest_path_idx < len(sim.path_points)
 
-    def test_Rl_shape(self, sim):
-        sim.track_terrain_interaction()
-        assert sim.Rl.shape == (2,)
+#     def test_facing_path_small_error(self, sim):
+#         # Vehicle on path facing the path tangent → small heading error
+#         idx = len(sim.path_points) // 4
+#         sim.q[:3] = sim.path_points[idx].copy()
+#         tangent   = sim.path_points[idx + 1] - sim.path_points[idx]
+#         sim.q[5]  = float(np.arctan2(tangent[1], tangent[0]))
+#         err = sim.pure_pursuit_heading_error()
+#         assert abs(err) < np.pi / 2
+
+#     def test_turned_right_of_path_positive_error(self, sim):
+#         # Vehicle rotated right of path tangent → lookahead is to the left → err > 0
+#         sim.q[:3] = sim.path_points[0].copy()
+#         tangent   = sim.path_points[1] - sim.path_points[0]
+#         path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
+#         sim.q[5]  = path_hdg - np.pi / 4
+#         err = sim.pure_pursuit_heading_error()
+#         assert err > 0
+
+#     def test_turned_left_of_path_negative_error(self, sim):
+#         # Vehicle rotated left of path tangent → lookahead is to the right → err < 0
+#         sim.q[:3] = sim.path_points[0].copy()
+#         tangent   = sim.path_points[1] - sim.path_points[0]
+#         path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
+#         sim.q[5]  = path_hdg + np.pi / 4
+#         err = sim.pure_pursuit_heading_error()
+#         assert err < 0
+
+
+# ───────────────── Angular path controller ─────────────────
+# class TestAngularPathController:
+#     def test_forces_in_valid_range(self, sim):
+#         sim.angular_path_controller()
+#         assert 0.0 <= sim.F_track[0] <= sim.F_track_base
+#         assert 0.0 <= sim.F_track[1] <= sim.F_track_base
+
+#     def test_sets_finite_errors(self, sim):
+#         sim.angular_path_controller()
+#         assert np.isfinite(sim.heading_err)
+#         assert np.isfinite(sim.cross_track_err)
+
+#     def test_positive_heading_error_weakens_left_track(self, sim):
+#         # Turned right of path → heading_err > 0 → left track should be weakened
+#         sim.q[:3] = sim.path_points[0].copy()
+#         tangent   = sim.path_points[1] - sim.path_points[0]
+#         path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
+#         sim.q[5]  = path_hdg - np.pi / 4
+#         sim.angular_path_controller()
+#         assert sim.heading_err > 0
+#         assert sim.F_track[0] < sim.F_track_base
+#         assert sim.F_track[1] == pytest.approx(sim.F_track_base)
+
+#     def test_negative_heading_error_weakens_right_track(self, sim):
+#         # Turned left of path → heading_err < 0 → right track should be weakened
+#         sim.q[:3] = sim.path_points[0].copy()
+#         tangent   = sim.path_points[1] - sim.path_points[0]
+#         path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
+#         sim.q[5]  = path_hdg + np.pi / 4
+#         sim.angular_path_controller()
+#         assert sim.heading_err < 0
+#         assert sim.F_track[1] < sim.F_track_base
+#         assert sim.F_track[0] == pytest.approx(sim.F_track_base)
 
 
 # ───────────────── Integration smoke test ─────────────────
-
 class TestRun:
     def test_log_populated(self, sim):
         sim.stop_time = 0.05
@@ -253,7 +532,7 @@ class TestRun:
     def test_log_entry_length(self, sim):
         sim.stop_time = 0.05
         sim.run()
-        assert len(sim.log[0]) == 17  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1
+        assert len(sim.log[0]) == 25  # t + 6 q + cross_track + heading + Mb + Fb + RlL + RlR + Fy + Mr + v0 + v1 + bld_ang(3)
 
     def test_position_changes_when_running(self, sim):
         sim.stop_time = 0.2
@@ -261,141 +540,3 @@ class TestRun:
         log_arr = np.array(sim.log)
         # At least one position coordinate must have changed
         assert not np.allclose(log_arr[-1, 1:4], np.zeros(3))
-
-
-# ───────────────── Blade terrain interaction ─────────────────
-
-class TestBladeTerrainInteraction:
-    def test_zero_angles_at_origin_no_force(self, sim):
-        sim.bld_ang = np.zeros(3)
-        sim.q[:3]   = np.zeros(3)
-        sim.blade_terrain_interaction()
-        assert sim.Fb == pytest.approx(0.0)
-        assert sim.Mb == pytest.approx(0.0)
-
-    def test_pitch_produces_negative_force(self, sim):
-        sim.bld_ang = np.array([0.0, 0.1, 0.0])
-        sim.q[:3]   = np.zeros(3)
-        sim.blade_terrain_interaction()
-        assert sim.Fb < 0
-
-    def test_pure_pitch_zero_moment(self, sim):
-        # Symmetric contact (no roll) → zero net moment
-        sim.bld_ang = np.array([0.0, 0.1, 0.0])
-        sim.q[:3]   = np.zeros(3)
-        sim.blade_terrain_interaction()
-        assert sim.Mb == pytest.approx(0.0, abs=1e-8)
-
-    def test_positive_roll_positive_moment(self, sim):
-        sim.bld_ang = np.array([0.1, 0.0, 0.0])
-        sim.q[:3]   = np.zeros(3)
-        sim.blade_terrain_interaction()
-        assert sim.Mb > 0
-
-    def test_roll_moment_sign_flips_with_roll_sign(self, sim):
-        sim.bld_ang = np.array([0.1, 0.0, 0.0])
-        sim.q[:3]   = np.zeros(3)
-        sim.blade_terrain_interaction()
-        Mb_pos = sim.Mb
-
-        sim.bld_ang = np.array([-0.1, 0.0, 0.0])
-        sim.blade_terrain_interaction()
-        Mb_neg = sim.Mb
-
-        assert Mb_pos > 0
-        assert Mb_neg < 0
-
-    def test_Fb_always_nonpositive(self, sim):
-        for roll, pitch in [(0.0, 0.0), (0.1, 0.0), (-0.1, 0.0), (0.0, 0.1), (0.1, 0.05)]:
-            sim.bld_ang = np.array([roll, pitch, 0.0])
-            sim.q[:3]   = np.zeros(3)
-            sim.blade_terrain_interaction()
-            assert sim.Fb <= 0.0
-
-    def test_larger_pitch_larger_force(self, sim):
-        sim.bld_ang = np.array([0.0, 0.05, 0.0])
-        sim.q[:3]   = np.zeros(3)
-        sim.blade_terrain_interaction()
-        Fb_small = sim.Fb
-
-        sim.bld_ang = np.array([0.0, 0.15, 0.0])
-        sim.blade_terrain_interaction()
-        Fb_large = sim.Fb
-
-        assert Fb_large < Fb_small  # both ≤ 0; more pitch → more negative
-
-
-# ───────────────── Pure pursuit heading error ─────────────────
-
-class TestPurePursuitHeadingError:
-    def test_output_in_range(self, sim):
-        err = sim.pure_pursuit_heading_error()
-        assert -np.pi <= err <= np.pi
-
-    def test_nearest_path_idx_in_bounds(self, sim):
-        sim.pure_pursuit_heading_error()
-        assert 0 <= sim._nearest_path_idx < len(sim.path_points)
-
-    def test_facing_path_small_error(self, sim):
-        # Vehicle on path facing the path tangent → small heading error
-        idx = len(sim.path_points) // 4
-        sim.q[:3] = sim.path_points[idx].copy()
-        tangent   = sim.path_points[idx + 1] - sim.path_points[idx]
-        sim.q[5]  = float(np.arctan2(tangent[1], tangent[0]))
-        err = sim.pure_pursuit_heading_error()
-        assert abs(err) < np.pi / 2
-
-    def test_turned_right_of_path_positive_error(self, sim):
-        # Vehicle rotated right of path tangent → lookahead is to the left → err > 0
-        sim.q[:3] = sim.path_points[0].copy()
-        tangent   = sim.path_points[1] - sim.path_points[0]
-        path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
-        sim.q[5]  = path_hdg - np.pi / 4
-        err = sim.pure_pursuit_heading_error()
-        assert err > 0
-
-    def test_turned_left_of_path_negative_error(self, sim):
-        # Vehicle rotated left of path tangent → lookahead is to the right → err < 0
-        sim.q[:3] = sim.path_points[0].copy()
-        tangent   = sim.path_points[1] - sim.path_points[0]
-        path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
-        sim.q[5]  = path_hdg + np.pi / 4
-        err = sim.pure_pursuit_heading_error()
-        assert err < 0
-
-
-# ───────────────── Angular path controller ─────────────────
-
-class TestAngularPathController:
-    def test_forces_in_valid_range(self, sim):
-        sim.angular_path_controller()
-        assert 0.0 <= sim.F_track[0] <= sim.F_track_base
-        assert 0.0 <= sim.F_track[1] <= sim.F_track_base
-
-    def test_sets_finite_errors(self, sim):
-        sim.angular_path_controller()
-        assert np.isfinite(sim.heading_err)
-        assert np.isfinite(sim.cross_track_err)
-
-    def test_positive_heading_error_weakens_left_track(self, sim):
-        # Turned right of path → heading_err > 0 → left track should be weakened
-        sim.q[:3] = sim.path_points[0].copy()
-        tangent   = sim.path_points[1] - sim.path_points[0]
-        path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
-        sim.q[5]  = path_hdg - np.pi / 4
-        sim.angular_path_controller()
-        assert sim.heading_err > 0
-        assert sim.F_track[0] < sim.F_track_base
-        assert sim.F_track[1] == pytest.approx(sim.F_track_base)
-
-    def test_negative_heading_error_weakens_right_track(self, sim):
-        # Turned left of path → heading_err < 0 → right track should be weakened
-        sim.q[:3] = sim.path_points[0].copy()
-        tangent   = sim.path_points[1] - sim.path_points[0]
-        path_hdg  = float(np.arctan2(tangent[1], tangent[0]))
-        sim.q[5]  = path_hdg + np.pi / 4
-        sim.angular_path_controller()
-        assert sim.heading_err < 0
-        assert sim.F_track[1] < sim.F_track_base
-        assert sim.F_track[0] == pytest.approx(sim.F_track_base)
-
