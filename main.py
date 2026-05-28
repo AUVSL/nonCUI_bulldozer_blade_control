@@ -26,7 +26,7 @@ class BulldozerSimulation:
         # TODO: limit surface angle by soil slope max angle self.beta0
         self.surface_abg   = np.array([ 0, 0, 0])
         self.desired_depth = -0.05
-        self.desired_abg   = np.array([ 0.06, 0, 0.0])
+        self.desired_abg   = np.array([ 0, 0, 0])
         self.fill_distance = 8.0
         self.Kp            = 3.0       # Controller gains
 
@@ -100,6 +100,7 @@ class BulldozerSimulation:
         self._lookahead_dist    = 1.5
         self._nearest_path_idx  = 0
         self.path_points        = self.figure8_path(A=5.0, B=2.5)
+        self.total_distance     = 0.0
 
     # ---------------- Helpers ----------------
     @staticmethod
@@ -203,9 +204,7 @@ class BulldozerSimulation:
         a_val = np.tan(abs(a_rel)) ** 2
         c_val = (H3 + H4) / 2
 
-        # TODO: fill assumes a spawn at the origin, but could be adapted to a more general case if needed
-        # fill percent should be proportional to the depth of soil dug and total distance traveled not location based
-        fill_percent = min(1.0, np.linalg.norm(self.q[:3]) / self.fill_distance)
+        fill_percent = min(1.0, self.total_distance / self.fill_distance)
         
         # TODO: update to account for later dump cycles
         self.H3_sub = -H3_sub
@@ -422,7 +421,9 @@ class BulldozerSimulation:
         d_vec   = lookahead_pt - pos
         d_proj  = d_vec - np.dot(d_vec, n_surf) * n_surf   # project onto surface plane
         angle   = np.arctan2(np.dot(d_proj, e2_surf), np.dot(d_proj, e1_surf))
-        err     = angle - self.q[5] # TODO: change this to the local yaw angle
+        fwd     = self.R_lg[:, 0]
+        heading = np.arctan2(np.dot(fwd, e2_surf), np.dot(fwd, e1_surf))
+        err     = angle - heading
         return float((err + np.pi) % (2 * np.pi) - np.pi)
 
     def angular_path_controller(self):
@@ -460,6 +461,7 @@ class BulldozerSimulation:
             self.q_dot = self.S_matrix() @ self.v
 
             self.q   += self.dt * self.q_dot
+            self.total_distance += np.linalg.norm(self.dt * self.q_dot[0:3])
             self.q[3:6] = self.wrap_angles(self.q[3:6])
             a, B, g         = self.q[3:6]
             self.R_lg       = self.rotation_lg(a, B, g)
@@ -818,8 +820,8 @@ class BulldozerSimulation:
 
 
 def main():
-    sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=15)
+    sim = BulldozerSimulation() 
+    sim.run_and_plot(use_path_controller = False, stop_time=2)
 
 
 if __name__ == "__main__":
