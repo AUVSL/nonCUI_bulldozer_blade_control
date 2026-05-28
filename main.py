@@ -764,13 +764,15 @@ class BulldozerSimulation:
                 tan_b = np.tan(sim.beta0)
                 d3    = H3_i / tan_b
                 d4    = H4_i / tan_b
+                depth = min(d3, d4)
+                height = min(H3_i, H4_i)
                 pile_verts = np.array([
-                    [0,  sim.B1/2, H3_i_sub],  # p0 blade-face, ground, left
-                    [0,  sim.B1/2, H3_i+H3_i_sub],  # p1 blade-face, top, left
-                    [d3, sim.B1/2, 0   ],  # p2 forward, ground, left
-                    [0,  -sim.B1/2, H4_i_sub],  # p3 blade-face, ground, right
-                    [0,  -sim.B1/2, H4_i+H4_i_sub],  # p4 blade-face, top, right
-                    [d4, -sim.B1/2, 0],  # p5 forward, ground, right
+                    [    0,  sim.B1/2,        H3_i_sub],  # p0 blade-face, ground, left
+                    [    0,  sim.B1/2, height+H3_i_sub],  # p1 blade-face, top, left
+                    [depth,  sim.B1/2,               0],  # p2 forward, ground, left
+                    [    0, -sim.B1/2,        H4_i_sub],  # p3 blade-face, ground, right
+                    [    0, -sim.B1/2, height+H4_i_sub],  # p4 blade-face, top, right
+                    [depth, -sim.B1/2,             0],  # p5 forward, ground, right
                 ])
                 pile_body = (R_bld @ pile_verts.T).T + blade_pivot_body
                 pile_g    = pos + (R @ pile_body.T).T
@@ -795,7 +797,10 @@ class BulldozerSimulation:
                 ax_top.add_patch(pt)
                 pile_patch_top[0] = pt
 
-                side_xz = pile_g[[0, 1, 2]][:, [0, 2]]
+                pts_xz  = pile_g[:, [0, 2]]
+                center  = pts_xz.mean(axis=0)
+                angles  = np.arctan2(pts_xz[:, 1] - center[1], pts_xz[:, 0] - center[0])
+                side_xz = pts_xz[np.argsort(angles)]
                 ps = MplPolygon(side_xz, alpha=0.4, closed=True,
                                 facecolor='saddlebrown', edgecolor='sienna', linewidth=0.8)
                 ax_side.add_patch(ps)
@@ -816,7 +821,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation()
-    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=10)
+    sim.run_and_plot(lookahead_dist=0.8, use_path_controller = False, stop_time=12)
 
 
 if __name__ == "__main__":
