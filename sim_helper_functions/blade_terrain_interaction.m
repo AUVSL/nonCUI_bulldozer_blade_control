@@ -4,16 +4,18 @@ function [FT, Mb] = blade_terrain_interaction(hp, kb, gamma_g, ...
 
     % calcuare the relative roll of the blade to the surface and 
     % the relate soil blade heights
-    a_rel = a_s - a_b;
-    H1    = B1*tan(abs(a_rel));
-    H2    = hp*sec(a_rel);
-    H3    = H - H2 + sign(a_rel)*H1/2 - H1/2;
-    H4    = H - H2 - sign(a_rel)*H1/2 - H1/2;
+    a_rel  = a_b;
+    H1     = B1*tan(abs(a_rel));
+    H2     = hp*sec(abs(a_rel));
+    H3_sub = - H2 + sign(a_rel)*H1/2 - H1/2
+    H3     = H + H3_sub;
+    H4_sub = - H2 - sign(a_rel)*H1/2 - H1/2;
+    H4     = H + H4_sub;
     
     % volume of the mound before bulldozing plate
     a = tan(abs(a_rel))^2;
     c = (H3 + H4)/2;
-    V = 1/2*cot(beta0)*(1/12*a^2*B1^3 + c^2*B1);
+    V = 1/2*cot(beta0)*(1/12*a*B1^3 + c^2*B1);
     
     % gravity of the mound before bulldozing plate
     Gt = V * gamma_g * fill_percent;
@@ -30,8 +32,9 @@ function [FT, Mb] = blade_terrain_interaction(hp, kb, gamma_g, ...
     FT = - F1 - F2;
     
     % calculte where the blade forces are acting
-    yc1 = yc(Dx(-B1/2, beta0, H3, H4, B1), Dx(B1/2, beta0, H3, H4, B1), B1);
-    yc2 = yc(H2, H1+H2, B1);
+    yc1 = yc(-H3_sub, -H4_sub, B1);
+    yc2 = yc(H3, H4, B1);
+    
     
     % soil cutting moment acting on the blade
     Mb = yc1 * F1 + yc2 * F2;

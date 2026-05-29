@@ -10,12 +10,9 @@ function v_dot = vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb, q, q_dot, x_ICR, 
     % unpack function parameters
     m = vd_parmas(1); h = vd_parmas(2); b = vd_parmas(3); l = vd_parmas(4); 
     r = vd_parmas(5); grav = vd_parmas(6); 
-        
-    if x_ICR == 0
-        x_ICR = realmax;
-    end
  
     sa = sin(a); ca = cos(a); sB = sin(B); cB = cos(B); sg = sin(g); cg = cos(g);
+    tB = tan(B);
     
     ab = new_bld_ang(1); Bb = new_bld_ang(2); gb = new_bld_ang(3);
     cab = cos(ab);  sab = sin(ab); cBb = cos(Bb);  
@@ -43,19 +40,22 @@ function v_dot = vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb, q, q_dot, x_ICR, 
     R_lg_y = [sa*sB*cg - ca*sg;
             sa*sB*sg + ca*cg;
                        sa*cB];
+
     R_lg_z = [ca*sB*cg + sa*sg;
-             ca*sB*sg - sa*cg;
-                        ca*cB];
+         ca*sB*sg - sa*cg;
+                    ca*cB];
+
+   J_lg_z = [ ca * tB;
+              -sa;
+             ca / cB];
 
     % null space of A matrix
-    S = [       R_lg_x,               R_lg_y;
-         zeros([3, 1]), R_lg_z .* (-1/x_ICR)];
+        S = [       R_lg_x, R_lg_y * -x_ICR;
+             zeros([3, 1]),          J_lg_z];
 
     % forward track forces
     B  = [    R_lg_x,    R_lg_x; 
-                   0,         0; 
-                   0,         0; 
-          -ca*cB*b/2, ca*cB*b/2];  
+          -R_lg_z*b/2, R_lg_z*b/2];  
      
     %resistive_forces_and_moments
     elim = [1, 0, 0, 0, 0, 0;
@@ -80,15 +80,18 @@ function v_dot = vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb, q, q_dot, x_ICR, 
     % matrix relating to the graviational potential energy
     P = [0; 0; m*grav; 0; 0; 0];
 
-    S_11 = -sB*cg*Bd - cB*sg*Gd;
-    S_21 = (ca*sB*cg + sa*sg)*Ad + sa*cB*cg*Bd - (sa*sB*sg + ca*cg)*Gd;
-    S_31 = (ca*sg - sa*sB*cg)*Ad + ca*cB*cg*Bd + (sa*cg - ca*sB*sg)*Gd;
-    S_12 = -sB*sg*Bd + cB*cg*Gd;
-    S_22 = (ca*sB*sg - sa*cg)*Ad + sa*cB*sg*Bd + (sa*sB*cg - ca*sg)*Gd;
-    S_32 = -(sa*sB*sg + ca*cg)*Ad + ca*cB*sg*Bd + (ca*sB*cg + sa*sg)*Gd;
-    S_42 = cB*x_ICR^(-1)*Bd - sB*x_ICR^(-2)*x_ICR_dot;
-    S_52 = -ca*cB*x_ICR^(-1)*Ad + sa*sB*x_ICR^(-1)*Bd + sa*cB*x_ICR^(-2)*x_ICR_dot;
-    S_62 = sa*cB*x_ICR^(-1)*Ad + ca*sB*x_ICR^(-1)*Bd + ca*cB*x_ICR^(-2)*x_ICR_dot;
+
+    S_11 = -sB * cg * Bd - R_lg(2, 1) * Gd
+    S_21 = -sB * sg * Bd + R_lg(1, 1) * Gd
+    S_31 = -cB * Bd
+
+    S_12 = -self.x_ICR * ( R_lg(1, 3) * Ad + R_lg(3, 2) * cg * Bd - R_lg(2, 2) * Gd) - self.x_ICR_dot * R_lg(1, 2)
+    S_22 = -self.x_ICR * ( R_lg(2, 3) * Ad + R_lg(3, 2) * sg * Bd + R_lg(1, 2) * Gd) - self.x_ICR_dot * R_lg(2, 2)
+    S_32 = -self.x_ICR * ( R_lg(3, 3) * Ad - sa * sB * Bd)                           - self.x_ICR_dot * R_lg(3, 2)
+
+    S_42 = -sa * tB * Ad + ca / (cB^2) * Bd
+    S_52 = -ca * Ad
+    S_62 = -sa / cB * Ad + ca * tB / cB * Bd
     
     Sd = [S_11, S_12;
           S_21, S_22;

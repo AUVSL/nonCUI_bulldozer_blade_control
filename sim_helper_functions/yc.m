@@ -4,6 +4,6 @@ function ycx = yc(D1, D2, B1)
     if and(D1 == 0, D2 == 0)
         ycx = 0 
     else
-        ycx = (D1+2*D2)/(3*(D1+D2))*B1 - B1/2;
+        ycx = (2*D1+D2)/(3*(D1+D2))*B1 - B1/2;
     end
 end

@@ -7,8 +7,6 @@ function [Rl, Fy, Mr, Fb, Mb] = blade_and_track(F_track, q, q_dot, x_ICR, new_bl
     % unpack the body velocities and angular velocities
     X_dot = q_dot(1); Y_dot = q_dot(2); Z_dot = q_dot(3); a_dot = q_dot(4); 
     B_dot = q_dot(5); g_dot = q_dot(6);
-    
-    q, q_dot
 
     % unpack function parameters
     B1 = bt_params(1); H = bt_params(2); L = bt_params(3); b = bt_params(4); 
@@ -31,11 +29,15 @@ function [Rl, Fy, Mr, Fb, Mb] = blade_and_track(F_track, q, q_dot, x_ICR, new_bl
 	R_gl = [cB*cg, sa*sB*cg - ca*sg, ca*sB*cg + sa*sg
         	cB*sg, sa*sB*sg + ca*cg, ca*sB*sg - sa*cg
         	  -sB,         	  sa*cB,         	ca*cB].';
-   	 
+    J_gl = [1,   0,     -sB
+            0,  ca, sa * cB
+            0, -sa, ca * cB];
+
+
 	% calculate the local forward (dx) and lateral (dy) velocities
 	% from the vehicle's global X and Y velocities
 	dxyz = R_gl * [X_dot;Y_dot;Z_dot];
-	daBg = R_gl * [a_dot;B_dot;g_dot];
+	daBg = J_gl * [a_dot;B_dot;g_dot];
     
     % Compute absolute velocities of the centre of the tracks
     vtL = dxyz(1) - b/2 * daBg(3);
@@ -45,6 +47,8 @@ function [Rl, Fy, Mr, Fb, Mb] = blade_and_track(F_track, q, q_dot, x_ICR, new_bl
     vtR = saturation(vtR, velocity_limit);
     
     % how full the pile will be out some some distance
+    % TODO: update this to account for total distance traveled using a
+    % global var
     fill_percent = sqrt(q(1)^2+q(2)^2+q(3)^2) / fill_distance;
 
     [Fb, Mb] = blade_terrain_interaction(hp, kb, gamma_g, ...

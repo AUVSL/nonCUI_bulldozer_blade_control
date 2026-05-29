@@ -12,23 +12,26 @@ function x_ICR  = get_x_icr(q, q_dot, l)
     sa = sin(a); ca = cos(a); sB = sin(B); cB = cos(B); sg = sin(g); 
     cg = cos(g);
     
-    % calculate the local forward velocity from the vehicle's global X and Y velocities
+    % calculate the local forward velocity from the vehicle's global X and 
+    % Y velocities
 	R_gl = [cB*cg, sa*sB*cg - ca*sg, ca*sB*cg + sa*sg
         	cB*sg, sa*sB*sg + ca*cg, ca*sB*sg - sa*cg
         	  -sB,         	  sa*cB,         	ca*cB].';
+
+    J_gl = [1,   0,     -sB
+            0,  ca, sa * cB
+            0, -sa, ca * cB];
    	 
 	% calculate the local forward (dx) and lateral (dy) velocities
 	% from the vehicle's global X and Y velocities
 	dxyz = R_gl * [X_dot;Y_dot;Z_dot];
-	daBg = R_gl * [a_dot;B_dot;g_dot];
+	daBg = J_gl * [a_dot;B_dot;g_dot];
     
-    1;
-
     % Avoid a divide by infinity error with the if statement
     if abs(daBg(3)) < 0.001
         x_ICR = 0;
     else
-        x_ICR = dxyz(2)/daBg(3);
+        x_ICR = -dxyz(2)/daBg(3);
         x_ICR = max(-l/2, min(x_ICR, l/2));
     end
     
