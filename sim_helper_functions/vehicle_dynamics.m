@@ -81,17 +81,17 @@ function v_dot = vehicle_dynamics(F_track, Rl, Fy, Mr, Fb, Mb, q, q_dot, x_ICR, 
     P = [0; 0; m*grav; 0; 0; 0];
 
 
-    S_11 = -sB * cg * Bd - R_lg(2, 1) * Gd
-    S_21 = -sB * sg * Bd + R_lg(1, 1) * Gd
-    S_31 = -cB * Bd
+    S_11 = -sB * cg * Bd - R_lg(2, 1) * Gd;
+    S_21 = -sB * sg * Bd + R_lg(1, 1) * Gd;
+    S_31 = -cB * Bd;
 
-    S_12 = -self.x_ICR * ( R_lg(1, 3) * Ad + R_lg(3, 2) * cg * Bd - R_lg(2, 2) * Gd) - self.x_ICR_dot * R_lg(1, 2)
-    S_22 = -self.x_ICR * ( R_lg(2, 3) * Ad + R_lg(3, 2) * sg * Bd + R_lg(1, 2) * Gd) - self.x_ICR_dot * R_lg(2, 2)
-    S_32 = -self.x_ICR * ( R_lg(3, 3) * Ad - sa * sB * Bd)                           - self.x_ICR_dot * R_lg(3, 2)
+    S_12 = -x_ICR * ( R_lg(1, 3) * Ad + R_lg(3, 2) * cg * Bd - R_lg(2, 2) * Gd) - x_ICR_dot * R_lg(1, 2);
+    S_22 = -x_ICR * ( R_lg(2, 3) * Ad + R_lg(3, 2) * sg * Bd + R_lg(1, 2) * Gd) - x_ICR_dot * R_lg(2, 2);
+    S_32 = -x_ICR * ( R_lg(3, 3) * Ad - sa * sB * Bd)                           - x_ICR_dot * R_lg(3, 2);
 
-    S_42 = -sa * tB * Ad + ca / (cB^2) * Bd
-    S_52 = -ca * Ad
-    S_62 = -sa / cB * Ad + ca * tB / cB * Bd
+    S_42 = -sa * tB * Ad + ca / (cB^2) * Bd;
+    S_52 = -ca * Ad;
+    S_62 = -sa / cB * Ad + ca * tB / cB * Bd;
     
     Sd = [S_11, S_12;
           S_21, S_22;
