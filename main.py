@@ -7,10 +7,11 @@ from xml.parsers.expat import errors
 import os
 
 import numpy as np
+import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.animation as animation
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 from matplotlib.patches import Polygon as MplPolygon
 matplotlib.use("Agg")   # headless; remove if running interactively
 
@@ -24,7 +25,7 @@ class BulldozerSimulation:
         self.stop_time     = 0.7
         grav               = 9.81
         # TODO: limit surface angle by soil slope max angle self.beta0
-        self.surface_abg   = np.array([ 0, 0, 0])
+        self.surface_abg   = np.array([ 0.1, 0, 0])
         self.desired_depth = -0.05
         self.desired_abg   = np.array([ 0, 0, 0])
         self.fill_distance = 8.0
@@ -39,7 +40,7 @@ class BulldozerSimulation:
         self.laterial_velocity_limit = 0.0     # this governs how much the dozer can "slide" laterally
         self.angular_velocity_limit  = 2 * self.velocity_limit / self.b
         self.F_track_base            = 600000.0
-        self.F_track                 = np.array([self.F_track_base, self.F_track_base])
+        self.F_track                 = np.array([self.F_track_base, self.F_track_base *0.5])
 
         # Bulldozer blade parameters
         self.B1   = 2.921
@@ -356,6 +357,29 @@ class BulldozerSimulation:
         xs, ys = A * np.sin(t), B * np.sin(2 * t)
         return np.outer(xs, e1) + np.outer(ys, e2)
 
+    def surface_grid(self, u_range, v_range, spacing):
+        """
+        4-connected NetworkX grid of vertices evenly spaced (by `spacing`)
+        over in-plane coordinates (u, v) on the surface plane defined by
+        surface_abg. Nodes are keyed by (i, j) and hold world-frame x, y, z
+        plus a visited_last flag, initialized to False.
+        """
+        R_surf = self.rotation_lg(*self.surface_abg)
+        e1, e2 = R_surf[:, 0], R_surf[:, 1]
+
+        us = np.arange(u_range[0], u_range[1] + spacing / 2, spacing)
+        vs = np.arange(v_range[0], v_range[1] + spacing / 2, spacing)
+
+        G = nx.grid_2d_graph(len(us), len(vs))
+        for i, u in enumerate(us):
+            for j, v in enumerate(vs):
+                x, y, z = u * e1 + v * e2
+                node = G.nodes[(i, j)]
+                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
+                node["visited_last"] = False
+
+        return G
+
     def signed_cross_track_error(self, pos_xyz):
         """Signed perpendicular distance from pos_xyz to self.path_points on the surface plane.
         Positive when the vehicle is to the left of the path tangent direction."""
@@ -562,9 +586,9 @@ class BulldozerSimulation:
         sa, ca = np.sin(a_s), np.cos(a_s)
         sB, cB = np.sin(B_s), np.cos(B_s)
         sg, cg = np.sin(g_s), np.cos(g_s)
-        nx = ca * sB * cg + sa * sg
-        ny = ca * sB * sg - sa * cg
-        nz = ca * cB
+        n_x = ca * sB * cg + sa * sg
+        n_y = ca * sB * sg - sa * cg
+        n_z = ca * cB
 
         margin = 2.0
         cx   = (data[:, 1].max() + data[:, 1].min()) / 2
@@ -577,12 +601,22 @@ class BulldozerSimulation:
         xs = np.linspace(cx - half, cx + half, 30)
         ys = np.linspace(cy - half, cy + half, 30)
         Xs, Ys = np.meshgrid(xs, ys)
-        Zs = -(nx * Xs + ny * Ys) / nz
+        Zs = -(n_x * Xs + n_y * Ys) / n_z
         ax.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan', zorder=0)
+
+        grid_spacing = max(2 * half / 10, 0.5)
+        surf_grid = sim.surface_grid((cx - half, cx + half), (cy - half, cy + half), grid_spacing)
+        grid_segments = [
+            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y'], surf_grid.nodes[u]['z']),
+             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'], surf_grid.nodes[v]['z'])]
+            for u, v in surf_grid.edges()
+        ]
+        ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
         ax.set_xlim(cx - half, cx + half)
         ax.set_ylim(cy - half, cy + half)
         ax.set_zlim(cz - half, cz + half)
         ax.set_box_aspect([1, 1, 1])
+        ax.grid(False)
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
@@ -621,7 +655,7 @@ class BulldozerSimulation:
 
         x_line = np.array([cx - half, cx + half])
         ax_top.axhline(cy, color='tan', linewidth=2, alpha=0.7)
-        ax_side.plot(x_line, -(nx * x_line + ny * cy) / nz, color='tan', linewidth=2, alpha=0.7)
+        ax_side.plot(x_line, -(n_x * x_line + n_y * cy) / n_z, color='tan', linewidth=2, alpha=0.7)
 
         hl, hb = sim.l / 2, sim.b / 2
         c_local = np.array([
