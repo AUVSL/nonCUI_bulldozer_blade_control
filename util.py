@@ -7,9 +7,12 @@ class surface:
         self.surface_abg   = np.array([ 0, 0, 0])
         self.surface_abg2  = np.array([ -0.2, 0, 0])  # optional roll angle applied beyond v_split
         self.v_split       = 5  # v-value where the grid switches to surface_abg2
-        self.b            = 1.75
+        self.b             = 1.75
+        self.l             = 2.349  
         self.u_range       = (0, 10)
         self.v_range       = (0, 10)
+        self.q             = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
+        self.q_dot         = np.zeros(6)
 
     @property
     def subdivision(self):

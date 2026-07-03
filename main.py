@@ -26,6 +26,8 @@ class BulldozerSimulation:
         grav               = 9.81
         # TODO: limit surface angle by soil slope max angle self.beta0
         self.surface_abg   = np.array([ 0.1, 0, 0])
+        self.surface_abg2  = np.array([ 0.2, 0, 0])  # optional roll angle applied beyond u_split
+        self.u_split       = 1  # u-value where the grid switches to surface_abg2
         self.desired_depth = -0.05
         self.desired_abg   = np.array([ 0, 0, 0])
         self.fill_distance = 8.0
@@ -357,29 +359,6 @@ class BulldozerSimulation:
         xs, ys = A * np.sin(t), B * np.sin(2 * t)
         return np.outer(xs, e1) + np.outer(ys, e2)
 
-    def surface_grid(self, u_range, v_range, spacing):
-        """
-        4-connected NetworkX grid of vertices evenly spaced (by `spacing`)
-        over in-plane coordinates (u, v) on the surface plane defined by
-        surface_abg. Nodes are keyed by (i, j) and hold world-frame x, y, z
-        plus a visited_last flag, initialized to False.
-        """
-        R_surf = self.rotation_lg(*self.surface_abg)
-        e1, e2 = R_surf[:, 0], R_surf[:, 1]
-
-        us = np.arange(u_range[0], u_range[1] + spacing / 2, spacing)
-        vs = np.arange(v_range[0], v_range[1] + spacing / 2, spacing)
-
-        G = nx.grid_2d_graph(len(us), len(vs))
-        for i, u in enumerate(us):
-            for j, v in enumerate(vs):
-                x, y, z = u * e1 + v * e2
-                node = G.nodes[(i, j)]
-                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-                node["visited_last"] = False
-
-        return G
-
     def signed_cross_track_error(self, pos_xyz):
         """Signed perpendicular distance from pos_xyz to self.path_points on the surface plane.
         Positive when the vehicle is to the left of the path tangent direction."""
@@ -602,7 +581,7 @@ class BulldozerSimulation:
         ys = np.linspace(cy - half, cy + half, 30)
         Xs, Ys = np.meshgrid(xs, ys)
         Zs = -(n_x * Xs + n_y * Ys) / n_z
-        ax.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan', zorder=0)
+        ax.plot_surface(Xs, Ys, Zs, color='none', edgecolor='none', zorder=0)
 
         grid_spacing = max(2 * half / 10, 0.5)
         surf_grid = sim.surface_grid((cx - half, cx + half), (cy - half, cy + half), grid_spacing)
@@ -612,6 +591,24 @@ class BulldozerSimulation:
             for u, v in surf_grid.edges()
         ]
         ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
+
+        fig_grid = plt.figure(figsize=(7, 7))
+        ax_grid  = fig_grid.add_subplot(projection='3d')
+        ax_grid.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
+        ax_grid.set_xlim(cx - half, cx + half)
+        ax_grid.set_ylim(cy - half, cy + half)
+        ax_grid.set_zlim(cz - half, cz + half)
+        ax_grid.set_box_aspect([1, 1, 1])
+        ax_grid.grid(False)
+        ax_grid.xaxis.pane.fill = False
+        ax_grid.yaxis.pane.fill = False
+        ax_grid.zaxis.pane.fill = False
+        ax_grid.set_xlabel("X (m)")
+        ax_grid.set_ylabel("Y (m)")
+        ax_grid.set_zlabel("Z (m)")
+        fig_grid.savefig("figures/surface_grid.png", dpi=120)
+        plt.close(fig_grid)
+
         ax.set_xlim(cx - half, cx + half)
         ax.set_ylim(cy - half, cy + half)
         ax.set_zlim(cz - half, cz + half)
