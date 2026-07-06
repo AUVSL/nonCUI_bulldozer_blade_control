@@ -4,15 +4,19 @@ import networkx as nx
 import matplotlib.pyplot as plt
 class surface:
     def __init__(self):
-        self.surface_abg   = np.array([ 0, 0, 0])
-        self.u_split       = 5  # u-value where the grid switches to surface_abg2
-        self.offset        = np.array([0, 0, -1.0])
-        self.b             = 1.75
-        self.l             = 2.349  
-        self.u_range       = (-1, 10)
-        self.v_range       = (-1, 1)
-        self.q             = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
-        self.q_dot         = np.zeros(6)
+        self.surface_abg    = np.array([ 0, 0, 0])
+        self.u_split        = 5  # u-value where the grid switches to surface_abg2
+        self.offset         = np.array([0, 0, -1.0])
+        self.b              = 1.75
+        self.l              = 2.349  
+        self.u_range        = (-1, 10)
+        self.v_range        = (-1, 2)
+        self.q              = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
+        self.q_dot          = np.array([1, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.stop_time      = 1.0
+        self.dt             = 1/100
+        self.stop_distance  = self.u_range[1] - self.u_range[0]
+        self.total_distance = 0.0
 
     @property
     def subdivision(self, division_factor: float = 1.0):
@@ -88,6 +92,18 @@ class surface:
         if show:
             plt.show()
         plt.close(fig)
+
+    def run(self):
+        t = 0.0
+        for _ in range(int(self.stop_time / self.dt)):
+            self.q   += self.dt * self.q_dot
+            self.total_distance += np.linalg.norm(self.dt * self.q_dot[0:3])
+
+            if self.total_distance >= self.stop_distance:
+                break
+
+            self.log.append([t, *self.q])
+            t += self.dt
 
 if __name__ == "__main__":
     # Example usage
