@@ -2,6 +2,8 @@ import os
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from mpl_toolkits.mplot3d.art3d import Line3DCollection
 class surface:
     def __init__(self):
         self.surface_abg    = np.array([ 0, 0, 0])
@@ -9,14 +11,15 @@ class surface:
         self.offset         = np.array([0, 0, -1.0])
         self.b              = 1.75
         self.l              = 2.349  
-        self.u_range        = (-1, 10)
-        self.v_range        = (-1, 2)
+        self.u_range        = (0, 10)
+        self.v_range        = (-1, 1)
         self.q              = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
-        self.q_dot          = np.array([1, 0.0, 0.0, 0.0, 0.0, 0.0])
-        self.stop_time      = 1.0
+        self.q_dot          = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.stop_time      = 300.0
         self.dt             = 1/100
-        self.stop_distance  = self.u_range[1] - self.u_range[0]
+        self.stop_distance  = (self.u_range[1]-1) - (self.u_range[0])
         self.total_distance = 0.0
+        self.log            = []
 
     @property
     def subdivision(self, division_factor: float = 1.0):
@@ -105,9 +108,79 @@ class surface:
             self.log.append([t, *self.q])
             t += self.dt
 
+    def run_and_plot(self):
+        self.run()
+
+        print("Rendering GIF...")
+        data     = np.array(self.log)[::5]
+
+        fig = plt.figure(figsize=(14, 7))
+        gs  = fig.add_gridspec(2, 2, width_ratios=[1.4, 1], hspace=0.35, wspace=0.3)
+        ax      = fig.add_subplot(gs[:, 0], projection='3d')
+
+        # Surface plane normal
+        a_s, B_s, g_s = self.surface_abg
+        sa, ca = np.sin(a_s), np.cos(a_s)
+        sB, cB = np.sin(B_s), np.cos(B_s)
+        sg, cg = np.sin(g_s), np.cos(g_s)
+        n_x = ca * sB * cg + sa * sg
+        n_y = ca * sB * sg - sa * cg
+        n_z = ca * cB
+
+        margin =1.0
+        cx   = (data[:, 1].max() + data[:, 1].min()) / 2
+        cy   = (data[:, 2].max() + data[:, 2].min()) / 2
+        cz   = (data[:, 3].max() + data[:, 3].min()) / 2
+        half = max(data[:, 1].max() - data[:, 1].min(),
+                   data[:, 2].max() - data[:, 2].min(),
+                   data[:, 3].max() - data[:, 3].min()) / 2 + margin
+
+        xs = np.linspace(cx - half, cx + half, 30)
+        ys = np.linspace(cy - half, cy + half, 30)
+        Xs, Ys = np.meshgrid(xs, ys)
+        Zs = -(n_x * Xs + n_y * Ys) / n_z
+        ax.plot_surface(Xs, Ys, Zs, color='none', edgecolor='none', zorder=0)
+
+        surf_grid = self.surface_grid()
+        grid_segments = [
+            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y'], surf_grid.nodes[u]['z']),
+             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'], surf_grid.nodes[v]['z'])]
+            for u, v in surf_grid.edges()
+        ]
+        ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
+
+        ax.set_xlim(cx - half, cx + half)
+        ax.set_ylim(cy - half, cy + half)
+        ax.set_zlim(cz - half, cz + half)
+        ax.set_box_aspect([1, 1, 1])
+        ax.grid(False)
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_zlabel("Z (m)")
+
+        ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
+        trail,      = ax.plot([], [], [], 'b-', linewidth=1.5)
+
+        def update(i):
+            trail.set_data(data[:i+1, 1], data[:i+1, 2])
+            trail.set_3d_properties(data[:i+1, 3])
+            ax.set_title(f"t = {data[i, 0]:.2f} s")
+            return trail,
+
+        anim = animation.FuncAnimation(
+            fig, update, frames=len(data), blit=False, interval=50
+        )
+        fname = "figures/simulation.gif"
+        anim.save(fname, writer=animation.PillowWriter(fps=20))
+        plt.close(fig)
+        print(f"Saved {fname}")
+
 if __name__ == "__main__":
     # Example usage
     my_surface = surface()
     grid_graph = my_surface.surface_grid()
 
     my_surface.plot_surface()
+    my_surface.run_and_plot()
+    
+   
