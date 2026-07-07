@@ -129,7 +129,12 @@ class BulldozerSimulation:
         if (D1 == 0 and D2 == 0):
             return 0.0
         return (2*D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
-    
+ 
+    @property
+    def subdivision(self, division_factor: float = 1.0):
+        """Grid spacing, sized relative to the dozer width self.b."""
+        return self.b / division_factor
+
     # ---------------- Kinematics ----------------
     def rotation_gl(self, a, B, g):
         """Rotation matrix: global → local frame"""
@@ -187,6 +192,26 @@ class BulldozerSimulation:
             return 0.0
         return float(np.clip(-self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
     
+    def surface_grid(self, u_range, v_range, spacing):
+        """
+        4-connected NetworkX grid of vertices evenly spaced (by `spacing`)
+        over in-plane coordinates (u, v) on the surface plane defined by
+        surface_abg. Nodes are keyed by (i, j) and hold world-frame x, y, z
+        plus a visited_last flag, initialized to False.
+        """
+        R_surf = self.rotation_lg(*self.surface_abg)
+        e1, e2 = R_surf[:, 0], R_surf[:, 1]
+        us = np.arange(u_range[0], u_range[1] + spacing / 2, spacing)
+        vs = np.arange(v_range[0], v_range[1] + spacing / 2, spacing)
+        G = nx.grid_2d_graph(len(us), len(vs))
+        for i, u in enumerate(us):
+            for j, v in enumerate(vs):
+                x, y, z = u * e1 + v * e2
+                node = G.nodes[(i, j)]
+                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
+                node["visited_last"] = False
+        return G
+
     # ---------------- Dynamics ----------------
     def blade_terrain_interaction(self):
         # TODO: update this to be surface - body angle + blade angle, to account for non-flat surfaces
@@ -762,9 +787,9 @@ class BulldozerSimulation:
                     blade_lines_side[k] = None
 
             # Blade corners in global frame
-            R_bld = sim.rotation_lg(data[i, 17], data[i, 18], data[i, 19])
+            R_bld            = sim.rotation_lg(data[i, 17], data[i, 18], data[i, 19])
             corners_body_rel = (R_bld @ blade_corners_blade.T).T + blade_pivot_body
-            blade_g = data[i, 1:4] + (R @ corners_body_rel.T).T
+            blade_g          = data[i, 1:4] + (R @ corners_body_rel.T).T
 
             poly = Poly3DCollection([blade_g.tolist()], alpha=0.5,
                                     facecolor='gold', edgecolor='goldenrod', linewidth=1.5)
@@ -832,7 +857,7 @@ class BulldozerSimulation:
                 center  = pts_xz.mean(axis=0)
                 angles  = np.arctan2(pts_xz[:, 1] - center[1], pts_xz[:, 0] - center[0])
                 side_xz = pts_xz[np.argsort(angles)]
-                ps = MplPolygon(side_xz, alpha=0.4, closed=True,
+                ps      = MplPolygon(side_xz, alpha=0.4, closed=True,
                                 facecolor='saddlebrown', edgecolor='sienna', linewidth=0.8)
                 ax_side.add_patch(ps)
                 pile_patch_side[0] = ps
