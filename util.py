@@ -4,6 +4,7 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class surface:
     def __init__(self):
@@ -81,7 +82,10 @@ class surface:
         print("Rendering GIF...")
         
         # set up the figure and axes for the animation
-        fig , (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7))
+        fig = plt.figure(figsize=(14, 7))
+        ax = fig.add_subplot(1,3,3, projection='3d')
+        ax_top  = fig.add_subplot(1,3,2)
+        ax_side = fig.add_subplot(1,3,1)
         
         # set axis limits based on the logged data
         margin = 1.0
@@ -92,13 +96,22 @@ class surface:
         half   = max(data[:, 1].max() - data[:, 1].min(),
                      data[:, 2].max() - data[:, 2].min(),
                       data[:, 3].max() - data[:, 3].min()) / 2 + margin
-        ax1.set_xlim(cx - half, cx + half)
-        ax1.set_ylim(cy - half, cy + half)
-        ax2.set_xlim(cx - half, cx + half)
-        ax2.set_ylim(cz - half, cz + half)
+        
+        ax.set_xlim( cx - half, cx + half)
+        ax.set_ylim( cy - half, cy + half)
+        ax.set_zlim( cz - half, cz + half)
+        ax_top.set_xlim(cx - half, cx + half)
+        ax_top.set_ylim(cy - half, cy + half)
+        ax_side.set_xlim(cx - half, cx + half)
+        ax_side.set_ylim(cz - half, cz + half)        
 
         # draw the surface grid
         surf_grid = self.surface_grid()
+        grid_segments = [
+            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y'], surf_grid.nodes[u]['z']),
+             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'], surf_grid.nodes[v]['z'])]
+            for u, v in surf_grid.edges()
+        ]
         grid_segments1 = [
             [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y']),
              (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'])]
@@ -110,32 +123,44 @@ class surface:
             for u, v in surf_grid.edges()
         ]
         
-        ax1.add_collection(LineCollection(grid_segments1, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
-        ax2.add_collection(LineCollection(grid_segments2, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
+        ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
+        ax_top.add_collection(LineCollection(grid_segments1, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
+        ax_side.add_collection(LineCollection(grid_segments2, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
 
         # remaining plot settings
-        ax1.set_aspect('equal')
-        ax1.grid(False)
-        ax1.set_xlabel("X (m)")
-        ax1.set_ylabel("Y (m)")
-        ax2.set_aspect('equal')
-        ax2.grid(False)
-        ax2.set_xlabel("X (m)")
-        ax2.set_ylabel("Z (m)")
-
-        ax1.scatter(data[0, 1],  data[0, 2], color='blue', s=60, zorder=5)
-        trail1,      = ax1.plot([], [], 'b-', linewidth=1.5)
+        ax.set_box_aspect([1, 1, 1])
+        ax.grid(False)
+        ax.set_xlabel("X (m)")
+        ax.set_ylabel("Y (m)")
+        ax.set_zlabel("Z (m)") 
         
-        ax2.scatter(data[0, 1],  data[0, 3], color='blue', s=60, zorder=5)
-        trail2,      = ax2.plot([], [], 'b-', linewidth=1.5)
+        ax_top.set_aspect('equal')
+        ax_top.grid(False)
+        ax_top.set_xlabel("X (m)")
+        ax_top.set_ylabel("Y (m)")
+        
+        ax_side.set_aspect('equal')
+        ax_side.grid(False)
+        ax_side.set_xlabel("X (m)")
+        ax_side.set_ylabel("Z (m)")
+
+        ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
+        ax_top.scatter(data[0, 1],  data[0, 2], color='blue', s=60, zorder=5)
+        ax_side.scatter(data[0, 1],  data[0, 3], color='blue', s=60, zorder=5)
+        
+        trail,      = ax.plot([], [], [], 'b-', linewidth=1.5)
+        trail_top,  = ax_top.plot([], [], 'b-', linewidth=1.5)
+        trail_side, = ax_side.plot([], [], 'b-', linewidth=1.5)
 
         # animation update function
         def update(i):
-            trail1.set_data(data[:i+1, 1], data[:i+1, 2])
-            ax1.set_title(f"t = {data[i, 0]:.2f} s")
-            trail2.set_data(data[:i+1, 1], data[:i+1, 3])
-            ax2.set_title(f"t = {data[i, 0]:.2f} s")
-            return trail1, trail2,
+            trail.set_data(data[:i+1, 1], data[:i+1, 2])
+            trail.set_3d_properties(data[:i+1, 3])
+            trail_top.set_data(data[:i+1, 1], data[:i+1, 2])
+            trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
+            
+            ax_top.set_title(f"t = {data[i, 0]:.2f} s")
+            return trail, trail_top, trail_side,
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
