@@ -1,3 +1,4 @@
+import itertools
 import os
 from matplotlib.collections import LineCollection
 import numpy as np
@@ -80,42 +81,30 @@ class surface:
             t += self.dt
 
     def _get_neighbor_points(self, point):
-        surf_grid    = self.surface_grid()
-        nearest_node = self.find_nearest_node(point)
-        return [
-            (surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z'])
-            for n in surf_grid.neighbors(nearest_node[0])
+        x, y, z, _, _, _ = point
+        surf_grid   = self.surface_grid()
+        tile_length = self.subdivision
+
+        found = [
+            n for n, data in surf_grid.nodes(data=True)
+            if np.sqrt((data['x'] - x) ** 2 + (data['y'] - y) ** 2 + (data['z'] - z) ** 2) <= tile_length
         ]
+
+        # complete the tile: the corner diagonally opposite the nearest vertex
+        # is the shared neighbor of the two vertices adjacent to it
+        for a, b in itertools.combinations(found, 2):
+            shared = (set(surf_grid.neighbors(a)) & set(surf_grid.neighbors(b))) - set(found)
+            found.extend(shared)
+
+        return [(surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z']) for n in found]
 
     def _neighbor_check(self, point):
         t = 0.0
 
         self.q = np.array(point)
-
-        surf_grid    = self.surface_grid()
-        nearest_node = self.find_nearest_node(self.q)
-        self.neighbor_points = [
-            (surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z'])
-            for n in surf_grid.neighbors(nearest_node[0])
-        ]
+        self.neighbor_points = self._get_neighbor_points(self.q)
         self.log.append([t, *self.q])
         self.neighbor_log.append(self.neighbor_points)
-
-    def find_nearest_node(self, point):
-        x, y, z, _, _, _ = point
-        surf_grid    = self.surface_grid()
-        nearest_node = None
-        min_distance = float('inf')
-
-        for node in surf_grid.nodes(data=True):
-            node_x, node_y, node_z = node[1]['x'], node[1]['y'], node[1]['z']
-            distance               = np.sqrt((node_x - x) ** 2 + (node_y - y) ** 2 + (node_z - z) ** 2)
-
-            if distance < min_distance:
-                min_distance = distance
-                nearest_node = node
-
-        return nearest_node
 
     def run_and_plot(self, static_plot=False):
         if (not static_plot):
@@ -204,7 +193,7 @@ class surface:
         trail_top,  = ax_top.plot([], [], 'b-', linewidth=1.5)
         trail_side, = ax_side.plot([], [], 'b-', linewidth=1.5)
 
-        # green scatter artists for the nearest node's neighbors, updated each frame
+        # green scatter artists for grid vertices within one tile length of the point, updated each frame
         green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
         green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
         green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
