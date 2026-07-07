@@ -1,4 +1,3 @@
-import itertools
 import os
 from matplotlib.collections import LineCollection
 import numpy as np
@@ -19,7 +18,7 @@ class surface:
         spacing             = self.subdivision
         self.us             = np.arange(self.u_range[0], self.u_range[1] + spacing, spacing)
         self.vs             = np.arange(self.v_range[0], self.v_range[1] + spacing, spacing)
-        self.q              = np.array([0.0, 0.1, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
+        self.q              = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
         self.q_dot          = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.stop_time      = 300.0
         self.dt             = 1/100
@@ -81,22 +80,22 @@ class surface:
             t += self.dt
 
     def _get_neighbor_points(self, point):
-        x, y, z, _, _, _ = point
-        surf_grid   = self.surface_grid()
-        tile_length = self.subdivision
+        xyz       = np.array(point[:3])
+        surf_grid = self.surface_grid()
+        R_surf    = self._rotation_lg(*self.surface_abg)
+        e1, e2    = R_surf[:, 0], R_surf[:, 1]
 
-        found = [
-            n for n, data in surf_grid.nodes(data=True)
-            if np.sqrt((data['x'] - x) ** 2 + (data['y'] - y) ** 2 + (data['z'] - z) ** 2) <= tile_length
-        ]
+   
+        # 1 x 3 times 3 x 1 with ones inserted via numpy e* ^2 [x,y,z]^T is just a row of R_gl * global x,y,z coordinates (u,v are the [local] flattened version of the global coordinates)
+        u = xyz @ e1
+        v = xyz @ e2
+        spacing = self.subdivision
 
-        # complete the tile: the corner diagonally opposite the nearest vertex
-        # is the shared neighbor of the two vertices adjacent to it
-        for a, b in itertools.combinations(found, 2):
-            shared = (set(surf_grid.neighbors(a)) & set(surf_grid.neighbors(b))) - set(found)
-            found.extend(shared)
+        i = int(np.clip((u - self.us[0]) // spacing, 0, len(self.us) - 2))
+        j = int(np.clip((v - self.vs[0]) // spacing, 0, len(self.vs) - 2))
 
-        return [(surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z']) for n in found]
+        corners = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
+        return [(surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z']) for n in corners]
 
     def _neighbor_check(self, point):
         t = 0.0
