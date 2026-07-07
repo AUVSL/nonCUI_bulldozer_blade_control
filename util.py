@@ -18,7 +18,7 @@ class surface:
         spacing             = self.subdivision
         self.us             = np.arange(self.u_range[0], self.u_range[1] + spacing, spacing)
         self.vs             = np.arange(self.v_range[0], self.v_range[1] + spacing, spacing)
-        self.q              = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
+        self.q              = np.array([0.0, 0.1, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
         self.q_dot          = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.stop_time      = 300.0
         self.dt             = 1/100
@@ -26,6 +26,7 @@ class surface:
         self.total_distance = 0.0
         self.log            = []
         self.neighbor_points = []
+        self.neighbor_log   = []
 
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -75,13 +76,21 @@ class surface:
                 break
 
             self.log.append([t, *self.q])
+            self.neighbor_log.append(self._get_neighbor_points(self.q))
             t += self.dt
-    
+
+    def _get_neighbor_points(self, point):
+        surf_grid    = self.surface_grid()
+        nearest_node = self.find_nearest_node(point)
+        return [
+            (surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z'])
+            for n in surf_grid.neighbors(nearest_node[0])
+        ]
+
     def _neighbor_check(self, point):
         t = 0.0
 
         self.q = np.array(point)
-        self.log.append([t, *self.q])
 
         surf_grid    = self.surface_grid()
         nearest_node = self.find_nearest_node(self.q)
@@ -89,6 +98,8 @@ class surface:
             (surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z'])
             for n in surf_grid.neighbors(nearest_node[0])
         ]
+        self.log.append([t, *self.q])
+        self.neighbor_log.append(self.neighbor_points)
 
     def find_nearest_node(self, point):
         x, y, z, _, _, _ = point
@@ -106,7 +117,7 @@ class surface:
 
         return nearest_node
 
-    def run_and_plot(self, static_plot=True):
+    def run_and_plot(self, static_plot=False):
         if (not static_plot):
             self._run()
         else:
@@ -122,12 +133,13 @@ class surface:
         
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 1.0
-        data   = np.array(self.log)[::5] # every 5th frame repesented to speed up rendering
-        neighbor_arr = np.array(self.neighbor_points)
-        if static_plot and neighbor_arr.size:
-            all_x = np.concatenate([data[:, 1], neighbor_arr[:, 0]])
-            all_y = np.concatenate([data[:, 2], neighbor_arr[:, 1]])
-            all_z = np.concatenate([data[:, 3], neighbor_arr[:, 2]])
+        data          = np.array(self.log)[::5] # every 5th frame repesented to speed up rendering
+        neighbor_data = self.neighbor_log[::5]
+        all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
+        if all_neighbor_pts.size:
+            all_x = np.concatenate([data[:, 1], all_neighbor_pts[:, 0]])
+            all_y = np.concatenate([data[:, 2], all_neighbor_pts[:, 1]])
+            all_z = np.concatenate([data[:, 3], all_neighbor_pts[:, 2]])
         else:
             all_x, all_y, all_z = data[:, 1], data[:, 2], data[:, 3]
         cx     = (all_x.max() + all_x.min()) / 2
@@ -188,15 +200,22 @@ class surface:
         ax_top.scatter(data[0, 1],  data[0, 2], color='blue', s=60, zorder=5)
         ax_side.scatter(data[0, 1],  data[0, 3], color='blue', s=60, zorder=5)
 
-        if static_plot and neighbor_arr.size:
-            ax.scatter(neighbor_arr[:, 0], neighbor_arr[:, 1], neighbor_arr[:, 2], color='green', s=40, zorder=5)
-            ax_top.scatter(neighbor_arr[:, 0], neighbor_arr[:, 1], color='green', s=40, zorder=5)
-            ax_side.scatter(neighbor_arr[:, 0], neighbor_arr[:, 2], color='green', s=40, zorder=5)
-
-
         trail,      = ax.plot([], [], [], 'b-', linewidth=1.5)
         trail_top,  = ax_top.plot([], [], 'b-', linewidth=1.5)
         trail_side, = ax_side.plot([], [], 'b-', linewidth=1.5)
+
+        # green scatter artists for the nearest node's neighbors, updated each frame
+        green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
+        green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
+        green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
+
+        def set_neighbors(i):
+            pts = np.array(neighbor_data[i]) if neighbor_data[i] else np.empty((0, 3))
+            green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
+            green_top.set_offsets(pts[:, [0, 1]])
+            green_side.set_offsets(pts[:, [0, 2]])
+
+        set_neighbors(0)
 
         # animation update function
         def update(i):
@@ -204,9 +223,10 @@ class surface:
             trail.set_3d_properties(data[:i+1, 3])
             trail_top.set_data(data[:i+1, 1], data[:i+1, 2])
             trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
-            
+            set_neighbors(i)
+
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            return trail, trail_top, trail_side,
+            return trail, trail_top, trail_side, green_3d, green_top, green_side,
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
