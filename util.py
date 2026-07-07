@@ -12,11 +12,11 @@ class surface:
         self.offset         = np.array([0, 0, -1.0])
         self.b              = 1.75
         self.l              = 2.349  
-        self.u_range        = (0, 10)
-        self.v_range        = (-1, 1)
+        self.u_range        = (0, 5 * self.b) 
+        self.v_range        = (-self.b, self.b)
         spacing             = self.subdivision
-        self.us             = np.arange(self.u_range[0], self.u_range[1], spacing)
-        self.vs             = np.arange(self.v_range[0], self.v_range[1], spacing)
+        self.us             = np.arange(self.u_range[0], self.u_range[1] + spacing, spacing)
+        self.vs             = np.arange(self.v_range[0], self.v_range[1] + spacing, spacing)
         self.q              = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
         self.q_dot          = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.stop_time      = 300.0
@@ -26,7 +26,7 @@ class surface:
         self.log            = []
 
     @property
-    def subdivision(self, division_factor: float = 1.0):
+    def subdivision(self, division_factor: float = 2.0):
         """Grid spacing, sized relative to the dozer width self.b."""
         return self.b / division_factor
 
@@ -81,42 +81,61 @@ class surface:
         print("Rendering GIF...")
         
         # set up the figure and axes for the animation
-        fig , ax = plt.subplots(figsize=(14, 7))
+        fig , (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7))
         
         # set axis limits based on the logged data
         margin = 1.0
-        data   = np.array(self.log)[::1] # every 5th frame repesented to speed up rendering
+        data   = np.array(self.log)[::5] # every 5th frame repesented to speed up rendering
         cx     = (data[:, 1].max() + data[:, 1].min()) / 2
+        cy     = (data[:, 2].max() + data[:, 2].min()) / 2
         cz     = (data[:, 3].max() + data[:, 3].min()) / 2
         half   = max(data[:, 1].max() - data[:, 1].min(),
+                     data[:, 2].max() - data[:, 2].min(),
                       data[:, 3].max() - data[:, 3].min()) / 2 + margin
-        ax.set_xlim(cx - half, cx + half)
-        ax.set_ylim(cz - half, cz + half)
+        ax1.set_xlim(cx - half, cx + half)
+        ax1.set_ylim(cy - half, cy + half)
+        ax2.set_xlim(cx - half, cx + half)
+        ax2.set_ylim(cz - half, cz + half)
 
         # draw the surface grid
         surf_grid = self.surface_grid()
-        grid_segments = [
+        grid_segments1 = [
+            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y']),
+             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'])]
+            for u, v in surf_grid.edges()
+        ]
+        grid_segments2 = [
             [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['z']),
              (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['z'])]
             for u, v in surf_grid.edges()
         ]
         
-        ax.add_collection(LineCollection(grid_segments, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
+        ax1.add_collection(LineCollection(grid_segments1, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
+        ax2.add_collection(LineCollection(grid_segments2, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
 
         # remaining plot settings
-        ax.set_aspect('equal')
-        ax.grid(False)
-        ax.set_xlabel("X (m)")
-        ax.set_ylabel("Z (m)")
+        ax1.set_aspect('equal')
+        ax1.grid(False)
+        ax1.set_xlabel("X (m)")
+        ax1.set_ylabel("Y (m)")
+        ax2.set_aspect('equal')
+        ax2.grid(False)
+        ax2.set_xlabel("X (m)")
+        ax2.set_ylabel("Z (m)")
 
-        ax.scatter(data[0, 1],  data[0, 3], color='blue', s=60, zorder=5)
-        trail,      = ax.plot([], [], 'b-', linewidth=1.5)
+        ax1.scatter(data[0, 1],  data[0, 2], color='blue', s=60, zorder=5)
+        trail1,      = ax1.plot([], [], 'b-', linewidth=1.5)
+        
+        ax2.scatter(data[0, 1],  data[0, 3], color='blue', s=60, zorder=5)
+        trail2,      = ax2.plot([], [], 'b-', linewidth=1.5)
 
         # animation update function
         def update(i):
-            trail.set_data(data[:i+1, 1], data[:i+1, 3])
-            ax.set_title(f"t = {data[i, 0]:.2f} s")
-            return trail,
+            trail1.set_data(data[:i+1, 1], data[:i+1, 2])
+            ax1.set_title(f"t = {data[i, 0]:.2f} s")
+            trail2.set_data(data[:i+1, 1], data[:i+1, 3])
+            ax2.set_title(f"t = {data[i, 0]:.2f} s")
+            return trail1, trail2,
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
