@@ -72,14 +72,18 @@ class surface:
         for _ in range(int(self.stop_time / self.dt)):
             self.q   += self.dt * self.q_dot
             self.total_distance += np.linalg.norm(self.dt * self.q_dot[0:3])
+            neighbor_points = self._get_neighbor_points(self.q)
+            height_to_surface = self._bilinear_height(self.q, neighbor_points)
+            self.q[2] = height_to_surface
 
             if self.total_distance >= self.stop_distance:
                 break
 
             self.log.append([t, *self.q])
-            neighbor_points = self._get_neighbor_points(self.q)
+            
             self.neighbor_log.append(neighbor_points)
-            self.height_log.append(self._bilinear_height(self.q, neighbor_points))
+            height_to_surface = self._bilinear_height(self.q, neighbor_points)
+            self.height_log.append(height_to_surface)
             t += self.dt
 
     def _get_neighbor_points(self, point):
@@ -118,20 +122,8 @@ class surface:
         corners = self._get_neighbor_points(point)
         return self._bilinear_height(point, corners)
 
-    def _neighbor_check(self, point):
-        t = 0.0
-
-        self.q = np.array(point)
-        self.neighbor_points = self._get_neighbor_points(self.q)
-        self.log.append([t, *self.q])
-        self.neighbor_log.append(self.neighbor_points)
-        self.height_log.append(self._bilinear_height(self.q, self.neighbor_points))
-
-    def run_and_plot(self, static_plot=False):
-        if (not static_plot):
-            self._run()
-        else:
-            self._neighbor_check(self.q)
+    def run_and_plot(self):
+        self._run()
 
         print("Rendering GIF...")
         
