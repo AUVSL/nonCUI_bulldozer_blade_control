@@ -8,9 +8,9 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class surface:
     def __init__(self):
-        self.surface_abg    = np.array([ 0, 0, 0])
+        self.surface_abg    = np.array([ 0, 0.1, 0])
         self.u_split        = 5  # u-value where the grid switches to surface_abg2
-        self.offset         = np.array([0, 0, 0.0])
+        self.offset         = np.array([0, 0, 0.1])
         self.b              = 1.75
         self.l              = 2.349  
         self.u_range        = (0, 5 * self.b) 
@@ -27,6 +27,7 @@ class surface:
         self.log            = []
         self.neighbor_points = []
         self.neighbor_log   = []
+        self.height_log     = []
 
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -76,7 +77,9 @@ class surface:
                 break
 
             self.log.append([t, *self.q])
-            self.neighbor_log.append(self._get_neighbor_points(self.q))
+            neighbor_points = self._get_neighbor_points(self.q)
+            self.neighbor_log.append(neighbor_points)
+            self.height_log.append(self._bilinear_height(self.q, neighbor_points))
             t += self.dt
 
     def _get_neighbor_points(self, point):
@@ -97,6 +100,24 @@ class surface:
         corners = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
         return [(surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z']) for n in corners]
 
+    def _bilinear_height(self, point, corners):
+        """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
+        p1, p2, p3, p4 = (np.array(c) for c in corners)
+        h1, h2, h3, h4 = p1[2], p2[2], p3[2], p4[2]
+
+        xy  = np.array(point[:2])
+        e_s = (p2 - p1)[:2]
+        e_t = (p3 - p1)[:2]
+
+        s = np.clip(np.dot(xy - p1[:2], e_s) / np.dot(e_s, e_s), 0.0, 1.0)
+        t = np.clip(np.dot(xy - p1[:2], e_t) / np.dot(e_t, e_t), 0.0, 1.0)
+
+        return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
+
+    def _get_interpolated_height(self, point):
+        corners = self._get_neighbor_points(point)
+        return self._bilinear_height(point, corners)
+
     def _neighbor_check(self, point):
         t = 0.0
 
@@ -104,6 +125,7 @@ class surface:
         self.neighbor_points = self._get_neighbor_points(self.q)
         self.log.append([t, *self.q])
         self.neighbor_log.append(self.neighbor_points)
+        self.height_log.append(self._bilinear_height(self.q, self.neighbor_points))
 
     def run_and_plot(self, static_plot=False):
         if (not static_plot):
@@ -121,8 +143,9 @@ class surface:
         
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 1.0
-        data          = np.array(self.log)[::5] # every 5th frame repesented to speed up rendering
-        neighbor_data = self.neighbor_log[::5]
+        data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
+        neighbor_data = self.neighbor_log[::2]
+        height_data   = self.height_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
         if all_neighbor_pts.size:
             all_x = np.concatenate([data[:, 1], all_neighbor_pts[:, 0]])
@@ -197,13 +220,25 @@ class surface:
         green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
         green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
 
+        # dotted line from the position point down to the bilinearly-interpolated surface height
+        drop_3d,   = ax.plot([], [], [], 'k:', linewidth=1.2, zorder=4)
+        drop_side, = ax_side.plot([], [], 'k:', linewidth=1.2, zorder=4)
+
         def set_neighbors(i):
             pts = np.array(neighbor_data[i]) if neighbor_data[i] else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
             green_top.set_offsets(pts[:, [0, 1]])
             green_side.set_offsets(pts[:, [0, 2]])
 
+        def set_drop_line(i):
+            x, y, z = data[i, 1], data[i, 2], data[i, 3]
+            h = height_data[i]
+            drop_3d.set_data([x, x], [y, y])
+            drop_3d.set_3d_properties([z, h])
+            drop_side.set_data([x, x], [z, h])
+
         set_neighbors(0)
+        set_drop_line(0)
 
         # animation update function
         def update(i):
@@ -212,9 +247,10 @@ class surface:
             trail_top.set_data(data[:i+1, 1], data[:i+1, 2])
             trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
             set_neighbors(i)
+            set_drop_line(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            return trail, trail_top, trail_side, green_3d, green_top, green_side,
+            return trail, trail_top, trail_side, green_3d, green_top, green_side, drop_3d, drop_side,
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
