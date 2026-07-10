@@ -8,9 +8,9 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class surface:
     def __init__(self):
-        self.surface_abg    = np.array([ 0, 0.1, 0])
+        self.surface_abg    = np.array([ 0, 0.2, 0])
         self.u_split        = 5  # u-value where the grid switches to surface_abg2
-        self.offset         = np.array([0, 0, 0.1])
+        self.offset         = np.array([0, 0, 1])
         self.b              = 1.75
         self.l              = 2.349  
         self.u_range        = (0, 5 * self.b) 
@@ -34,48 +34,18 @@ class surface:
         """Grid spacing, sized relative to the dozer width self.b."""
         return self.b / division_factor
 
-    def _rotation_gl(self, a, B, g):
-        """Rotation matrix: global → local frame"""
-        # change to accept input array
-        sa, ca = np.sin(a), np.cos(a)
-        sB, cB = np.sin(B), np.cos(B)
-        sg, cg = np.sin(g), np.cos(g)
-
-        return np.array([
-            [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
-            [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
-            [-sB,                      sa * cB,                  ca * cB]
-        ]).T
-    
-    def _rotation_lg(self, a, B, g):
-        """Rotation matrix: local → global frame"""
-        return self._rotation_gl(a, B, g).T
-
-    def surface_grid(self):
-        R_surf  = self._rotation_lg(*self.surface_abg)
-        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
-
-        G = nx.grid_2d_graph(len(self.us), len(self.vs))
-        for i, u in enumerate(self.us):
-            for j, v in enumerate(self.vs):
-                if (u >= self.u_split): 
-                    x, y, z = u * e1 + v* e2 + self.offset * e3
-                else:
-                    x, y, z = u * e1 + v * e2
-                node = G.nodes[(i, j)]
-                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-                node["visited_last"] = False
-        return G
-
     def _run(self):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
-            self.q   += self.dt * self.q_dot
-            self.total_distance += np.linalg.norm(self.dt * self.q_dot[0:3])
-            neighbor_points = self._get_neighbor_points(self.q)
-            height_to_surface = self._bilinear_height(self.q, neighbor_points)
-            self.q[2] = height_to_surface
+            self.q               += self.dt * self.q_dot
+            self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
+            self.q[3:6]           = self._particle_orientation(self.q, self.q_dot)
+            neighbor_points       = self._get_neighbor_points(self.q)
+            height_to_surface     = self._bilinear_height(self.q, neighbor_points)
+            self.q[2]             = height_to_surface
+            
 
+            print(f"t = {t:.2f} s, q = {self.q[0:6]}, total_distance = {self.total_distance:.2f} m")
             if self.total_distance >= self.stop_distance:
                 break
 
@@ -104,6 +74,41 @@ class surface:
         corners = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
         return [(surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z']) for n in corners]
 
+    
+    def surface_grid(self):
+        R_surf  = self._rotation_lg(*self.surface_abg)
+        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
+
+        G = nx.grid_2d_graph(len(self.us), len(self.vs))
+        for i, u in enumerate(self.us):
+            for j, v in enumerate(self.vs):
+                if (u >= self.u_split): 
+                    x, y, z = u * e1 + v* e2 + self.offset * e3
+                else:
+                    x, y, z = u * e1 + v * e2
+                node = G.nodes[(i, j)]
+                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
+                node["visited_last"] = False
+        return G
+    
+    def _rotation_lg(self, a, B, g):
+        """Rotation matrix: local → global frame"""
+        return self._rotation_gl(a, B, g).T
+
+    
+    def _rotation_gl(self, a, B, g):
+        """Rotation matrix: global → local frame"""
+        # change to accept input array
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB = np.sin(B), np.cos(B)
+        sg, cg = np.sin(g), np.cos(g)
+
+        return np.array([
+            [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
+            [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
+            [-sB,                      sa * cB,                  ca * cB]
+        ]).T
+    
     def _bilinear_height(self, point, corners):
         """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
         p1, p2, p3, p4 = (np.array(c) for c in corners)
@@ -121,6 +126,59 @@ class surface:
     def _get_interpolated_height(self, point):
         corners = self._get_neighbor_points(point)
         return self._bilinear_height(point, corners)
+
+    def _bilinear_gradient(self, point, corners):
+        """(dh/dx, dh/dy) of the same bilinear patch _bilinear_height blends,
+        found by differentiating it w.r.t. the tile's (s,t) edge parameters
+        and mapping back to the xy-plane via the edge vectors."""
+        p1, p2, p3, p4 = (np.array(c) for c in corners)
+        h1, h2, h3, h4 = p1[2], p2[2], p3[2], p4[2]
+
+        xy  = np.array(point[:2])
+        e_s = (p2 - p1)[:2]
+        e_t = (p3 - p1)[:2]
+
+        s = np.clip(np.dot(xy - p1[:2], e_s) / np.dot(e_s, e_s), 0.0, 1.0)
+        t = np.clip(np.dot(xy - p1[:2], e_t) / np.dot(e_t, e_t), 0.0, 1.0)
+
+        dh_ds = (h2 - h1) * (1 - t) + (h4 - h3) * t
+        dh_dt = (h3 - h1) * (1 - s) + (h4 - h2) * s
+        
+        # [dh/dx, dh/dy]^T = dh_ds*[ds/dx, ds/dy]^T + dh_dt*[dt/dx, dt/dy]^T,
+        # [ds/dx, ds/dy]^T = e_s / (e_s . e_s), 
+        # [dt/dx, dt/dy]^T = e_t / (e_t . e_t).
+        return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
+
+    def _particle_orientation(self, point, q_dot):
+        """
+        Roll/pitch/yaw of a particle crossing the current tile: pitch and
+        roll come from the tile's height-field gradient (the edges' angles,
+        blended the same s,t weights as _bilinear_height) read off along and
+        across the direction of travel; yaw is the global-frame heading of
+        q_dot, arctan2(vel_y, vel_x), so (roll, pitch, yaw) form a consistent
+        ZYX Euler triple for _rotation_lg.
+        """
+        corners = self._get_neighbor_points(point)
+        grad_xy = self._bilinear_gradient(point, corners)
+
+        vel   = np.array(q_dot[:3])
+        speed = np.linalg.norm(vel[:2])
+        if speed < 1e-9:
+            return self.q[3:6].copy()
+
+        # the velocity in the the local body frame
+        fwd_xy  = vel[:2] / speed
+        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
+        
+        s_f = np.dot(grad_xy, fwd_xy)   # forward slope
+        s_l = np.dot(grad_xy, left_xy)  # lateral slope
+         
+        pitch = np.arctan2(-s_f, 1.0)                 # exact as-is
+        roll  = np.arctan2( s_l, np.sqrt(1.0 + s_f**2))  # generalized
+
+        yaw = np.arctan2(vel[1], vel[0])
+
+        return np.array([roll, pitch, yaw])
 
     def run_and_plot(self):
         self._run()
@@ -216,6 +274,22 @@ class surface:
         drop_3d,   = ax.plot([], [], [], 'k:', linewidth=1.2, zorder=4)
         drop_side, = ax_side.plot([], [], 'k:', linewidth=1.2, zorder=4)
 
+        # red arrow at the tracked point showing the particle's orientation,
+        # i.e. the local forward axis (R_lg(*q[3:6])[:, 0]) for that frame's roll/pitch/yaw
+        arrow_len = self.subdivision * 0.6
+
+        def _forward(i):
+            return self._rotation_lg(*data[i, 4:7])[:, 0]
+
+        fwd0 = _forward(0)
+        qdot_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
+                                   color='red', scale=1 / arrow_len, scale_units='xy',
+                                   angles='xy', zorder=6)
+        qdot_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
+                                    color='red', scale=1 / arrow_len, scale_units='xy',
+                                    angles='xy', zorder=6)
+        qdot_3d = [None]  # mplot3d quiver has no in-place update, so remove/recreate each frame
+
         def set_neighbors(i):
             pts = np.array(neighbor_data[i]) if neighbor_data[i] else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
@@ -229,8 +303,21 @@ class surface:
             drop_3d.set_3d_properties([z, h])
             drop_side.set_data([x, x], [z, h])
 
+        def set_qdot(i):
+            x, y, z = data[i, 1], data[i, 2], data[i, 3]
+            fwd = _forward(i)
+            qdot_top.set_offsets([[x, y]])
+            qdot_top.set_UVC(fwd[0], fwd[1])
+            qdot_side.set_offsets([[x, z]])
+            qdot_side.set_UVC(fwd[0], fwd[2])
+            if qdot_3d[0] is not None:
+                qdot_3d[0].remove()
+            qdot_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
+                                    length=arrow_len, color='red', zorder=6)
+
         set_neighbors(0)
         set_drop_line(0)
+        set_qdot(0)
 
         # animation update function
         def update(i):
@@ -240,9 +327,10 @@ class surface:
             trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
             set_neighbors(i)
             set_drop_line(i)
+            set_qdot(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            return trail, trail_top, trail_side, green_3d, green_top, green_side, drop_3d, drop_side,
+            return trail, trail_top, trail_side, green_3d, green_top, green_side, drop_3d, drop_side, qdot_top, qdot_side, qdot_3d[0],
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
