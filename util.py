@@ -28,7 +28,6 @@ class surface:
         self.log             = []
         self.neighbor_points = []
         self.neighbor_log    = []
-        self.height_log      = []
 
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -50,7 +49,6 @@ class surface:
         margin = 1.0
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
         neighbor_data = self.neighbor_log[::2]
-        height_data   = self.height_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
         if all_neighbor_pts.size:
             all_x = np.concatenate([data[:, 1], all_neighbor_pts[:, 0]])
@@ -186,17 +184,15 @@ class surface:
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
             
-            self.q, neighbor_points, height_to_surface = self._particle_update(self.q)
+            self.q, neighbor_points = self._particle_update(self.q)
             
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
             if self.total_distance >= self.stop_distance:
                 break
 
             self.log.append([t, *self.q])
-            
             self.neighbor_log.append(neighbor_points)
-            height_to_surface = self._bilinear_height(self.q, neighbor_points)
-            self.height_log.append(height_to_surface)
+            
             t += self.dt
 
     def _particle_update(self, point):
@@ -205,7 +201,7 @@ class surface:
         neighbor_points   = self._get_neighbor_points(point)
         height_to_surface = self._bilinear_height(point, neighbor_points)
         point[2]          = height_to_surface
-        return point, neighbor_points, height_to_surface
+        return point, neighbor_points
 
     def _particle_orientation(self, point, q_dot):
         """
