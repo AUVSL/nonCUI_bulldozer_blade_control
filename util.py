@@ -18,7 +18,8 @@ class surface:
         spacing              = self.subdivision
         self.us              = np.arange(self.u_range[0], self.u_range[1] + spacing, spacing)
         self.vs              = np.arange(self.v_range[0], self.v_range[1] + spacing, spacing)
-        self.q               = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], self.surface_abg[2]])
+        self.q               = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
+        
         self.q_dot           = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.stop_time       = 300.0
         self.dt              = 1/100
@@ -124,10 +125,6 @@ class surface:
         green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
         green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
 
-        # dotted line from the position point down to the bilinearly-interpolated surface height
-        drop_3d,   = ax.plot([], [], [], 'k:', linewidth=1.2, zorder=4)
-        drop_side, = ax_side.plot([], [], 'k:', linewidth=1.2, zorder=4)
-
         # red arrow at the tracked point showing the particle's orientation,
         # i.e. the local forward axis (R_lg(*q[3:6])[:, 0]) for that frame's roll/pitch/yaw
         arrow_len = self.subdivision * 0.6
@@ -150,13 +147,6 @@ class surface:
             green_top.set_offsets(pts[:, [0, 1]])
             green_side.set_offsets(pts[:, [0, 2]])
 
-        def set_drop_line(i):
-            x, y, z = data[i, 1], data[i, 2], data[i, 3]
-            h = height_data[i]
-            drop_3d.set_data([x, x], [y, y])
-            drop_3d.set_3d_properties([z, h])
-            drop_side.set_data([x, x], [z, h])
-
         def set_qdot(i):
             x, y, z = data[i, 1], data[i, 2], data[i, 3]
             fwd = _forward(i)
@@ -170,7 +160,6 @@ class surface:
                                     length=arrow_len, color='red', zorder=6)
 
         set_neighbors(0)
-        set_drop_line(0)
         set_qdot(0)
 
         # animation update function
@@ -180,11 +169,10 @@ class surface:
             trail_top.set_data(data[:i+1, 1], data[:i+1, 2])
             trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
             set_neighbors(i)
-            set_drop_line(i)
             set_qdot(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            return trail, trail_top, trail_side, green_3d, green_top, green_side, drop_3d, drop_side, qdot_top, qdot_side, qdot_3d[0],
+            return trail, trail_top, trail_side, green_3d, green_top, green_side, qdot_top, qdot_side, qdot_3d[0],
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
@@ -197,6 +185,7 @@ class surface:
     def _run(self):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
+            
             self.q, neighbor_points, height_to_surface = self._particle_update(self.q)
             
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
@@ -274,7 +263,7 @@ class surface:
         G = nx.grid_2d_graph(len(self.us), len(self.vs))
         for i, u in enumerate(self.us):
             for j, v in enumerate(self.vs):
-                if (u >= self.u_split): 
+                if (u <= self.u_split): 
                     x, y, z = u * e1 + v* e2 + self.offset * e3
                 else:
                     x, y, z = u * e1 + v * e2
