@@ -8,26 +8,33 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class surface:
     def __init__(self):
+        # simulation parameters
         self.surface_abg     = np.array([ 0, 0.2, 0])
         self.u_split         = 5  # u-value where the grid switches to surface_abg2
         self.offset          = np.array([0, 0, 1])
         self.b               = 1.75
-        self.l               = 2.349  
-        self.u_range         = (0, 5 * self.b) 
-        self.v_range         = (-self.b, self.b)
-        spacing              = self.subdivision
-        self.us              = np.arange(self.u_range[0], self.u_range[1] + spacing, spacing)
-        self.vs              = np.arange(self.v_range[0], self.v_range[1] + spacing, spacing)
-        self.q               = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
-        
-        self.q_dot           = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.l               = 2.349
+        self.dt              = 1/100  
         self.stop_time       = 300.0
-        self.dt              = 1/100
-        self.stop_distance   = self.us[-1] - self.us[0]
         self.total_distance  = 0.0
+        self.q               = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
+        self.q_dot           = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.log             = []
         self.neighbor_points = []
         self.neighbor_log    = []
+        
+        # set up the surface grid
+        self.u_range         = (0, 5 * self.b) 
+        self.v_range         = (-self.b, self.b)
+        self.us              = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
+        self.vs              = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
+        self.stop_distance   = self.us[-1] - self.us[0]
+        self.surf_grid       = self._surface_grid()
+
+        # put particle on the surface at the start of the simulation
+        self._particle_update(self.q)
+        self.log.append([0, *self.q])
+        self.q_dot           = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -72,21 +79,20 @@ class surface:
         ax_side.set_ylim(cz - half, cz + half)        
 
         # draw the surface grid
-        surf_grid = self._surface_grid()
         grid_segments = [
-            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y'], surf_grid.nodes[u]['z']),
-             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'], surf_grid.nodes[v]['z'])]
-            for u, v in surf_grid.edges()
+            [(self.surf_grid.nodes[u]['x'], self.surf_grid.nodes[u]['y'], self.surf_grid.nodes[u]['z']),
+             (self.surf_grid.nodes[v]['x'], self.surf_grid.nodes[v]['y'], self.surf_grid.nodes[v]['z'])]
+            for u, v in self.surf_grid.edges()
         ]
         grid_segments1 = [
-            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y']),
-             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'])]
-            for u, v in surf_grid.edges()
+            [(self.surf_grid.nodes[u]['x'], self.surf_grid.nodes[u]['y']),
+             (self.surf_grid.nodes[v]['x'], self.surf_grid.nodes[v]['y'])]
+            for u, v in self.surf_grid.edges()
         ]
         grid_segments2 = [
-            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['z']),
-             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['z'])]
-            for u, v in surf_grid.edges()
+            [(self.surf_grid.nodes[u]['x'], self.surf_grid.nodes[u]['z']),
+             (self.surf_grid.nodes[v]['x'], self.surf_grid.nodes[v]['z'])]
+            for u, v in self.surf_grid.edges()
         ]
         
         ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
@@ -183,17 +189,18 @@ class surface:
     def _run(self):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
-            
+            # update variables
+            t += self.dt
             self.q, neighbor_points = self._particle_update(self.q)
-            
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
+            
+            # loop termination check
             if self.total_distance >= self.stop_distance:
                 break
 
+            # log variables for plotting
             self.log.append([t, *self.q])
             self.neighbor_log.append(neighbor_points)
-            
-            t += self.dt
 
     def _particle_update(self, point):
         point            += self.dt * self.q_dot
@@ -235,22 +242,13 @@ class surface:
         return np.array([roll, pitch, yaw])
     
     def _get_neighbor_points(self, point):
-        xyz       = np.array(point[:3])
-        surf_grid = self._surface_grid()
-        R_surf    = self._rotation_lg(*self.surface_abg)
-        e1, e2    = R_surf[:, 0], R_surf[:, 1]
-
-   
-        # 1 x 3 times 3 x 1 with ones inserted via numpy e* ^2 [x,y,z]^T is just a row of R_gl * global x,y,z coordinates (u,v are the [local] flattened version of the global coordinates)
-        u = xyz @ e1
-        v = xyz @ e2
-        spacing = self.subdivision
-
-        i = int(np.clip((u - self.us[0]) // spacing, 0, len(self.us) - 2))
-        j = int(np.clip((v - self.vs[0]) // spacing, 0, len(self.vs) - 2))
-
-        corners = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
-        return [(surf_grid.nodes[n]['x'], surf_grid.nodes[n]['y'], surf_grid.nodes[n]['z']) for n in corners]
+        i = int(np.clip((point[0] - self.us[0]) // self.subdivision, 0, len(self.us) - 2))
+        j = int(np.clip((point[1] - self.vs[0]) // self.subdivision, 0, len(self.vs) - 2))
+        
+        corners         = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
+        neighbor_points = [(self.surf_grid.nodes[n]['x'], self.surf_grid.nodes[n]['y'], self.surf_grid.nodes[n]['z']) for n in corners]
+        
+        return neighbor_points
     
     def _surface_grid(self):
         R_surf  = self._rotation_lg(*self.surface_abg)
