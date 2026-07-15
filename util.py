@@ -1,45 +1,46 @@
-import os
-from matplotlib.collections import LineCollection
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from matplotlib.collections import LineCollection
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
-class surface:
-    def __init__(self):
+class Surface:
+    def __init__(self, is_surface_pitched: bool = False):
         # simulation parameters
-        self.surface_abg      = np.array([ 0, 0.0, 0])
-        self.b                = 1.75
-        self.l                = 2.349
-        self.dt               = 1/100  
-        self.u_split          = 1  # u-value where the grid switches to surface_abg2
-        self.transition_tiles = self.b  # tiles over which the offset ramps down past u_split
-        self.offset           = np.array([0, 0, -2*self.b])
-        self.stop_time        = 300.0
-        self.total_distance   = 0.0
-        self.front_contact    = False
-        self.q                = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
-        self.q_dot            = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        self.log              = []
-        self.neighbor_points  = []
-        self.neighbor_log     = []
-        self.front_log        = []
+        self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
+        self.b                  = 1.75
+        self.l                  = 2.349
+        self.dt                 = 1/100  
+        self.u_split            = 1  # u-value where the grid switches to surface_abg2
+        self.v_split            = 1  # u-value where the grid switches to surface_abg2
+        self.stop_time          = 300.0
+        self.total_distance     = 0.0
+        #TODO: have the roll and pitch update at the same time as the Z height
+        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
+        self.q_dot              = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.is_surface_pitched = is_surface_pitched
+        self.transition_tiles   = self.b  # tiles over which the offset ramps down past u_split
+        self.offset             = np.array([0, 0, -2*self.b])
+        self.log                = []
+        self.neighbor_points    = []
+        self.neighbor_log       = []
+        self.front_log          = []
         
         # set up the surface grid
-        self.u_range         = (0, 2.5 * self.b) 
-        self.v_range         = (-self.b/2, self.b/2)
-        self.us              = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
-        self.vs              = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
-        self.stop_distance   = self.us[-1] - self.us[0]
-        self.surf_grid       = self._surface_grid()
+        self.u_range       = (        0, 2.5 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (        0, 2.5 * self.b)
+        self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
+        self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
+        self.stop_distance = (self.us[-1] - self.us[0]) if is_surface_pitched else (self.vs[-1] - self.vs[0])
+        self.surf_grid     = self._surface_grid()
 
         # put particle on the surface at the start of the simulation
         points, neighbor_points = self._multi_particle_update()
         self.log.append([0, *self.q])
         self.front_log.append(np.array(points[1]))
         self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
-        self.q_dot           = np.array([2, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.q_dot = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
 
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -47,18 +48,18 @@ class surface:
         return self.b / division_factor
 
     def _surface_grid(self):
-        R_surf  = self._rotation_lg(*self.surface_abg)
+        R_surf     = self._rotation_lg(*self.surface_abg)
         e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
-
-        G = nx.grid_2d_graph(len(self.us), len(self.vs))
-        # snap the ramp to grid nodes (start at the last node <= u_split, span a whole
-        # number of tiles) so every ramp segment has the same slope
+        G          = nx.grid_2d_graph(len(self.us), len(self.vs))
         u_start    = self.us[self.us <= self.u_split][-1]
+        v_start    = self.vs[self.vs <= self.v_split][-1]
         ramp_width = max(1, round(self.transition_tiles)) * self.subdivision
         for i, u in enumerate(self.us):
             for j, v in enumerate(self.vs):
-                # full offset for u <= u_start, then a linear ramp to zero over ramp_width
-                w = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
+                # full offset for * <= *_start, then a linear ramp to zero over ramp_width
+                u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
+                v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
+                w       = u_clip if self.is_surface_pitched else v_clip
                 x, y, z = u * e1 + v * e2 + (1 - w) * self.offset * e3
                 node = G.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
@@ -87,37 +88,54 @@ class surface:
 
         print("Rendering GIF...")
         
-        # set up the figure and axes for the animation
-        fig = plt.figure(figsize=(14, 7))
-        ax = fig.add_subplot(1,3,3, projection='3d')
-        ax_top  = fig.add_subplot(1,3,2)
-        ax_side = fig.add_subplot(1,3,1)
-        
         # set axis limits based on the logged data (and neighbor points, if any)
-        margin = 1.0
+        margin = 0.5
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
         front_data    = np.array(self.front_log)[::2]
         neighbor_data = self.neighbor_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
+        grid_pts = np.array([[self.surf_grid.nodes[n]['x'],
+                              self.surf_grid.nodes[n]['y'],
+                              self.surf_grid.nodes[n]['z']] for n in self.surf_grid.nodes])
 
-        all_x = np.concatenate([data[:, 1], front_data[:, 0], all_neighbor_pts[:, 0]])
-        all_y = np.concatenate([data[:, 2], front_data[:, 1], all_neighbor_pts[:, 1]])
-        all_z = np.concatenate([data[:, 3], front_data[:, 2], all_neighbor_pts[:, 2]])
+        # include the surface grid so it isn't clipped flush at a panel edge
+        all_x = np.concatenate([data[:, 1], front_data[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
+        all_y = np.concatenate([data[:, 2], front_data[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
+        all_z = np.concatenate([data[:, 3], front_data[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
         
         cx     = (all_x.max() + all_x.min()) / 2
         cy     = (all_y.max() + all_y.min()) / 2
         cz     = (all_z.max() + all_z.min()) / 2
-        half   = max(all_x.max() - all_x.min(),
-                     all_y.max() - all_y.min(),
-                     all_z.max() - all_z.min()) / 2 + margin
+        half_x = (all_x.max() - all_x.min()) / 2 + margin
+        half_y = (all_y.max() - all_y.min()) / 2 + margin
+        half_z = (all_z.max() - all_z.min()) / 2 + margin
+
+        # set up the figure and axes for the animation
+        # 2x3 layout: top view (X-Y) | (blank)         | 3D view (spans rows)
+        #             side view (X-Z)| back view (Y-Z) |
+        # row/column ratios match the per-axis data spans so each equal-aspect
+        # panel exactly fills its slot; the 3D view gets a full-height square
+        # column so it is the largest panel
+        h3d   = half_y + half_z
+        w, h  = half_x + half_y + h3d, half_y + half_z
+        scale = 12 / max(w, h)
+        fig   = plt.figure(figsize=(w * scale, h * scale), layout='constrained')
+        gs    = fig.add_gridspec(2, 3, width_ratios=[half_x, half_y, h3d],
+                                 height_ratios=[half_y, half_z])
+        ax_top  = fig.add_subplot(gs[0, 0])
+        ax      = fig.add_subplot(gs[:, 2], projection='3d')
+        ax_side = fig.add_subplot(gs[1, 0])
+        ax_back = fig.add_subplot(gs[1, 1])
         
-        ax.set_xlim( cx - half, cx + half)
-        ax.set_ylim( cy - half, cy + half)
-        ax.set_zlim( cz - half, cz + half)
-        ax_top.set_xlim(cx - half, cx + half)
-        ax_top.set_ylim(cy - half, cy + half)
-        ax_side.set_xlim(cx - half, cx + half)
-        ax_side.set_ylim(cz - half, cz + half)        
+        ax.set_xlim( cx - half_x, cx + half_x)
+        ax.set_ylim( cy - half_y, cy + half_y)
+        ax.set_zlim( cz - half_z, cz + half_z)
+        ax_top.set_xlim(cx - half_x, cx + half_x)
+        ax_top.set_ylim(cy - half_y, cy + half_y)
+        ax_back.set_xlim(cy - half_y, cy + half_y)
+        ax_back.set_ylim(cz - half_z, cz + half_z)
+        ax_side.set_xlim(cx - half_x, cx + half_x)
+        ax_side.set_ylim(cz - half_z, cz + half_z)
 
         # draw the surface grid
         grid_segments = [
@@ -135,13 +153,19 @@ class surface:
              (self.surf_grid.nodes[v]['x'], self.surf_grid.nodes[v]['z'])]
             for u, v in self.surf_grid.edges()
         ]
-        
+        grid_segments3 = [
+            [(self.surf_grid.nodes[u]['y'], self.surf_grid.nodes[u]['z']),
+             (self.surf_grid.nodes[v]['y'], self.surf_grid.nodes[v]['z'])]
+            for u, v in self.surf_grid.edges()
+        ]
+
         ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
         ax_top.add_collection(LineCollection(grid_segments1, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
+        ax_back.add_collection(LineCollection(grid_segments3, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
         ax_side.add_collection(LineCollection(grid_segments2, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
 
         # remaining plot settings
-        ax.set_box_aspect([1, 1, 1])
+        ax.set_box_aspect((half_x, half_y, half_z), zoom=0.85)
         ax.grid(False)
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
@@ -152,6 +176,11 @@ class surface:
         ax_top.set_xlabel("X (m)")
         ax_top.set_ylabel("Y (m)")
         
+        ax_back.set_aspect('equal')
+        ax_back.grid(False)
+        ax_back.set_xlabel("Y (m)")
+        ax_back.set_ylabel("Z (m)")
+
         ax_side.set_aspect('equal')
         ax_side.grid(False)
         ax_side.set_xlabel("X (m)")
@@ -160,11 +189,13 @@ class surface:
         # orange line connecting the current q and f positions, updated each frame
         link,      = ax.plot([], [], [], color='darkorange', linewidth=1.5)
         link_top,  = ax_top.plot([], [], color='darkorange', linewidth=1.5)
+        link_back, = ax_back.plot([], [], color='darkorange', linewidth=1.5)
         link_side, = ax_side.plot([], [], color='darkorange', linewidth=1.5)
 
         # green scatter artists for grid vertices within one tile length of the point, updated each frame
         green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
         green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
+        green_back = ax_back.scatter([], [], color='green', s=40, zorder=5)
         green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
 
         # red arrow at the tracked point showing the particle's orientation,
@@ -181,6 +212,9 @@ class surface:
         qdot_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
                                    color='red', scale=1 / arrow_len, scale_units='xy',
                                    angles='xy', zorder=6)
+        qdot_back = ax_back.quiver(data[0, 2], data[0, 3], fwd0[1], fwd0[2],
+                                    color='red', scale=1 / arrow_len, scale_units='xy',
+                                    angles='xy', zorder=6)
         qdot_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
                                     color='red', scale=1 / arrow_len, scale_units='xy',
                                     angles='xy', zorder=6)
@@ -190,6 +224,9 @@ class surface:
         front_arrow_top  = ax_top.quiver(front_data[0, 0], front_data[0, 1], fwd0[0], fwd0[1],
                                           color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                           angles='xy', zorder=6)
+        front_arrow_back = ax_back.quiver(front_data[0, 1], front_data[0, 2], fwd0[1], fwd0[2],
+                                           color='darkorange', scale=1 / arrow_len, scale_units='xy',
+                                           angles='xy', zorder=6)
         front_arrow_side = ax_side.quiver(front_data[0, 0], front_data[0, 2], fwd0[0], fwd0[2],
                                            color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=6)
@@ -203,10 +240,13 @@ class surface:
             link.set_data([qx, fx], [qy, fy])
             link.set_3d_properties([qz, fz])
             link_top.set_data([qx, fx], [qy, fy])
+            link_back.set_data([qy, fy], [qz, fz])
             link_side.set_data([qx, fx], [qz, fz])
 
             front_arrow_top.set_offsets([[fx, fy]])
             front_arrow_top.set_UVC(front_fwd[0], front_fwd[1])
+            front_arrow_back.set_offsets([[fy, fz]])
+            front_arrow_back.set_UVC(front_fwd[1], front_fwd[2])
             front_arrow_side.set_offsets([[fx, fz]])
             front_arrow_side.set_UVC(front_fwd[0], front_fwd[2])
             if front_arrow_3d[0] is not None:
@@ -218,6 +258,7 @@ class surface:
             pts = np.array(neighbor_data[i]) if neighbor_data[i] else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
             green_top.set_offsets(pts[:, [0, 1]])
+            green_back.set_offsets(pts[:, [1, 2]])
             green_side.set_offsets(pts[:, [0, 2]])
 
         def set_qdot(i):
@@ -225,6 +266,8 @@ class surface:
             fwd = _forward(i)
             qdot_top.set_offsets([[x, y]])
             qdot_top.set_UVC(fwd[0], fwd[1])
+            qdot_back.set_offsets([[y, z]])
+            qdot_back.set_UVC(fwd[1], fwd[2])
             qdot_side.set_offsets([[x, z]])
             qdot_side.set_UVC(fwd[0], fwd[2])
             if qdot_3d[0] is not None:
@@ -236,9 +279,28 @@ class surface:
         set_neighbors(0)
         set_qdot(0)
 
-        ax_top.legend([link_top, green_top],
-                      ["q–f link", "grid neighbors"],
-                      loc="upper right", fontsize=8)
+        ax_side.legend([link_side, green_side],
+                       ["q–f link", "grid neighbors"],
+                       loc="upper right", fontsize=8)
+
+        # the constrained-layout solver converges over the first few draws,
+        # visibly nudging the panels; converge it now, then freeze the layout
+        # so every animation frame uses identical panel positions
+        ax_top.set_title(f"t = {data[0, 0]:.2f} s")
+        fig.canvas.draw()
+
+        # match the 3D ticks to the flat views' ticks (the 3D locator
+        # overcrowds foreshortened axes)
+        ax.set_xticks([t for t in ax_top.get_xticks()
+                       if cx - half_x <= t <= cx + half_x])
+        ax.set_yticks([t for t in ax_top.get_yticks()
+                       if cy - half_y <= t <= cy + half_y])
+        ax.set_zticks([t for t in ax_side.get_yticks()
+                       if cz - half_z <= t <= cz + half_z])
+
+        for _ in range(2):
+            fig.canvas.draw()
+        fig.set_layout_engine('none')
 
         # animation update function
         def update(i):
@@ -247,9 +309,10 @@ class surface:
             set_qdot(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            return (link, link_top, link_side,
-                    front_arrow_top, front_arrow_side, front_arrow_3d[0],
-                    green_3d, green_top, green_side, qdot_top, qdot_side, qdot_3d[0],)
+            return (link, link_top, link_back, link_side,
+                    front_arrow_top, front_arrow_back, front_arrow_side, front_arrow_3d[0],
+                    green_3d, green_top, green_back, green_side,
+                    qdot_top, qdot_back, qdot_side, qdot_3d[0],)
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
@@ -335,34 +398,10 @@ class surface:
         return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
             
     def _multi_particle_contact_orientation(self, point):
-        """
-        Roll/pitch/yaw of the surface-snapped front point: pitch is the
-        elevation of the line from the center of mass to the front point
-        (measured against the horizontal distance along the heading), roll
-        comes from the lateral slope of the tile under the front point, and
-        yaw is the global-frame heading of q_dot — the same conventions as
-        _particle_orientation.
-        """
         vel   = np.array(self.q_dot[:3])
-        # speed = np.linalg.norm(vel[:2])
-        # if speed < 1e-9:
-        #     return self.q[3:6].copy()
-
-        # fwd_xy  = vel[:2] / speed
-        # left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
-
-        # corners = self._get_neighbor_points(point)
-        # grad_xy = self._bilinear_gradient(point, corners)
-        # s_l     = np.dot(grad_xy, left_xy)  # lateral slope
-        # s_f     = np.dot(grad_xy, fwd_xy)   # forward slope
-
-        # run   = np.hypot(point[0] - self.q[0], point[1] - self.q[1])
-        # roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
-        # pitch = -np.arctan2(point[2] - self.q[2], run)
-        
-        roll  = np.arctan2(point[2] - self.q[2], point[1] - self.q[1])        
+        roll  =  np.arctan2(point[2] - self.q[2], point[1] - self.q[1])        
         pitch = -np.arctan2(point[2] - self.q[2], point[0] - self.q[0])
-        yaw   = np.arctan2(vel[1], vel[0])
+        yaw   =  np.arctan2(vel[1], vel[0])
 
         return np.array([roll, pitch, yaw])
 
@@ -419,5 +458,5 @@ class surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = surface()
+    my_surface = Surface(is_surface_pitched=False)
     my_surface.run_and_plot()   
