@@ -41,6 +41,55 @@ class surface:
         """Grid spacing, sized relative to the dozer width self.b."""
         return self.b / division_factor
     
+        def _surface_grid(self):
+        R_surf  = self._rotation_lg(*self.surface_abg)
+        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
+
+        G = nx.grid_2d_graph(len(self.us), len(self.vs))
+        for i, u in enumerate(self.us):
+            for j, v in enumerate(self.vs):
+                if (u <= self.u_split): 
+                    x, y, z = u * e1 + v* e2 + self.offset * e3
+                else:
+                    x, y, z = u * e1 + v * e2
+                node = G.nodes[(i, j)]
+                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
+                node["visited_last"] = False
+        return G
+    
+    def _surface_grid(self):
+        R_surf  = self._rotation_lg(*self.surface_abg)
+        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
+
+        G = nx.grid_2d_graph(len(self.us), len(self.vs))
+        for i, u in enumerate(self.us):
+            for j, v in enumerate(self.vs):
+                if (u <= self.u_split): 
+                    x, y, z = u * e1 + v* e2 + self.offset * e3
+                else:
+                    x, y, z = u * e1 + v * e2
+                node = G.nodes[(i, j)]
+                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
+                node["visited_last"] = False
+        return G
+    
+    def _rotation_lg(self, a, B, g):
+        """Rotation matrix: local → global frame"""
+        return self._rotation_gl(a, B, g).T
+
+    def _rotation_gl(self, a, B, g):
+        """Rotation matrix: global → local frame"""
+        # change to accept input array
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB = np.sin(B), np.cos(B)
+        sg, cg = np.sin(g), np.cos(g)
+
+        return np.array([
+            [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
+            [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
+            [-sB,                      sa * cB,                  ca * cB]
+        ]).T
+ 
     def run_and_plot(self):
         self._run()
 
@@ -191,7 +240,8 @@ class surface:
         for _ in range(int(self.stop_time / self.dt)):
             # update variables
             t += self.dt
-            self.q, neighbor_points = self._particle_update(self.q)
+            neighbor_points = self._particle_update(self.q)
+            _, _ = self._multi_particle_update()
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
             
             # loop termination check
@@ -202,45 +252,40 @@ class surface:
             self.log.append([t, *self.q])
             self.neighbor_log.append(neighbor_points)
 
-    def _particle_update(self, point):
-        point            += self.dt * self.q_dot
-        point[3:6]        = self._particle_orientation(point, self.q_dot)
+    def _particle_update(self):
+        self.q           += self.dt * self.q_dot
+        neighbor_points   = self._get_neighbor_points(self.q)
+        
+        self.q[2] = self._bilinear_height(self.q, neighbor_points)
+        self.q[3:6]       = self._particle_orientation()
+        return neighbor_points
+    
+    def _multi_particle_update(self):
+        # self.q += self.dt * self.q_dot
+        
+        forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
+        f       = self.q + np.concatenate((forward_position, self.q[3:6]))
+
+        neighbor_points_f, f_h = self._particle_height(f)
+        neighbor_points_q, self.q[2] = self._particle_height(self.q)
+        
+        if f_h > 0:
+            f[2]        = f_h
+            self.q[3:6] = self._multi_particle_contact_orientation(f)
+            f[3:6]      = self.q[3:6]
+        else:    
+            self.q[3:6] = self._particle_orientation()
+        
+        points          = [self.q, f]
+        neighbor_points = [neighbor_points_q, neighbor_points_f]
+        
+        return points, neighbor_points
+    
+    def _particle_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
         height_to_surface = self._bilinear_height(point, neighbor_points)
-        point[2]          = height_to_surface
-        return point, neighbor_points
+        return neighbor_points, height_to_surface
 
-    def _particle_orientation(self, point, q_dot):
-        """
-        Roll/pitch/yaw of a particle crossing the current tile: pitch and
-        roll come from the tile's height-field gradient (the edges' angles,
-        blended the same s,t weights as _bilinear_height) read off along and
-        across the direction of travel; yaw is the global-frame heading of
-        q_dot, arctan2(vel_y, vel_x), so (roll, pitch, yaw) form a consistent
-        ZYX Euler triple for _rotation_lg.
-        """
-        corners = self._get_neighbor_points(point)
-        grad_xy = self._bilinear_gradient(point, corners)
-
-        vel   = np.array(q_dot[:3])
-        speed = np.linalg.norm(vel[:2])
-        if speed < 1e-9:
-            return self.q[3:6].copy()
-
-        # the velocity in the the local body frame
-        fwd_xy  = vel[:2] / speed
-        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
-        
-        s_f = np.dot(grad_xy, fwd_xy)   # forward slope
-        s_l = np.dot(grad_xy, left_xy)  # lateral slope
-         
-        pitch = np.arctan2(-s_f, 1.0)                 # exact as-is
-        roll  = np.arctan2( s_l, np.sqrt(1.0 + s_f**2))  # generalized
-
-        yaw = np.arctan2(vel[1], vel[0])
-
-        return np.array([roll, pitch, yaw])
-    
     def _get_neighbor_points(self, point):
         i = int(np.clip((point[0] - self.us[0]) // self.subdivision, 0, len(self.us) - 2))
         j = int(np.clip((point[1] - self.vs[0]) // self.subdivision, 0, len(self.vs) - 2))
@@ -250,39 +295,59 @@ class surface:
         
         return neighbor_points
     
-    def _surface_grid(self):
-        R_surf  = self._rotation_lg(*self.surface_abg)
-        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
+    def _bilinear_height(self, point, corners):
+        """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
+        p1, p2, p3, p4 = (np.array(c) for c in corners)
+        h1, h2, h3, h4 = p1[2], p2[2], p3[2], p4[2]
 
-        G = nx.grid_2d_graph(len(self.us), len(self.vs))
-        for i, u in enumerate(self.us):
-            for j, v in enumerate(self.vs):
-                if (u <= self.u_split): 
-                    x, y, z = u * e1 + v* e2 + self.offset * e3
-                else:
-                    x, y, z = u * e1 + v * e2
-                node = G.nodes[(i, j)]
-                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-                node["visited_last"] = False
-        return G
+        xy  = np.array(point[:2])
+        e_s = (p2 - p1)[:2]
+        e_t = (p3 - p1)[:2]
+
+        s = np.clip(np.dot(xy - p1[:2], e_s) / np.dot(e_s, e_s), 0.0, 1.0)
+        t = np.clip(np.dot(xy - p1[:2], e_t) / np.dot(e_t, e_t), 0.0, 1.0)
+
+        return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
+            
+    def _multi_particle_contact_orientation(self, point):
+        vel   = np.array(self.q_dot[:3])
+        
+        roll  = np.arctan2(point[2] - self.q[2], point[1] - self.q[1])        
+        pitch = np.arctan2(point[0] - self.q[0], point[2] - self.q[2])
+        yaw   = np.arctan2(vel[1], vel[0])
+
+        return np.array([roll, pitch, yaw])
+
+    def _particle_orientation(self):
+        """
+        Roll/pitch/yaw of the center of mass crossing the current tile: pitch and
+        roll come from the tile's height-field gradient (the edges' angles,
+        blended the same s,t weights as _bilinear_height) read off along and
+        across the direction of travel; yaw is the global-frame heading of
+        q_dot, arctan2(vel_y, vel_x), so (roll, pitch, yaw) form a consistent
+        ZYX Euler triple for _rotation_lg.
+        """
+        corners = self._get_neighbor_points(self.q)
+        grad_xy = self._bilinear_gradient(self.q, corners)
+
+        vel   = np.array(self.q_dot[:3])
+        speed = np.linalg.norm(vel[:2])
+        if speed < 1e-9:
+            return self.q[3:6].copy()
+
+        # the velocity in the the local body frame
+        fwd_xy  = vel[:2] / speed
+        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
+        
+        s_l = np.dot(grad_xy, left_xy)  # lateral slope
+        s_f = np.dot(grad_xy, fwd_xy)   # forward slope
+         
+        roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
+        pitch = np.arctan2(-s_f, 1.0)                 
+        yaw   = np.arctan2(vel[1], vel[0])
+
+        return np.array([roll, pitch, yaw])
     
-    def _rotation_lg(self, a, B, g):
-        """Rotation matrix: local → global frame"""
-        return self._rotation_gl(a, B, g).T
-
-    def _rotation_gl(self, a, B, g):
-        """Rotation matrix: global → local frame"""
-        # change to accept input array
-        sa, ca = np.sin(a), np.cos(a)
-        sB, cB = np.sin(B), np.cos(B)
-        sg, cg = np.sin(g), np.cos(g)
-
-        return np.array([
-            [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
-            [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
-            [-sB,                      sa * cB,                  ca * cB]
-        ]).T
-
     def _bilinear_gradient(self, point, corners):
         """(dh/dx, dh/dy) of the same bilinear patch _bilinear_height blends,
         found by differentiating it w.r.t. the tile's (s,t) edge parameters
@@ -305,19 +370,9 @@ class surface:
         # [dt/dx, dt/dy]^T = e_t / (e_t . e_t).
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
-    def _bilinear_height(self, point, corners):
-        """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
-        p1, p2, p3, p4 = (np.array(c) for c in corners)
-        h1, h2, h3, h4 = p1[2], p2[2], p3[2], p4[2]
 
-        xy  = np.array(point[:2])
-        e_s = (p2 - p1)[:2]
-        e_t = (p3 - p1)[:2]
 
-        s = np.clip(np.dot(xy - p1[:2], e_s) / np.dot(e_s, e_s), 0.0, 1.0)
-        t = np.clip(np.dot(xy - p1[:2], e_t) / np.dot(e_t, e_t), 0.0, 1.0)
 
-        return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
 
 if __name__ == "__main__":
     my_surface = surface()
