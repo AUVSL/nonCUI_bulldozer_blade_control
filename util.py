@@ -9,21 +9,22 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 class surface:
     def __init__(self):
         # simulation parameters
-        self.surface_abg     = np.array([ 0, 0.0, 0])
-        self.b               = 1.75
-        self.l               = 2.349
-        self.dt              = 1/100  
-        self.u_split         = 1  # u-value where the grid switches to surface_abg2
+        self.surface_abg      = np.array([ 0, 0.0, 0])
+        self.b                = 1.75
+        self.l                = 2.349
+        self.dt               = 1/100  
+        self.u_split          = 1  # u-value where the grid switches to surface_abg2
         self.transition_tiles = self.b  # tiles over which the offset ramps down past u_split
-        self.offset          = np.array([0, 0, -2*self.b])
-        self.stop_time       = 300.0
-        self.total_distance  = 0.0
-        self.q               = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
-        self.q_dot           = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        self.log             = []
-        self.neighbor_points = []
-        self.neighbor_log    = []
-        self.front_log       = []
+        self.offset           = np.array([0, 0, -2*self.b])
+        self.stop_time        = 300.0
+        self.total_distance   = 0.0
+        self.front_contact    = False
+        self.q                = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
+        self.q_dot            = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.log              = []
+        self.neighbor_points  = []
+        self.neighbor_log     = []
+        self.front_log        = []
         
         # set up the surface grid
         self.u_range         = (0, 2.5 * self.b) 
@@ -278,18 +279,26 @@ class surface:
     
     def _multi_particle_update(self):
         self.q += self.dt * self.q_dot
+        neighbor_points_q, self.q[2] = self._particle_height(self.q)
         
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
         f  = self.q + np.concatenate((forward_position, np.zeros(3)))
 
         neighbor_points_f, surface_height_f = self._particle_height(f)
-        neighbor_points_q, self.q[2] = self._particle_height(self.q)
-        print(surface_height_f - f[2])
-        if (surface_height_f - f[2]) > 0:
+
+        if surface_height_f - f[2] > 0:
+            for _ in range(20):
+                # 20 iterations gets us to about 1e-6 error in the height so length conservation is okay
+                f[2]             = surface_height_f
+                angles           = self._multi_particle_contact_orientation(f)
+                forward_position = self._rotation_lg(*angles)[:, 0] * self.l / 2
+                f                = np.concatenate((self.q[:3] + forward_position, angles))
+                neighbor_points_f, surface_height_f = self._particle_height(f)
+                if abs(surface_height_f - f[2]) < 1e-9:
+                    break
             f[2]        = surface_height_f
-            f[3:6] = self._multi_particle_contact_orientation(f)
             self.q[3:6] = f[3:6]
-        else:    
+        else:
             self.q[3:6] = self._particle_orientation()
         
         points          = [self.q, f]
