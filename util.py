@@ -3,6 +3,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.collections import LineCollection
+from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class Surface:
@@ -117,10 +118,12 @@ class Surface:
         # panel exactly fills its slot; the 3D view gets a full-height square
         # column so it is the largest panel
         h3d   = half_y + half_z
-        w, h  = half_x + half_y + h3d, half_y + half_z
+        w3d   = 0.7 * h3d  # narrower than square: the projected 3D content
+                           # doesn't fill its slot's full width
+        w, h  = half_x + half_y + w3d, half_y + half_z
         scale = 12 / max(w, h)
         fig   = plt.figure(figsize=(w * scale, h * scale), layout='constrained')
-        gs    = fig.add_gridspec(2, 3, width_ratios=[half_x, half_y, h3d],
+        gs    = fig.add_gridspec(2, 3, width_ratios=[half_x, half_y, w3d],
                                  height_ratios=[half_y, half_z])
         ax_top  = fig.add_subplot(gs[0, 0])
         ax      = fig.add_subplot(gs[:, 2], projection='3d')
@@ -136,6 +139,12 @@ class Surface:
         ax_back.set_ylim(cz - half_z, cz + half_z)
         ax_side.set_xlim(cx - half_x, cx + half_x)
         ax_side.set_ylim(cz - half_z, cz + half_z)
+
+        # pin tick spacing to whole meters so panel resizes can't switch the
+        # locators to fractional steps that crowd the foreshortened 3D axes
+        for a2d in (ax_top, ax_back, ax_side):
+            a2d.xaxis.set_major_locator(MaxNLocator(integer=True))
+            a2d.yaxis.set_major_locator(MaxNLocator(integer=True))
 
         # draw the surface grid
         grid_segments = [
@@ -165,7 +174,7 @@ class Surface:
         ax_side.add_collection(LineCollection(grid_segments2, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
 
         # remaining plot settings
-        ax.set_box_aspect((half_x, half_y, half_z), zoom=0.85)
+        ax.set_box_aspect((half_x, half_y, half_z), zoom=1.0)
         ax.grid(False)
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
