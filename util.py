@@ -9,12 +9,13 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 class surface:
     def __init__(self):
         # simulation parameters
-        self.surface_abg     = np.array([ 0, 0.2, 0])
-        self.u_split         = 5  # u-value where the grid switches to surface_abg2
-        self.offset          = np.array([0, 0, 1])
+        self.surface_abg     = np.array([ 0, 0.0, 0])
         self.b               = 1.75
         self.l               = 2.349
         self.dt              = 1/100  
+        self.u_split         = 1  # u-value where the grid switches to surface_abg2
+        self.transition_tiles = self.b  # tiles over which the offset ramps down past u_split
+        self.offset          = np.array([0, 0, 2*self.b])
         self.stop_time       = 300.0
         self.total_distance  = 0.0
         self.q               = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
@@ -22,52 +23,42 @@ class surface:
         self.log             = []
         self.neighbor_points = []
         self.neighbor_log    = []
+        self.front_log       = []
         
         # set up the surface grid
-        self.u_range         = (0, 5 * self.b) 
-        self.v_range         = (-self.b, self.b)
+        self.u_range         = (0, 2.5 * self.b) 
+        self.v_range         = (-self.b/2, self.b/2)
         self.us              = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs              = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
         self.stop_distance   = self.us[-1] - self.us[0]
         self.surf_grid       = self._surface_grid()
 
         # put particle on the surface at the start of the simulation
-        self._particle_update(self.q)
+        points, neighbor_points = self._multi_particle_update()
         self.log.append([0, *self.q])
-        self.q_dot           = np.array([5, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.front_log.append(np.array(points[1]))
+        self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
+        self.q_dot           = np.array([2, 0.0, 0.0, 0.0, 0.0, 0.0])
 
     @property
     def subdivision(self, division_factor: float = 2.0):
         """Grid spacing, sized relative to the dozer width self.b."""
         return self.b / division_factor
-    
-        def _surface_grid(self):
-        R_surf  = self._rotation_lg(*self.surface_abg)
-        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
 
-        G = nx.grid_2d_graph(len(self.us), len(self.vs))
-        for i, u in enumerate(self.us):
-            for j, v in enumerate(self.vs):
-                if (u <= self.u_split): 
-                    x, y, z = u * e1 + v* e2 + self.offset * e3
-                else:
-                    x, y, z = u * e1 + v * e2
-                node = G.nodes[(i, j)]
-                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-                node["visited_last"] = False
-        return G
-    
     def _surface_grid(self):
         R_surf  = self._rotation_lg(*self.surface_abg)
         e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
 
         G = nx.grid_2d_graph(len(self.us), len(self.vs))
+        # snap the ramp to grid nodes (start at the last node <= u_split, span a whole
+        # number of tiles) so every ramp segment has the same slope
+        u_start    = self.us[self.us <= self.u_split][-1]
+        ramp_width = max(1, round(self.transition_tiles)) * self.subdivision
         for i, u in enumerate(self.us):
             for j, v in enumerate(self.vs):
-                if (u <= self.u_split): 
-                    x, y, z = u * e1 + v* e2 + self.offset * e3
-                else:
-                    x, y, z = u * e1 + v * e2
+                # full offset for u <= u_start, then a linear ramp to zero over ramp_width
+                w = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
+                x, y, z = u * e1 + v * e2 + (1 - w) * self.offset * e3
                 node = G.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
                 node["visited_last"] = False
@@ -104,14 +95,14 @@ class surface:
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 1.0
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
+        front_data    = np.array(self.front_log)[::2]
         neighbor_data = self.neighbor_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
-        if all_neighbor_pts.size:
-            all_x = np.concatenate([data[:, 1], all_neighbor_pts[:, 0]])
-            all_y = np.concatenate([data[:, 2], all_neighbor_pts[:, 1]])
-            all_z = np.concatenate([data[:, 3], all_neighbor_pts[:, 2]])
-        else:
-            all_x, all_y, all_z = data[:, 1], data[:, 2], data[:, 3]
+
+        all_x = np.concatenate([data[:, 1], front_data[:, 0], all_neighbor_pts[:, 0]])
+        all_y = np.concatenate([data[:, 2], front_data[:, 1], all_neighbor_pts[:, 1]])
+        all_z = np.concatenate([data[:, 3], front_data[:, 2], all_neighbor_pts[:, 2]])
+        
         cx     = (all_x.max() + all_x.min()) / 2
         cy     = (all_y.max() + all_y.min()) / 2
         cz     = (all_z.max() + all_z.min()) / 2
@@ -165,13 +156,10 @@ class surface:
         ax_side.set_xlabel("X (m)")
         ax_side.set_ylabel("Z (m)")
 
-        ax.scatter(data[0, 1], data[0, 2], data[0, 3], color='blue', s=60, zorder=5)
-        ax_top.scatter(data[0, 1],  data[0, 2], color='blue', s=60, zorder=5)
-        ax_side.scatter(data[0, 1],  data[0, 3], color='blue', s=60, zorder=5)
-
-        trail,      = ax.plot([], [], [], 'b-', linewidth=1.5)
-        trail_top,  = ax_top.plot([], [], 'b-', linewidth=1.5)
-        trail_side, = ax_side.plot([], [], 'b-', linewidth=1.5)
+        # orange line connecting the current q and f positions, updated each frame
+        link,      = ax.plot([], [], [], color='darkorange', linewidth=1.5)
+        link_top,  = ax_top.plot([], [], color='darkorange', linewidth=1.5)
+        link_side, = ax_side.plot([], [], color='darkorange', linewidth=1.5)
 
         # green scatter artists for grid vertices within one tile length of the point, updated each frame
         green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
@@ -184,6 +172,9 @@ class surface:
 
         def _forward(i):
             return self._rotation_lg(*data[i, 4:7])[:, 0]
+        
+        def _front_forward(i):
+            return self._rotation_lg(*front_data[i, 3:])[:, 0]
 
         fwd0 = _forward(0)
         qdot_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
@@ -193,6 +184,34 @@ class surface:
                                     color='red', scale=1 / arrow_len, scale_units='xy',
                                     angles='xy', zorder=6)
         qdot_3d = [None]  # mplot3d quiver has no in-place update, so remove/recreate each frame
+
+        # orange arrow at the front point, same forward axis (f shares q's orientation)
+        front_arrow_top  = ax_top.quiver(front_data[0, 0], front_data[0, 1], fwd0[0], fwd0[1],
+                                          color='darkorange', scale=1 / arrow_len, scale_units='xy',
+                                          angles='xy', zorder=6)
+        front_arrow_side = ax_side.quiver(front_data[0, 0], front_data[0, 2], fwd0[0], fwd0[2],
+                                           color='darkorange', scale=1 / arrow_len, scale_units='xy',
+                                           angles='xy', zorder=6)
+        front_arrow_3d = [None]
+
+        def set_front(i):
+            qx, qy, qz = data[i, 1], data[i, 2], data[i, 3]
+            fx, fy, fz = front_data[i, 0], front_data[i,1] , front_data[i,2]
+            front_fwd = _front_forward(i)
+
+            link.set_data([qx, fx], [qy, fy])
+            link.set_3d_properties([qz, fz])
+            link_top.set_data([qx, fx], [qy, fy])
+            link_side.set_data([qx, fx], [qz, fz])
+
+            front_arrow_top.set_offsets([[fx, fy]])
+            front_arrow_top.set_UVC(front_fwd[0], front_fwd[1])
+            front_arrow_side.set_offsets([[fx, fz]])
+            front_arrow_side.set_UVC(front_fwd[0], front_fwd[2])
+            if front_arrow_3d[0] is not None:
+                front_arrow_3d[0].remove()
+            front_arrow_3d[0] = ax.quiver(fx, fy, fz, front_fwd[0], front_fwd[1], front_fwd[2],
+                                           length=arrow_len, color='darkorange', zorder=6)
 
         def set_neighbors(i):
             pts = np.array(neighbor_data[i]) if neighbor_data[i] else np.empty((0, 3))
@@ -212,20 +231,24 @@ class surface:
             qdot_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
                                     length=arrow_len, color='red', zorder=6)
 
+        set_front(0)
         set_neighbors(0)
         set_qdot(0)
 
+        ax_top.legend([link_top, green_top],
+                      ["q–f link", "grid neighbors"],
+                      loc="upper right", fontsize=8)
+
         # animation update function
         def update(i):
-            trail.set_data(data[:i+1, 1], data[:i+1, 2])
-            trail.set_3d_properties(data[:i+1, 3])
-            trail_top.set_data(data[:i+1, 1], data[:i+1, 2])
-            trail_side.set_data(data[:i+1, 1], data[:i+1, 3])
+            set_front(i)
             set_neighbors(i)
             set_qdot(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            return trail, trail_top, trail_side, green_3d, green_top, green_side, qdot_top, qdot_side, qdot_3d[0],
+            return (link, link_top, link_side,
+                    front_arrow_top, front_arrow_side, front_arrow_3d[0],
+                    green_3d, green_top, green_side, qdot_top, qdot_side, qdot_3d[0],)
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
@@ -240,41 +263,34 @@ class surface:
         for _ in range(int(self.stop_time / self.dt)):
             # update variables
             t += self.dt
-            neighbor_points = self._particle_update(self.q)
-            _, _ = self._multi_particle_update()
+
+            points, neighbor_points = self._multi_particle_update()
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
-            
+
             # loop termination check
             if self.total_distance >= self.stop_distance:
                 break
 
             # log variables for plotting
             self.log.append([t, *self.q])
-            self.neighbor_log.append(neighbor_points)
-
-    def _particle_update(self):
-        self.q           += self.dt * self.q_dot
-        neighbor_points   = self._get_neighbor_points(self.q)
-        
-        self.q[2] = self._bilinear_height(self.q, neighbor_points)
-        self.q[3:6]       = self._particle_orientation()
-        return neighbor_points
+            self.front_log.append(np.array(points[1]))
+            self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
     
     def _multi_particle_update(self):
-        # self.q += self.dt * self.q_dot
+        self.q += self.dt * self.q_dot
         
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
         f       = self.q + np.concatenate((forward_position, self.q[3:6]))
 
-        neighbor_points_f, f_h = self._particle_height(f)
+        neighbor_points_f, surface_height_f = self._particle_height(f)
         neighbor_points_q, self.q[2] = self._particle_height(self.q)
-        
-        if f_h > 0:
-            f[2]        = f_h
-            self.q[3:6] = self._multi_particle_contact_orientation(f)
-            f[3:6]      = self.q[3:6]
-        else:    
-            self.q[3:6] = self._particle_orientation()
+        # print(surface_height_f - f[2])
+        if (surface_height_f - f[2]) > 0:
+            f[2]        = surface_height_f
+            f[3:6] = self._multi_particle_contact_orientation(f)
+            # f[3:6]      = self.q[3:6]
+        # else:    
+        self.q[3:6] = self._particle_orientation()
         
         points          = [self.q, f]
         neighbor_points = [neighbor_points_q, neighbor_points_f]
@@ -313,7 +329,7 @@ class surface:
         vel   = np.array(self.q_dot[:3])
         
         roll  = np.arctan2(point[2] - self.q[2], point[1] - self.q[1])        
-        pitch = np.arctan2(point[0] - self.q[0], point[2] - self.q[2])
+        pitch = -np.arctan2(point[2] - self.q[2], point[0] - self.q[0])
         yaw   = np.arctan2(vel[1], vel[0])
 
         return np.array([roll, pitch, yaw])
@@ -369,10 +385,6 @@ class surface:
         # [ds/dx, ds/dy]^T = e_s / (e_s . e_s), 
         # [dt/dx, dt/dy]^T = e_t / (e_t . e_t).
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
-
-
-
-
 
 if __name__ == "__main__":
     my_surface = surface()
