@@ -112,21 +112,17 @@ class Surface:
         half_z = (all_z.max() - all_z.min()) / 2 + margin
 
         # set up the figure and axes for the animation
-        # 2x3 layout: top view (X-Y) | (blank)         | 3D view (spans rows)
-        #             side view (X-Z)| back view (Y-Z) |
+        # 2x2 layout: top view (X-Y) | 3D view
+        #             side view (X-Z)| back view (Y-Z)
         # row/column ratios match the per-axis data spans so each equal-aspect
-        # panel exactly fills its slot; the 3D view gets a full-height square
-        # column so it is the largest panel
-        h3d   = half_y + half_z
-        w3d   = 0.7 * h3d  # narrower than square: the projected 3D content
-                           # doesn't fill its slot's full width
-        w, h  = half_x + half_y + w3d, half_y + half_z
-        scale = 12 / max(w, h)
+        # panel exactly fills its slot
+        w, h  = half_x + half_y, half_y + half_z
+        scale = 9 / max(w, h)
         fig   = plt.figure(figsize=(w * scale, h * scale), layout='constrained')
-        gs    = fig.add_gridspec(2, 3, width_ratios=[half_x, half_y, w3d],
+        gs    = fig.add_gridspec(2, 2, width_ratios=[half_x, half_y],
                                  height_ratios=[half_y, half_z])
         ax_top  = fig.add_subplot(gs[0, 0])
-        ax      = fig.add_subplot(gs[:, 2], projection='3d')
+        ax      = fig.add_subplot(gs[0, 1], projection='3d')
         ax_side = fig.add_subplot(gs[1, 0])
         ax_back = fig.add_subplot(gs[1, 1])
         
@@ -174,7 +170,7 @@ class Surface:
         ax_side.add_collection(LineCollection(grid_segments2, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
 
         # remaining plot settings
-        ax.set_box_aspect((half_x, half_y, half_z), zoom=1.0)
+        ax.set_box_aspect((half_x, half_y, half_z), zoom=1)
         ax.grid(False)
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
