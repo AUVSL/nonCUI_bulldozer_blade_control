@@ -15,7 +15,7 @@ class surface:
         self.dt              = 1/100  
         self.u_split         = 1  # u-value where the grid switches to surface_abg2
         self.transition_tiles = self.b  # tiles over which the offset ramps down past u_split
-        self.offset          = np.array([0, 0, 2*self.b])
+        self.offset          = np.array([0, 0, -2*self.b])
         self.stop_time       = 300.0
         self.total_distance  = 0.0
         self.q               = np.array([0.0, 0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
@@ -280,17 +280,17 @@ class surface:
         self.q += self.dt * self.q_dot
         
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
-        f       = self.q + np.concatenate((forward_position, self.q[3:6]))
+        f  = self.q + np.concatenate((forward_position, np.zeros(3)))
 
         neighbor_points_f, surface_height_f = self._particle_height(f)
         neighbor_points_q, self.q[2] = self._particle_height(self.q)
-        # print(surface_height_f - f[2])
+        print(surface_height_f - f[2])
         if (surface_height_f - f[2]) > 0:
             f[2]        = surface_height_f
             f[3:6] = self._multi_particle_contact_orientation(f)
-            # f[3:6]      = self.q[3:6]
-        # else:    
-        self.q[3:6] = self._particle_orientation()
+            self.q[3:6] = f[3:6]
+        else:    
+            self.q[3:6] = self._particle_orientation()
         
         points          = [self.q, f]
         neighbor_points = [neighbor_points_q, neighbor_points_f]
@@ -326,7 +326,30 @@ class surface:
         return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
             
     def _multi_particle_contact_orientation(self, point):
+        """
+        Roll/pitch/yaw of the surface-snapped front point: pitch is the
+        elevation of the line from the center of mass to the front point
+        (measured against the horizontal distance along the heading), roll
+        comes from the lateral slope of the tile under the front point, and
+        yaw is the global-frame heading of q_dot — the same conventions as
+        _particle_orientation.
+        """
         vel   = np.array(self.q_dot[:3])
+        # speed = np.linalg.norm(vel[:2])
+        # if speed < 1e-9:
+        #     return self.q[3:6].copy()
+
+        # fwd_xy  = vel[:2] / speed
+        # left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
+
+        # corners = self._get_neighbor_points(point)
+        # grad_xy = self._bilinear_gradient(point, corners)
+        # s_l     = np.dot(grad_xy, left_xy)  # lateral slope
+        # s_f     = np.dot(grad_xy, fwd_xy)   # forward slope
+
+        # run   = np.hypot(point[0] - self.q[0], point[1] - self.q[1])
+        # roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
+        # pitch = -np.arctan2(point[2] - self.q[2], run)
         
         roll  = np.arctan2(point[2] - self.q[2], point[1] - self.q[1])        
         pitch = -np.arctan2(point[2] - self.q[2], point[0] - self.q[0])
