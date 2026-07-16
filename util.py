@@ -18,7 +18,7 @@ class Surface:
         self.stop_time          = 300.0
         self.total_distance     = 0.0
         #TODO: have the roll and pitch update at the same time as the Z height
-        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0])
+        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.is_surface_pitched = is_surface_pitched
         self.transition_tiles   = self.b  # tiles over which the offset ramps down past u_split
@@ -403,10 +403,22 @@ class Surface:
         return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
             
     def _multi_particle_contact_orientation(self, point):
+        """
+        Roll/pitch/yaw with the front point in contact: pitch is the climb of
+        the front point over its horizontal offset from the center, measured
+        along the heading so it works for any travel direction; roll cannot be
+        recovered from a point on the forward axis, so it set to zero for the time being.
+        """
         vel   = np.array(self.q_dot[:3])
-        roll  =  np.arctan2(point[2] - self.q[2], point[1] - self.q[1])        
-        pitch = -np.arctan2(point[2] - self.q[2], point[0] - self.q[0])
-        yaw   =  np.arctan2(vel[1], vel[0])
+        speed = np.linalg.norm(vel[:2])
+        yaw   = self.q[5] if speed < 1e-9 else np.arctan2(vel[1], vel[0])
+
+        d     = np.asarray(point[:3]) - self.q[:3]
+        horiz = d[0] * np.cos(yaw) + d[1] * np.sin(yaw)
+        pitch = -np.arctan2(d[2], horiz)
+        
+        #TODO: when adding in a second track compute the roll for real 
+        roll = 0
 
         return np.array([roll, pitch, yaw])
 
