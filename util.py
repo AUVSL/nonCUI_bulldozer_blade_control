@@ -60,7 +60,7 @@ class Surface:
                 u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
                 v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
                 w       = u_clip if self.is_surface_pitched else v_clip
-                x, y, z = u * e1 + v * e2 + (1 - w) * self.offset * e3
+                x, y, z = u * e1 + v * e2 + w * self.offset * e3
                 node = G.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
                 node["visited_last"] = False
@@ -352,7 +352,7 @@ class Surface:
         neighbor_points_q, self.q[2] = self._particle_height(self.q)
         
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
-        f  = self.q + np.concatenate((forward_position, np.zeros(3)))
+        f                = self.q + np.concatenate((forward_position, np.zeros(3)))
 
         neighbor_points_f, surface_height_f = self._particle_height(f)
 
