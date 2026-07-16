@@ -17,9 +17,9 @@ class Surface:
         self.v_split            = 1  # u-value where the grid switches to surface_abg2
         self.stop_time          = 300.0
         self.total_distance     = 0.0
-        #TODO: have the roll and pitch update at the same time as the Z height
-        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
-        self.q_dot              = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        self.q     = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
+        self.q_dot = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
+        self.is_initalization   = True
         self.is_surface_pitched = is_surface_pitched
         self.transition_tiles   = self.b  # tiles over which the offset ramps down past u_split
         self.offset             = np.array([0, 0, -2*self.b])
@@ -41,8 +41,7 @@ class Surface:
         self.log.append([0, *self.q])
         self.front_log.append(np.array(points[1]))
         self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
-        self.q_dot = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
-
+        
     @property
     def subdivision(self, division_factor: float = 2.0):
         """Grid spacing, sized relative to the dozer width self.b."""
@@ -346,7 +345,10 @@ class Surface:
             self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
     
     def _multi_particle_update(self):
-        self.q += self.dt * self.q_dot
+        if not self.is_initalization:
+            self.q += self.dt * self.q_dot
+        else:
+            self.is_initalization = False
         neighbor_points_q, self.q[2] = self._particle_height(self.q)
         
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
@@ -368,9 +370,10 @@ class Surface:
             self.q[3:6] = f[3:6]
         else:
             self.q[3:6] = self._particle_orientation()
-        
+
         points          = [self.q, f]
         neighbor_points = [neighbor_points_q, neighbor_points_f]
+        
         
         return points, neighbor_points
     
@@ -475,5 +478,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_surface_pitched=False)
+    my_surface = Surface(is_surface_pitched=True)
     my_surface.run_and_plot()   
