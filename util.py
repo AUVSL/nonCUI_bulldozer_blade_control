@@ -7,33 +7,44 @@ from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class Surface:
-    def __init__(self, is_surface_pitched: bool = False):
+    def __init__(self, is_surface_pitched: bool = False, is_backwards: bool = False):
         # simulation parameters
-        self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.b                  = 1.75
+        self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
+        self.u_split            = 2  # u-value where the grid switches to surface_abg2
+        self.v_split            = 2  # u-value where the grid switches to surface_abg2
+        self.transition_tiles   = self.b                      # tiles over which the offset ramps down past u_split
+        self.offset             = np.array([0, 0, 2*self.b])
+        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
+        self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
+        self.is_initalization   = True
         self.l                  = 2.349
-        self.dt                 = 1/100  
-        self.u_split            = 1  # u-value where the grid switches to surface_abg2
-        self.v_split            = 1  # u-value where the grid switches to surface_abg2
         self.stop_time          = 300.0
         self.total_distance     = 0.0
-        self.q     = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
-        self.q_dot = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
-        self.is_initalization   = True
+        self.dt                 = 1/100  
+        if is_backwards:
+            self.q_dot   *= -1
+            self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
+            self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
+        self.is_backwards       = is_backwards
         self.is_surface_pitched = is_surface_pitched
-        self.transition_tiles   = self.b  # tiles over which the offset ramps down past u_split
-        self.offset             = np.array([0, 0, -2*self.b])
         self.log                = []
         self.neighbor_points    = []
         self.neighbor_log       = []
         self.front_log          = []
         
         # set up the surface grid
-        self.u_range       = (        0, 2.5 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
-        self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (        0, 2.5 * self.b)
+        self.u_range       = (-self.b/2, 3 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        self.v_range       = (-self.b/2,   self.b/2) if is_surface_pitched else (-self.b/2, 3 * self.b)
+        if is_backwards:
+            self.u_range       = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
+            self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
         self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
-        self.stop_distance = (self.us[-1] - self.us[0]) if is_surface_pitched else (self.vs[-1] - self.vs[0])
+        
+        stop_index = 0 if self.is_backwards else -1 
+        self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
+        
         self.surf_grid     = self._surface_grid()
 
         # put particle on the surface at the start of the simulation
@@ -374,7 +385,6 @@ class Surface:
         points          = [self.q, f]
         neighbor_points = [neighbor_points_q, neighbor_points_f]
         
-        
         return points, neighbor_points
     
     def _particle_height(self, point):
@@ -413,6 +423,8 @@ class Surface:
         recovered from a point on the forward axis, so it set to zero for the time being.
         """
         vel   = np.array(self.q_dot[:3])
+        if self.is_backwards:
+            vel *= -1
         speed = np.linalg.norm(vel[:2])
         yaw   = self.q[5] if speed < 1e-9 else np.arctan2(vel[1], vel[0])
 
@@ -438,6 +450,8 @@ class Surface:
         grad_xy = self._bilinear_gradient(self.q, corners)
 
         vel   = np.array(self.q_dot[:3])
+        if self.is_backwards:
+            vel *= -1
         speed = np.linalg.norm(vel[:2])
         if speed < 1e-9:
             return self.q[3:6].copy()
@@ -478,5 +492,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_surface_pitched=True)
+    my_surface = Surface(is_surface_pitched=True, is_backwards=True)
     my_surface.run_and_plot()   
