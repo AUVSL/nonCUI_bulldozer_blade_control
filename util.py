@@ -70,7 +70,7 @@ class Surface:
             for j, v in enumerate(self.vs):
                 if self.is_surface_sigmoid:
                     x = u
-                    y = j
+                    y = v
                     z = np.sin(u/3) * np.cos(y*4)
                 else:
                     # full offset for * <= *_start, then a linear ramp to zero over ramp_width
