@@ -355,22 +355,20 @@ class Surface:
             self.front_log.append(np.array(points[1]))
             self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
     
-    def _multi_particle_update(self):
-        old_q_h = self.q[2] 
+    def _multi_particle_update(self): 
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
         else:
             self.is_initalization = False
         neighbor_points_q, self.q[2] = self._particle_height(self.q)
         
+        self.q[3:6] = self._particle_orientation()
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
         f                = self.q + np.concatenate((forward_position, np.zeros(3)))
         
         neighbor_points_f, surface_height_f = self._particle_height(f)
         
-        q2_flat = (0 == (self.q[2] - old_q_h))
-        print(surface_height_f - f[2], self.q) 
-        if (((surface_height_f - f[2]) > 1e-10) and ((not self.is_backwards) or q2_flat)):
+        if ((surface_height_f - f[2]) > 0):
             for _ in range(20):
                 # 20 iterations gets us to about 1e-6 error in the height so length conservation is okay
                 f[2]             = surface_height_f
@@ -382,12 +380,9 @@ class Surface:
                     break
             f[2]        = surface_height_f
             self.q[3:6] = f[3:6]
-        else:
-            self.q[3:6] = self._particle_orientation()
     
         points          = [self.q, f]
         neighbor_points = [neighbor_points_q, neighbor_points_f]
-        print(self.q,  f) 
         return points, neighbor_points
     
     def _particle_height(self, point):
