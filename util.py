@@ -18,6 +18,7 @@ class Surface:
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
         self.is_initalization   = True
+        self.is_surface_sigmoid = True
         self.l                  = 2.349
         self.stop_time          = 300.0
         self.total_distance     = 0.0
@@ -67,11 +68,17 @@ class Surface:
         ramp_width = max(1, round(self.transition_tiles)) * self.subdivision
         for i, u in enumerate(self.us):
             for j, v in enumerate(self.vs):
-                # full offset for * <= *_start, then a linear ramp to zero over ramp_width
-                u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
-                v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
-                w       = u_clip if self.is_surface_pitched else v_clip
-                x, y, z = u * e1 + v * e2 + w * self.offset * e3
+                if self.is_surface_sigmoid:
+                    x = u
+                    y = j
+                    z = np.sin(u/3) * np.cos(y*4)
+                else:
+                    # full offset for * <= *_start, then a linear ramp to zero over ramp_width
+                    u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
+                    v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
+                    w       = u_clip if self.is_surface_pitched else v_clip
+                    x, y, z = u * e1 + v * e2 + w * self.offset * e3
+                
                 node = G.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
                 node["visited_last"] = False
@@ -490,5 +497,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_surface_pitched=True, is_backwards=True)
+    my_surface = Surface(is_surface_pitched=True, is_backwards=False)
     my_surface.run_and_plot()   
