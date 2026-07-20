@@ -7,14 +7,14 @@ from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class Surface:
-    def __init__(self, is_surface_pitched: bool = False, is_backwards: bool = False):
+    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_backwards: bool = False):
         # simulation parameters
         self.b                  = 1.75
+        self.offset             = np.array([0, 0, 2*self.b]) if is_uphill else np.array([0, 0, -2*self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.u_split            = 2  # u-value where the grid switches to surface_abg2
         self.v_split            = 2  # u-value where the grid switches to surface_abg2
         self.transition_tiles   = self.b                      # tiles over which the offset ramps down past u_split
-        self.offset             = np.array([0, 0, 2*self.b])
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
         self.is_initalization   = True
@@ -250,7 +250,7 @@ class Surface:
         qdot_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
                                     color='red', scale=1 / arrow_len, scale_units='xy',
                                     angles='xy', zorder=6)
-        qdot_3d = [None]  # mplot3d quiver has no in-place update, so remove/recreate each frame
+        qdot_3d   = [None]  # mplot3d quiver has no in-place update, so remove/recreate each frame
 
         # orange arrow at the front point, same forward axis (f shares q's orientation)
         front_arrow_top  = ax_top.quiver(front_data[0, 0], front_data[0, 1], fwd0[0], fwd0[1],
@@ -568,5 +568,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_surface_pitched=True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_backwards=False)
     my_surface.run_and_plot()   
