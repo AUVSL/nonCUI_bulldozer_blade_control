@@ -18,7 +18,7 @@ class Surface:
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
         self.is_initalization   = True
-        self.is_surface_sigmoid = True
+        self.is_surface_sigmoid = False
         self.l                  = 2.349
         self.stop_time          = 300.0
         self.total_distance     = 0.0
@@ -33,6 +33,7 @@ class Surface:
         self.neighbor_points    = []
         self.neighbor_log       = []
         self.front_log          = []
+        self.back_log           = []
         
         # set up the surface grid
         self.u_range       = (-self.b/2, 3 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
@@ -52,7 +53,8 @@ class Surface:
         points, neighbor_points = self._multi_particle_update()
         self.log.append([0, *self.q])
         self.front_log.append(np.array(points[1]))
-        self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
+        self.back_log.append(np.array(points[2]))
+        self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2])
         
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -110,6 +112,7 @@ class Surface:
         margin = 0.5
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
         front_data    = np.array(self.front_log)[::2]
+        back_data     = np.array(self.back_log)[::2] 
         neighbor_data = self.neighbor_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
         grid_pts = np.array([[self.surf_grid.nodes[n]['x'],
@@ -117,9 +120,9 @@ class Surface:
                               self.surf_grid.nodes[n]['z']] for n in self.surf_grid.nodes])
 
         # include the surface grid so it isn't clipped flush at a panel edge
-        all_x = np.concatenate([data[:, 1], front_data[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
-        all_y = np.concatenate([data[:, 2], front_data[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
-        all_z = np.concatenate([data[:, 3], front_data[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
+        all_x = np.concatenate([data[:, 1], front_data[:, 0], back_data[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
+        all_y = np.concatenate([data[:, 2], front_data[:, 1], back_data[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
+        all_z = np.concatenate([data[:, 3], front_data[:, 2], back_data[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
         
         cx     = (all_x.max() + all_x.min()) / 2
         cy     = (all_y.max() + all_y.min()) / 2
@@ -208,11 +211,16 @@ class Surface:
         ax_side.set_xlabel("X (m)")
         ax_side.set_ylabel("Z (m)")
 
-        # orange line connecting the current q and f positions, updated each frame
+        # orange line connecting the current q and point positions, updated each frame
         link,      = ax.plot([], [], [], color='darkorange', linewidth=1.5)
         link_top,  = ax_top.plot([], [], color='darkorange', linewidth=1.5)
         link_back, = ax_back.plot([], [], color='darkorange', linewidth=1.5)
         link_side, = ax_side.plot([], [], color='darkorange', linewidth=1.5)
+        
+        link_lower,      = ax.plot([], [], [], color='pink', linewidth=1.5)
+        link_top_lower,  = ax_top.plot([], [], color='pink', linewidth=1.5)
+        link_back_lower, = ax_back.plot([], [], color='pink', linewidth=1.5)
+        link_side_lower, = ax_side.plot([], [], color='pink', linewidth=1.5)
 
         # green scatter artists for grid vertices within one tile length of the point, updated each frame
         green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
@@ -230,6 +238,8 @@ class Surface:
         def _front_forward(i):
             return self._rotation_lg(*front_data[i, 3:])[:, 0]
 
+        def _back_forward(i):
+            return self._rotation_lg(*back_data[i, 3:])[:, 0]
         fwd0 = _forward(0)
         qdot_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
                                    color='red', scale=1 / arrow_len, scale_units='xy',
@@ -254,10 +264,22 @@ class Surface:
                                            angles='xy', zorder=6)
         front_arrow_3d = [None]
 
+        # pink arrow at the back point, same forward axis (b shares q's orientation)
+        back_arrow_top  = ax_top.quiver(back_data[0, 0], back_data[0, 1], fwd0[0], fwd0[1],
+                                          color='pink', scale=1 / arrow_len, scale_units='xy',
+                                          angles='xy', zorder=6)
+        back_arrow_back = ax_back.quiver(back_data[0, 1], back_data[0, 2], fwd0[1], fwd0[2],
+                                           color='pink', scale=1 / arrow_len, scale_units='xy',
+                                           angles='xy', zorder=6)
+        back_arrow_side = ax_side.quiver(back_data[0, 0], back_data[0, 2], fwd0[0], fwd0[2],
+                                           color='pink', scale=1 / arrow_len, scale_units='xy',
+                                           angles='xy', zorder=6)
+        back_arrow_3d = [None]
+
         def set_front(i):
             qx, qy, qz = data[i, 1], data[i, 2], data[i, 3]
             fx, fy, fz = front_data[i, 0], front_data[i,1] , front_data[i,2]
-            front_fwd = _front_forward(i)
+            front_fwd  = _front_forward(i)
 
             link.set_data([qx, fx], [qy, fy])
             link.set_3d_properties([qz, fz])
@@ -275,7 +297,29 @@ class Surface:
                 front_arrow_3d[0].remove()
             front_arrow_3d[0] = ax.quiver(fx, fy, fz, front_fwd[0], front_fwd[1], front_fwd[2],
                                            length=arrow_len, color='darkorange', zorder=6)
+            
 
+        def set_back(i):
+            qx, qy, qz = data[i, 1], data[i, 2], data[i, 3]
+            bx, by, bz = back_data[i, 0], back_data[i,1] , back_data[i,2]
+            back_fwd   = _back_forward(i)
+
+            link_lower.set_data([bx, qx], [by, qy])
+            link_lower.set_3d_properties([bz, qz])
+            link_top_lower.set_data([bx, qx], [by, qy])
+            link_back_lower.set_data([by, qy], [bz, qz])
+            link_side_lower.set_data([bx, qx], [bz, qz])
+
+            back_arrow_top.set_offsets([[bx, by]])
+            back_arrow_top.set_UVC(back_fwd[0], back_fwd[1])
+            back_arrow_back.set_offsets([[by, bz]])
+            back_arrow_back.set_UVC(back_fwd[1], back_fwd[2])
+            back_arrow_side.set_offsets([[bx, bz]])
+            back_arrow_side.set_UVC(back_fwd[0], back_fwd[2])
+            if back_arrow_3d[0] is not None:
+                back_arrow_3d[0].remove()
+            back_arrow_3d[0] = ax.quiver(bx, by, bz, back_fwd[0], back_fwd[1], back_fwd[2],
+                                           length=arrow_len, color='pink', zorder=6)
         def set_neighbors(i):
             pts = np.array(neighbor_data[i]) if neighbor_data[i] else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
@@ -298,11 +342,12 @@ class Surface:
                                     length=arrow_len, color='red', zorder=6)
 
         set_front(0)
+        set_back(0)
         set_neighbors(0)
         set_qdot(0)
 
-        ax_side.legend([link_side, green_side],
-                       ["q–f link", "grid neighbors"],
+        ax_side.legend([link_side, link_side_lower, green_side],
+                       ["q–f link", "q-b link" "grid neighbors"],
                        loc="upper right", fontsize=8)
 
         # the constrained-layout solver converges over the first few draws,
@@ -327,12 +372,15 @@ class Surface:
         # animation update function
         def update(i):
             set_front(i)
+            set_back(i)
             set_neighbors(i)
             set_qdot(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
             return (link, link_top, link_back, link_side,
                     front_arrow_top, front_arrow_back, front_arrow_side, front_arrow_3d[0],
+                    link_lower, link_top_lower, link_back_lower, link_side_lower,
+                    back_arrow_top, back_arrow_back, back_arrow_side, back_arrow_3d[0],
                     green_3d, green_top, green_back, green_side,
                     qdot_top, qdot_back, qdot_side, qdot_3d[0],)
 
@@ -360,7 +408,8 @@ class Surface:
             # log variables for plotting
             self.log.append([t, *self.q])
             self.front_log.append(np.array(points[1]))
-            self.neighbor_log.append(neighbor_points[0] + neighbor_points[1])
+            self.back_log.append(np.array(points[2]))
+            self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2])
     
     def _multi_particle_update(self): 
         if not self.is_initalization:
@@ -371,27 +420,49 @@ class Surface:
         
         self.q[3:6] = self._particle_orientation()
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
-        f                = self.q + np.concatenate((forward_position, np.zeros(3)))
+        front            = self.q + np.concatenate((forward_position, np.zeros(3)))
+        back             = self.q - np.concatenate((forward_position, np.zeros(3)))
         
-        neighbor_points_f, surface_height_f = self._particle_height(f)
+        # front, neighbor_points_front = self._contact_point_placement(front)
+        # back, neighbor_points_back   = self._contact_point_placement(back)
         
-        if ((surface_height_f - f[2]) > 0):
+        neighbor_points_front, surface_height = self._particle_height(front)
+        if ((surface_height - front[2]) > 0):
             for _ in range(20):
-                # 20 iterations gets us to about 1e-6 error in the height so length conservation is okay
-                f[2]             = surface_height_f
-                angles           = self._multi_particle_contact_orientation(f)
+                front[2]             = surface_height
+                angles           = self._multi_particle_contact_orientation(front)
                 forward_position = self._rotation_lg(*angles)[:, 0] * self.l / 2
-                f                = np.concatenate((self.q[:3] + forward_position, angles))
-                neighbor_points_f, surface_height_f = self._particle_height(f)
-                if abs(surface_height_f - f[2]) < 1e-9:
+                front                = np.concatenate((self.q[:3] + forward_position, angles))
+                neighbor_points_front, surface_height = self._particle_height(front)
+                if abs(surface_height - front[2]) < 1e-9:
                     break
-            f[2]        = surface_height_f
-            self.q[3:6] = f[3:6]
+            front[2]    = surface_height
+            self.q[3:6] = front[3:6]
+            back[3:6]   = front[3:6]
+            
+        neighbor_points_back, surface_height = self._particle_height(back)
+        if ((surface_height - back[2]) > 0):
+            for _ in range(20):
+                back[2]             = surface_height
+                angles           = self._multi_particle_contact_orientation(back)
+                forward_position = self._rotation_lg(*angles)[:, 0] * self.l / 2
+                back                = np.concatenate((self.q[:3] - forward_position, angles))
+                neighbor_points_back, surface_height = self._particle_height(back)
+                if abs(surface_height - back[2]) < 1e-9:
+                    break
+            back[2]     = surface_height
+            self.q[3:6] = back[3:6]
+            back[3:6]   = front[3:6]
+        
     
-        points          = [self.q, f]
-        neighbor_points = [neighbor_points_q, neighbor_points_f]
+        points          = [self.q, front, back]
+        neighbor_points = [neighbor_points_q, neighbor_points_front, neighbor_points_back]
         return points, neighbor_points
     
+    # def _contact_point_placement(self, point, iterations = 20):
+    #     # 20 iterations gets us to about 1e-6 error in the height so length conservation is okay 
+    #     # but could be reduced when optimizing code
+
     def _particle_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
         height_to_surface = self._bilinear_height(point, neighbor_points)
