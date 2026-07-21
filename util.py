@@ -32,6 +32,7 @@ class Surface:
         self.log                = []
         self.neighbor_points    = []
         self.neighbor_log       = []
+        self.center_log         = []
         self.front_log          = []
         self.back_log           = []
         
@@ -44,7 +45,7 @@ class Surface:
         self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
         
-        stop_index = 0 if self.is_backwards else -1 
+        stop_index         = 0 if self.is_backwards else -1 
         self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
         
         self.surf_grid     = self._surface_grid()
@@ -52,9 +53,10 @@ class Surface:
         # put track on the surface at the start of the simulation
         points, neighbor_points = self._track_update()
         self.log.append([0, *self.q])
-        self.front_log.append(np.array(points[1]))
-        self.back_log.append(np.array(points[2]))
-        self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2])
+        self.center_log.append(np.array(points[1]))
+        self.front_log.append(np.array(points[2]))
+        self.back_log.append(np.array(points[3]))
+        self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2] + neighbor_points[3])
         
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -111,8 +113,9 @@ class Surface:
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 0.5
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
+        center_data   = np.array(self.center_log)[::2]
         front_data    = np.array(self.front_log)[::2]
-        back_data     = np.array(self.back_log)[::2] 
+        back_data     = np.array(self.back_log)[::2]
         neighbor_data = self.neighbor_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
         grid_pts = np.array([[self.surf_grid.nodes[n]['x'],
@@ -120,9 +123,9 @@ class Surface:
                               self.surf_grid.nodes[n]['z']] for n in self.surf_grid.nodes])
 
         # include the surface grid so it isn't clipped flush at a panel edge
-        all_x = np.concatenate([data[:, 1], front_data[:, 0], back_data[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
-        all_y = np.concatenate([data[:, 2], front_data[:, 1], back_data[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
-        all_z = np.concatenate([data[:, 3], front_data[:, 2], back_data[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
+        all_x = np.concatenate([data[:, 1], center_data[:, 0], front_data[:, 0], back_data[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
+        all_y = np.concatenate([data[:, 2], center_data[:, 1], front_data[:, 1], back_data[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
+        all_z = np.concatenate([data[:, 3], center_data[:, 2], front_data[:, 2], back_data[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
         
         cx     = (all_x.max() + all_x.min()) / 2
         cy     = (all_y.max() + all_y.min()) / 2
@@ -228,13 +231,22 @@ class Surface:
         green_back = ax_back.scatter([], [], color='green', s=40, zorder=5)
         green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
 
+        # blue star marking the center of mass q, drawn as its own point (no link to the track)
+        q_point_3d   = ax.scatter([], [], [], color='blue', marker='*', s=120, zorder=7)
+        q_point_top  = ax_top.scatter([], [], color='blue', marker='*', s=120, zorder=7)
+        q_point_back = ax_back.scatter([], [], color='blue', marker='*', s=120, zorder=7)
+        q_point_side = ax_side.scatter([], [], color='blue', marker='*', s=120, zorder=7)
+
         # red arrow at the tracked point showing the center of mass's orientation,
         # i.e. the local forward axis (R_lg(*q[3:6])[:, 0]) for that frame's roll/pitch/yaw
         arrow_len = self.subdivision * 0.6
 
         def _forward(i):
             return self._rotation_lg(*data[i, 4:7])[:, 0]
-        
+
+        def _center_forward(i):
+            return self._rotation_lg(*center_data[i, 3:])[:, 0]
+
         def _front_forward(i):
             return self._rotation_lg(*front_data[i, 3:])[:, 0]
 
@@ -277,15 +289,15 @@ class Surface:
         back_arrow_3d = [None]
 
         def set_front(i):
-            qx, qy, qz = data[i, 1], data[i, 2], data[i, 3]
+            rx, ry, rz = center_data[i, 0], center_data[i, 1], center_data[i, 2]
             fx, fy, fz = front_data[i, 0], front_data[i,1] , front_data[i,2]
             front_fwd  = _front_forward(i)
 
-            link.set_data([qx, fx], [qy, fy])
-            link.set_3d_properties([qz, fz])
-            link_top.set_data([qx, fx], [qy, fy])
-            link_back.set_data([qy, fy], [qz, fz])
-            link_side.set_data([qx, fx], [qz, fz])
+            link.set_data([rx, fx], [ry, fy])
+            link.set_3d_properties([rz, fz])
+            link_top.set_data([rx, fx], [ry, fy])
+            link_back.set_data([ry, fy], [rz, fz])
+            link_side.set_data([rx, fx], [rz, fz])
 
             front_arrow_top.set_offsets([[fx, fy]])
             front_arrow_top.set_UVC(front_fwd[0], front_fwd[1])
@@ -300,15 +312,15 @@ class Surface:
             
 
         def set_back(i):
-            qx, qy, qz = data[i, 1], data[i, 2], data[i, 3]
+            rx, ry, rz = center_data[i, 0], center_data[i, 1], center_data[i, 2]
             bx, by, bz = back_data[i, 0], back_data[i,1] , back_data[i,2]
             back_fwd   = _back_forward(i)
 
-            link_lower.set_data([bx, qx], [by, qy])
-            link_lower.set_3d_properties([bz, qz])
-            link_top_lower.set_data([bx, qx], [by, qy])
-            link_back_lower.set_data([by, qy], [bz, qz])
-            link_side_lower.set_data([bx, qx], [bz, qz])
+            link_lower.set_data([bx, rx], [by, ry])
+            link_lower.set_3d_properties([bz, rz])
+            link_top_lower.set_data([bx, rx], [by, ry])
+            link_back_lower.set_data([by, ry], [bz, rz])
+            link_side_lower.set_data([bx, rx], [bz, rz])
 
             back_arrow_top.set_offsets([[bx, by]])
             back_arrow_top.set_UVC(back_fwd[0], back_fwd[1])
@@ -328,8 +340,8 @@ class Surface:
             green_side.set_offsets(pts[:, [0, 2]])
 
         def set_qdot(i):
-            x, y, z = data[i, 1], data[i, 2], data[i, 3]
-            fwd = _forward(i)
+            x, y, z = center_data[i, 0], center_data[i, 1], center_data[i, 2]
+            fwd = _center_forward(i)
             qdot_top.set_offsets([[x, y]])
             qdot_top.set_UVC(fwd[0], fwd[1])
             qdot_back.set_offsets([[y, z]])
@@ -341,13 +353,21 @@ class Surface:
             qdot_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
                                     length=arrow_len, color='red', zorder=6)
 
+        def set_q_point(i):
+            x, y, z = data[i, 1], data[i, 2], data[i, 3]
+            q_point_3d._offsets3d = ([x], [y], [z])
+            q_point_top.set_offsets([[x, y]])
+            q_point_back.set_offsets([[y, z]])
+            q_point_side.set_offsets([[x, z]])
+
         set_front(0)
         set_back(0)
         set_neighbors(0)
         set_qdot(0)
+        set_q_point(0)
 
-        ax_side.legend([link_side, link_side_lower, green_side],
-                       ["q–f link", "q-b link" "grid neighbors"],
+        ax_side.legend([link_side, link_side_lower, green_side, q_point_side],
+                       ["center–front link", "center–back link", "grid neighbors", "q (center of mass)"],
                        loc="upper right", fontsize=8)
 
         # the constrained-layout solver converges over the first few draws,
@@ -375,6 +395,7 @@ class Surface:
             set_back(i)
             set_neighbors(i)
             set_qdot(i)
+            set_q_point(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
             return (link, link_top, link_back, link_side,
@@ -382,7 +403,8 @@ class Surface:
                     link_lower, link_top_lower, link_back_lower, link_side_lower,
                     back_arrow_top, back_arrow_back, back_arrow_side, back_arrow_3d[0],
                     green_3d, green_top, green_back, green_side,
-                    qdot_top, qdot_back, qdot_side, qdot_3d[0],)
+                    qdot_top, qdot_back, qdot_side, qdot_3d[0],
+                    q_point_3d, q_point_top, q_point_back, q_point_side,)
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
@@ -407,9 +429,10 @@ class Surface:
 
             # log variables for plotting
             self.log.append([t, *self.q])
-            self.front_log.append(np.array(points[1]))
-            self.back_log.append(np.array(points[2]))
-            self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2])
+            self.center_log.append(np.array(points[1]))
+            self.front_log.append(np.array(points[2]))
+            self.back_log.append(np.array(points[3]))
+            self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2] + neighbor_points[3])
     
     def _track_update(self): 
         if not self.is_initalization:
@@ -417,21 +440,24 @@ class Surface:
         else:
             self.is_initalization = False
         neighbors_q, self.q[2] = self._point_height(self.q)
+        self.q[3:6]            = self._point_orientation()
         
-        self.q[3:6] = self._point_orientation()
-        forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
-        front            = self.q + np.concatenate((forward_position, np.zeros(3)))
-        back             = self.q - np.concatenate((forward_position, np.zeros(3)))
+        half_width   = self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0])
+        half_track   = self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0])
+        right_center = self.q + np.concatenate((half_width, np.zeros(3)))
+        front        = right_center + np.concatenate((half_track, np.zeros(3)))
+        back         = right_center - np.concatenate((half_track, np.zeros(3)))
 
-        front, back, neighbors_front, neighbors_back = self._track_surface_contact(front, back, examine_front = True)
+        neighbors_right_center, _ = self._point_height(right_center)
+        right_center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(right_center, front, back, examine_front = True)
+        right_center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(right_center, front, back, examine_front = False)
 
-        front, back, neighbors_front, neighbors_back = self._track_surface_contact(front, back, examine_front = False)
-
-        points          = [self.q, front, back]
-        neighbor_points = [neighbors_q, neighbors_front, neighbors_back]
+        points          = [self.q, right_center, front, back]
+        neighbor_points = [neighbors_q, neighbors_right_center, neighbors_front, neighbors_back]
         return points, neighbor_points
 
-    def _track_surface_contact(self, front, back, examine_front):
+    def _track_surface_contact(self, center, front, back, examine_front):
+
         # consider tracking front and back points as class vairables
         neighbors_front, surface_height_front = self._point_height(front)
         neighbors_back, surface_height_back   = self._point_height(back)
@@ -443,14 +469,14 @@ class Surface:
             for _ in range(20):
                 front[2]         = surface_height_front
                 back[2]          = surface_height_back
-                self.q[2]        = (front[2] + back[2])/2
+                center[2]        = (front[2] + back[2])/2
                 angles           = self._track_orientation(front)
                 half_track = self._rotation_lg(*angles)[:, 0] * self.l / 2
-                front            = np.concatenate((self.q[:3] + half_track, angles))
-                back             = np.concatenate((self.q[:3] - half_track, angles))
+                front            = np.concatenate((center[:3] + half_track, angles))
+                back             = np.concatenate((center[:3] - half_track, angles))
                 
-                neighbors_front, surface_height_front  = self._point_height(front)
-                neighbors_back, surface_height_back    = self._point_height(back)
+                neighbors_front, surface_height_front = self._point_height(front)
+                neighbors_back, surface_height_back   = self._point_height(back)
                 
                 if front_is_under_ground and (abs(surface_height_front - front[2]) < 1e-9):
                     break
@@ -458,11 +484,11 @@ class Surface:
                     break
 
         if front_is_under_ground:
-            self.q[3:6] = front[3:6]
+            center[3:6] = front[3:6]
         if  back_is_under_ground:
-            self.q[3:6] = back[3:6]
+            center[3:6] = back[3:6]
 
-        return front, back, neighbors_front, neighbors_back
+        return center, front, back, neighbors_front, neighbors_back
 
     def _point_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
