@@ -49,8 +49,8 @@ class Surface:
         
         self.surf_grid     = self._surface_grid()
 
-        # put particle on the surface at the start of the simulation
-        points, neighbor_points = self._multi_particle_update()
+        # put track on the surface at the start of the simulation
+        points, neighbor_points = self._track_update()
         self.log.append([0, *self.q])
         self.front_log.append(np.array(points[1]))
         self.back_log.append(np.array(points[2]))
@@ -228,7 +228,7 @@ class Surface:
         green_back = ax_back.scatter([], [], color='green', s=40, zorder=5)
         green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
 
-        # red arrow at the tracked point showing the particle's orientation,
+        # red arrow at the tracked point showing the center of mass's orientation,
         # i.e. the local forward axis (R_lg(*q[3:6])[:, 0]) for that frame's roll/pitch/yaw
         arrow_len = self.subdivision * 0.6
 
@@ -398,7 +398,7 @@ class Surface:
             # update variables
             t += self.dt
 
-            points, neighbor_points = self._multi_particle_update()
+            points, neighbor_points = self._track_update()
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
             
             # loop termination check
@@ -411,7 +411,7 @@ class Surface:
             self.back_log.append(np.array(points[2]))
             self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2])
     
-    def _multi_particle_update(self): 
+    def _track_update(self): 
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
         else:
@@ -444,7 +444,7 @@ class Surface:
                 front[2]         = surface_height_front
                 back[2]          = surface_height_back
                 self.q[2]        = (front[2] + back[2])/2
-                angles           = self._multi_particle_contact_orientation(front)
+                angles           = self._track_orientation(front)
                 half_track = self._rotation_lg(*angles)[:, 0] * self.l / 2
                 front            = np.concatenate((self.q[:3] + half_track, angles))
                 back             = np.concatenate((self.q[:3] - half_track, angles))
@@ -492,7 +492,7 @@ class Surface:
 
         return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
             
-    def _multi_particle_contact_orientation(self, point):
+    def _track_orientation(self, point):
         """
         Roll/pitch/yaw with the front point in contact: pitch is the climb of
         the front point over its horizontal offset from the center, measured
