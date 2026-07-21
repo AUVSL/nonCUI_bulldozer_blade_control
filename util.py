@@ -416,54 +416,54 @@ class Surface:
             self.q += self.dt * self.q_dot
         else:
             self.is_initalization = False
-        neighbor_points_q, self.q[2] = self._particle_height(self.q)
+        neighbors_q, self.q[2] = self._point_height(self.q)
         
-        self.q[3:6] = self._particle_orientation()
+        self.q[3:6] = self._point_orientation()
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
         front            = self.q + np.concatenate((forward_position, np.zeros(3)))
         back             = self.q - np.concatenate((forward_position, np.zeros(3)))
         
-        # front, neighbor_points_front = self._contact_point_placement(front)
-        # back, neighbor_points_back   = self._contact_point_placement(back)
-        
-        neighbor_points_front, surface_height = self._particle_height(front)
-        if ((surface_height - front[2]) > 0):
-            for _ in range(20):
-                front[2]             = surface_height
-                angles           = self._multi_particle_contact_orientation(front)
-                forward_position = self._rotation_lg(*angles)[:, 0] * self.l / 2
-                front                = np.concatenate((self.q[:3] + forward_position, angles))
-                neighbor_points_front, surface_height = self._particle_height(front)
-                if abs(surface_height - front[2]) < 1e-9:
-                    break
-            front[2]    = surface_height
-            self.q[3:6] = front[3:6]
-            back[3:6]   = front[3:6]
-            
-        neighbor_points_back, surface_height = self._particle_height(back)
-        if ((surface_height - back[2]) > 0):
-            for _ in range(20):
-                back[2]             = surface_height
-                angles           = self._multi_particle_contact_orientation(back)
-                forward_position = self._rotation_lg(*angles)[:, 0] * self.l / 2
-                back                = np.concatenate((self.q[:3] - forward_position, angles))
-                neighbor_points_back, surface_height = self._particle_height(back)
-                if abs(surface_height - back[2]) < 1e-9:
-                    break
-            back[2]     = surface_height
-            self.q[3:6] = back[3:6]
-            back[3:6]   = front[3:6]
-        
-    
-        points          = [self.q, front, back]
-        neighbor_points = [neighbor_points_q, neighbor_points_front, neighbor_points_back]
-        return points, neighbor_points
-    
-    # def _contact_point_placement(self, point, iterations = 20):
-    #     # 20 iterations gets us to about 1e-6 error in the height so length conservation is okay 
-    #     # but could be reduced when optimizing code
+        front, back, neighbors_front, neighbors_back = self._track_surface_contact(front, back, examine_front = True)
+        front, back, neighbors_front, neighbors_back = self._track_surface_contact(front, back, examine_front = False)
 
-    def _particle_height(self, point):
+        points          = [self.q, front, back]
+        neighbor_points = [neighbors_q, neighbors_front, neighbors_back]
+        return points, neighbor_points
+
+    def _track_surface_contact(self, front, back, examine_front):
+        # consider tracking front and back points as class vairables
+        neighbors_front, surface_height_front = self._point_height(front)
+        neighbors_back, surface_height_back   = self._point_height(back)
+        
+        front_is_under_ground = (examine_front and (surface_height_front - front[2]) > 0)
+        back_is_under_ground  = ((not examine_front) and (surface_height_back - back[2]) > 0)
+        
+        if front_is_under_ground or back_is_under_ground:
+            for _ in range(20):
+                front[2]         = surface_height_front
+                back[2]          = surface_height_back
+                self.q[2]        = (front[2] + back[2])/2
+                angles           = self._multi_particle_contact_orientation(front)
+                half_track = self._rotation_lg(*angles)[:, 0] * self.l / 2
+                front            = np.concatenate((self.q[:3] + half_track, angles))
+                back             = np.concatenate((self.q[:3] - half_track, angles))
+                
+                neighbors_front, surface_height_front  = self._point_height(front)
+                neighbors_back, surface_height_back    = self._point_height(back)
+                
+                if front_is_under_ground and (abs(surface_height_front - front[2]) < 1e-9):
+                    break
+                if back_is_under_ground and (abs(surface_height_back - back[2]) < 1e-9):
+                    break
+
+        if front_is_under_ground:
+            self.q[3:6] = front[3:6]
+        if  back_is_under_ground:
+            self.q[3:6] = back[3:6]
+
+        return front, back, neighbors_front, neighbors_back
+
+    def _point_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
         height_to_surface = self._bilinear_height(point, neighbor_points)
         return neighbor_points, height_to_surface
@@ -513,7 +513,7 @@ class Surface:
 
         return np.array([roll, pitch, yaw])
 
-    def _particle_orientation(self):
+    def _point_orientation(self):
         """
         Roll/pitch/yaw of the center of mass crossing the current tile: pitch and
         roll come from the tile's height-field gradient (the edges' angles,
