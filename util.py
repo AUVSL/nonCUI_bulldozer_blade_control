@@ -400,7 +400,7 @@ class Surface:
 
             points, neighbor_points = self._multi_particle_update()
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
-
+            
             # loop termination check
             if self.total_distance >= self.stop_distance:
                 break
@@ -422,8 +422,9 @@ class Surface:
         forward_position = self._rotation_lg(*self.q[3:6])[:, 0] * self.l / 2
         front            = self.q + np.concatenate((forward_position, np.zeros(3)))
         back             = self.q - np.concatenate((forward_position, np.zeros(3)))
-        
+
         front, back, neighbors_front, neighbors_back = self._track_surface_contact(front, back, examine_front = True)
+
         front, back, neighbors_front, neighbors_back = self._track_surface_contact(front, back, examine_front = False)
 
         points          = [self.q, front, back]
@@ -435,9 +436,9 @@ class Surface:
         neighbors_front, surface_height_front = self._point_height(front)
         neighbors_back, surface_height_back   = self._point_height(back)
         
-        front_is_under_ground = (examine_front and (surface_height_front - front[2]) > 0)
-        back_is_under_ground  = ((not examine_front) and (surface_height_back - back[2]) > 0)
-        
+        # protect against floating point error with 1e-15
+        front_is_under_ground = (examine_front and (surface_height_front - front[2]) > 1e-15) 
+        back_is_under_ground  = ((not examine_front) and (surface_height_back - back[2]) > 1e-15)
         if front_is_under_ground or back_is_under_ground:
             for _ in range(20):
                 front[2]         = surface_height_front
@@ -568,5 +569,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_backwards=False)
+    my_surface = Surface(is_uphill=False, is_surface_pitched=True, is_backwards=False)
     my_surface.run_and_plot()   
