@@ -7,18 +7,18 @@ from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
 class Surface:
-    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_backwards: bool = False):
+    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
         # simulation parameters
         self.b                  = 1.75
-        self.offset             = np.array([0, 0, 2*self.b]) if is_uphill else np.array([0, 0, -2*self.b])
+        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
-        self.u_split            = 2  # u-value where the grid switches to surface_abg2
-        self.v_split            = 2  # u-value where the grid switches to surface_abg2
+        self.u_split            = 0  # u-value where the grid switches to surface_abg2
+        self.v_split            = 0  # u-value where the grid switches to surface_abg2
         self.transition_tiles   = self.b                      # tiles over which the offset ramps down past u_split
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
         self.is_initalization   = True
-        self.is_surface_sigmoid = False
+
         self.l                  = 2.349
         self.stop_time          = 300.0
         self.total_distance     = 0.0
@@ -29,10 +29,12 @@ class Surface:
             self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
         self.is_backwards       = is_backwards
         self.is_surface_pitched = is_surface_pitched
+        self.is_surface_sigmoid = False
+        self.is_surface_rolled = is_surface_rolled
         self.log                = []
         self.neighbor_points    = []
         self.neighbor_log       = []
-        self.point_log            = []  # per frame: (3, 6) rows front, center, back
+        self.point_log          = []  # per frame: (3, 6) rows front, center, back
         
         # set up the surface grid
         self.u_range       = (-self.b/2, 3 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
@@ -76,9 +78,16 @@ class Surface:
                     # full offset for * <= *_start, then a linear ramp to zero over ramp_width
                     u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
                     v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
-                    w       = u_clip if self.is_surface_pitched else v_clip
+                    
+                    w = 0
+                    if self.is_surface_rolled and self.is_surface_pitched:
+                        w = u_clip + v_clip
+                    if self.is_surface_rolled:
+                        w = v_clip if self.is_surface_pitched else u_clip
+                    if self.is_surface_pitched:
+                        w = u_clip if self.is_surface_pitched else v_clip
                     x, y, z = u * e1 + v * e2 + w * self.offset * e3
-                
+
                 node = G.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
                 node["visited_last"] = False
@@ -639,5 +648,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()   
