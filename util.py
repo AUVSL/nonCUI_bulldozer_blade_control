@@ -109,10 +109,10 @@ class Surface:
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 0.5
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
-        point_data      = np.array(self.point_log)[::2]  # (frames, 3, 6): rows front, center, back
-        front_data    = point_data[:, 0]
-        center_data   = point_data[:, 1]
-        back_data     = point_data[:, 2]
+        point_data    = np.array(self.point_log)[::2]  # (frames, 6, 6): right front/center/back then left front/center/back
+        front_data,  center_data,  back_data  = point_data[:, 0], point_data[:, 1], point_data[:, 2]  # right track
+        lfront_data, lcenter_data, lback_data = point_data[:, 3], point_data[:, 4], point_data[:, 5]  # left track
+        track_pts     = point_data.reshape(-1, point_data.shape[-1])  # (frames*6, 6): every logged track point
         neighbor_data = self.neighbor_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
         grid_pts = np.array([[self.surf_grid.nodes[n]['x'],
@@ -120,9 +120,9 @@ class Surface:
                               self.surf_grid.nodes[n]['z']] for n in self.surf_grid.nodes])
 
         # include the surface grid so it isn't clipped flush at a panel edge
-        all_x = np.concatenate([data[:, 1], center_data[:, 0], front_data[:, 0], back_data[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
-        all_y = np.concatenate([data[:, 2], center_data[:, 1], front_data[:, 1], back_data[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
-        all_z = np.concatenate([data[:, 3], center_data[:, 2], front_data[:, 2], back_data[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
+        all_x = np.concatenate([data[:, 1], track_pts[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
+        all_y = np.concatenate([data[:, 2], track_pts[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
+        all_z = np.concatenate([data[:, 3], track_pts[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
         
         cx     = (all_x.max() + all_x.min()) / 2
         cy     = (all_y.max() + all_y.min()) / 2
@@ -235,22 +235,17 @@ class Surface:
         def _forward(i):
             return self._rotation_lg(*data[i, 4:7])[:, 0]
 
-        def _center_forward(i):
-            return self._rotation_lg(*center_data[i, 3:])[:, 0]
-
-        def _front_forward(i):
-            return self._rotation_lg(*front_data[i, 3:])[:, 0]
-
-        def _back_forward(i):
-            return self._rotation_lg(*back_data[i, 3:])[:, 0]
+        def _fwd(row):
+            return self._rotation_lg(*row[3:])[:, 0]
         fwd0 = _forward(0)
-        qdot_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
+        # each track arrow carries two arrows (right, left); set_qdot repositions them
+        qdot_top  = ax_top.quiver([data[0, 1]] * 2, [data[0, 2]] * 2, [fwd0[0]] * 2, [fwd0[1]] * 2,
                                    color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                    angles='xy', zorder=6)
-        qdot_back = ax_back.quiver(data[0, 2], data[0, 3], fwd0[1], fwd0[2],
+        qdot_back = ax_back.quiver([data[0, 2]] * 2, [data[0, 3]] * 2, [fwd0[1]] * 2, [fwd0[2]] * 2,
                                     color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                     angles='xy', zorder=6)
-        qdot_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
+        qdot_side = ax_side.quiver([data[0, 1]] * 2, [data[0, 3]] * 2, [fwd0[0]] * 2, [fwd0[2]] * 2,
                                     color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                     angles='xy', zorder=6)
         qdot_3d   = [None]  # mplot3d quiver has no in-place update, so remove/recreate each frame
@@ -267,74 +262,92 @@ class Surface:
                                        angles='xy', zorder=7)
         q_arrow_3d   = [None]
 
-        # orange arrow at the front point, same forward axis (f shares q's orientation)
-        front_arrow_top  = ax_top.quiver(front_data[0, 0], front_data[0, 1], fwd0[0], fwd0[1],
+        # orange arrows at the right and left front points (f shares q's orientation)
+        front_arrow_top  = ax_top.quiver([front_data[0, 0], lfront_data[0, 0]], [front_data[0, 1], lfront_data[0, 1]],
+                                          [fwd0[0]] * 2, [fwd0[1]] * 2,
                                           color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                           angles='xy', zorder=6)
-        front_arrow_back = ax_back.quiver(front_data[0, 1], front_data[0, 2], fwd0[1], fwd0[2],
+        front_arrow_back = ax_back.quiver([front_data[0, 1], lfront_data[0, 1]], [front_data[0, 2], lfront_data[0, 2]],
+                                           [fwd0[1]] * 2, [fwd0[2]] * 2,
                                            color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=6)
-        front_arrow_side = ax_side.quiver(front_data[0, 0], front_data[0, 2], fwd0[0], fwd0[2],
+        front_arrow_side = ax_side.quiver([front_data[0, 0], lfront_data[0, 0]], [front_data[0, 2], lfront_data[0, 2]],
+                                           [fwd0[0]] * 2, [fwd0[2]] * 2,
                                            color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=6)
         front_arrow_3d = [None]
 
-        # pink arrow at the back point, same forward axis (b shares q's orientation)
-        back_arrow_top  = ax_top.quiver(back_data[0, 0], back_data[0, 1], fwd0[0], fwd0[1],
+        # orange arrows at the right and left back points (b shares q's orientation)
+        back_arrow_top  = ax_top.quiver([back_data[0, 0], lback_data[0, 0]], [back_data[0, 1], lback_data[0, 1]],
+                                          [fwd0[0]] * 2, [fwd0[1]] * 2,
                                           color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                           angles='xy', zorder=6)
-        back_arrow_back = ax_back.quiver(back_data[0, 1], back_data[0, 2], fwd0[1], fwd0[2],
+        back_arrow_back = ax_back.quiver([back_data[0, 1], lback_data[0, 1]], [back_data[0, 2], lback_data[0, 2]],
+                                           [fwd0[1]] * 2, [fwd0[2]] * 2,
                                            color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=6)
-        back_arrow_side = ax_side.quiver(back_data[0, 0], back_data[0, 2], fwd0[0], fwd0[2],
+        back_arrow_side = ax_side.quiver([back_data[0, 0], lback_data[0, 0]], [back_data[0, 2], lback_data[0, 2]],
+                                           [fwd0[0]] * 2, [fwd0[2]] * 2,
                                            color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=6)
         back_arrow_3d = [None]
 
         def set_front(i):
-            rx, ry, rz = center_data[i, 0], center_data[i, 1], center_data[i, 2]
-            fx, fy, fz = front_data[i, 0], front_data[i,1] , front_data[i,2]
-            front_fwd  = _front_forward(i)
+            # right and left center/front rows and their forward axes
+            rc, rf = center_data[i], front_data[i]
+            lc, lf = lcenter_data[i], lfront_data[i]
+            rfwd, lfwd = _fwd(rf), _fwd(lf)
 
-            link.set_data([rx, fx], [ry, fy])
-            link.set_3d_properties([rz, fz])
-            link_top.set_data([rx, fx], [ry, fy])
-            link_back.set_data([ry, fy], [rz, fz])
-            link_side.set_data([rx, fx], [rz, fz])
+            # two disjoint center→front segments carried by one line artist (NaN breaks the line)
+            xs = [rc[0], rf[0], np.nan, lc[0], lf[0]]
+            ys = [rc[1], rf[1], np.nan, lc[1], lf[1]]
+            zs = [rc[2], rf[2], np.nan, lc[2], lf[2]]
+            link.set_data(xs, ys)
+            link.set_3d_properties(zs)
+            link_top.set_data(xs, ys)
+            link_back.set_data(ys, zs)
+            link_side.set_data(xs, zs)
 
-            front_arrow_top.set_offsets([[fx, fy]])
-            front_arrow_top.set_UVC(front_fwd[0], front_fwd[1])
-            front_arrow_back.set_offsets([[fy, fz]])
-            front_arrow_back.set_UVC(front_fwd[1], front_fwd[2])
-            front_arrow_side.set_offsets([[fx, fz]])
-            front_arrow_side.set_UVC(front_fwd[0], front_fwd[2])
+            front_arrow_top.set_offsets([[rf[0], rf[1]], [lf[0], lf[1]]])
+            front_arrow_top.set_UVC([rfwd[0], lfwd[0]], [rfwd[1], lfwd[1]])
+            front_arrow_back.set_offsets([[rf[1], rf[2]], [lf[1], lf[2]]])
+            front_arrow_back.set_UVC([rfwd[1], lfwd[1]], [rfwd[2], lfwd[2]])
+            front_arrow_side.set_offsets([[rf[0], rf[2]], [lf[0], lf[2]]])
+            front_arrow_side.set_UVC([rfwd[0], lfwd[0]], [rfwd[2], lfwd[2]])
             if front_arrow_3d[0] is not None:
                 front_arrow_3d[0].remove()
-            front_arrow_3d[0] = ax.quiver(fx, fy, fz, front_fwd[0], front_fwd[1], front_fwd[2],
+            front_arrow_3d[0] = ax.quiver([rf[0], lf[0]], [rf[1], lf[1]], [rf[2], lf[2]],
+                                           [rfwd[0], lfwd[0]], [rfwd[1], lfwd[1]], [rfwd[2], lfwd[2]],
                                            length=arrow_len, color='darkorange', zorder=6)
-            
+
 
         def set_back(i):
-            rx, ry, rz = center_data[i, 0], center_data[i, 1], center_data[i, 2]
-            bx, by, bz = back_data[i, 0], back_data[i,1] , back_data[i,2]
-            back_fwd   = _back_forward(i)
+            # right and left center/back rows and their forward axes
+            rc, rb = center_data[i], back_data[i]
+            lc, lb = lcenter_data[i], lback_data[i]
+            rfwd, lfwd = _fwd(rb), _fwd(lb)
 
-            link_lower.set_data([bx, rx], [by, ry])
-            link_lower.set_3d_properties([bz, rz])
-            link_top_lower.set_data([bx, rx], [by, ry])
-            link_back_lower.set_data([by, ry], [bz, rz])
-            link_side_lower.set_data([bx, rx], [bz, rz])
+            # two disjoint back→center segments carried by one line artist (NaN breaks the line)
+            xs = [rb[0], rc[0], np.nan, lb[0], lc[0]]
+            ys = [rb[1], rc[1], np.nan, lb[1], lc[1]]
+            zs = [rb[2], rc[2], np.nan, lb[2], lc[2]]
+            link_lower.set_data(xs, ys)
+            link_lower.set_3d_properties(zs)
+            link_top_lower.set_data(xs, ys)
+            link_back_lower.set_data(ys, zs)
+            link_side_lower.set_data(xs, zs)
 
-            back_arrow_top.set_offsets([[bx, by]])
-            back_arrow_top.set_UVC(back_fwd[0], back_fwd[1])
-            back_arrow_back.set_offsets([[by, bz]])
-            back_arrow_back.set_UVC(back_fwd[1], back_fwd[2])
-            back_arrow_side.set_offsets([[bx, bz]])
-            back_arrow_side.set_UVC(back_fwd[0], back_fwd[2])
+            back_arrow_top.set_offsets([[rb[0], rb[1]], [lb[0], lb[1]]])
+            back_arrow_top.set_UVC([rfwd[0], lfwd[0]], [rfwd[1], lfwd[1]])
+            back_arrow_back.set_offsets([[rb[1], rb[2]], [lb[1], lb[2]]])
+            back_arrow_back.set_UVC([rfwd[1], lfwd[1]], [rfwd[2], lfwd[2]])
+            back_arrow_side.set_offsets([[rb[0], rb[2]], [lb[0], lb[2]]])
+            back_arrow_side.set_UVC([rfwd[0], lfwd[0]], [rfwd[2], lfwd[2]])
             if back_arrow_3d[0] is not None:
                 back_arrow_3d[0].remove()
-            back_arrow_3d[0] = ax.quiver(bx, by, bz, back_fwd[0], back_fwd[1], back_fwd[2],
-                                           length=arrow_len, color='darkorange', zorder=6)
+            back_arrow_3d[0] = ax.quiver([rb[0], lb[0]], [rb[1], lb[1]], [rb[2], lb[2]],
+                                          [rfwd[0], lfwd[0]], [rfwd[1], lfwd[1]], [rfwd[2], lfwd[2]],
+                                          length=arrow_len, color='darkorange', zorder=6)
         def set_neighbors(i):
             pts = np.asarray(neighbor_data[i]) if len(neighbor_data[i]) else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
@@ -343,17 +356,19 @@ class Surface:
             green_side.set_offsets(pts[:, [0, 2]])
 
         def set_qdot(i):
-            x, y, z = center_data[i, 0], center_data[i, 1], center_data[i, 2]
-            fwd = _center_forward(i)
-            qdot_top.set_offsets([[x, y]])
-            qdot_top.set_UVC(fwd[0], fwd[1])
-            qdot_back.set_offsets([[y, z]])
-            qdot_back.set_UVC(fwd[1], fwd[2])
-            qdot_side.set_offsets([[x, z]])
-            qdot_side.set_UVC(fwd[0], fwd[2])
+            # right and left center rows and their forward axes
+            rc, lc = center_data[i], lcenter_data[i]
+            rfwd, lfwd = _fwd(rc), _fwd(lc)
+            qdot_top.set_offsets([[rc[0], rc[1]], [lc[0], lc[1]]])
+            qdot_top.set_UVC([rfwd[0], lfwd[0]], [rfwd[1], lfwd[1]])
+            qdot_back.set_offsets([[rc[1], rc[2]], [lc[1], lc[2]]])
+            qdot_back.set_UVC([rfwd[1], lfwd[1]], [rfwd[2], lfwd[2]])
+            qdot_side.set_offsets([[rc[0], rc[2]], [lc[0], lc[2]]])
+            qdot_side.set_UVC([rfwd[0], lfwd[0]], [rfwd[2], lfwd[2]])
             if qdot_3d[0] is not None:
                 qdot_3d[0].remove()
-            qdot_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
+            qdot_3d[0] = ax.quiver([rc[0], lc[0]], [rc[1], lc[1]], [rc[2], lc[2]],
+                                    [rfwd[0], lfwd[0]], [rfwd[1], lfwd[1]], [rfwd[2], lfwd[2]],
                                     length=arrow_len, color='darkorange', zorder=6)
 
         def set_q_point(i):
@@ -452,10 +467,11 @@ class Surface:
         
         half_width   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0]), np.zeros(3)))
         half_track   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0]), np.zeros(3)))
-        points_front_center_back, neighbors_front_center_back = self._track_update(half_width, half_track, is_left_track = False)
+        right_points_frnt_cntr_bck, right_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = False)
+        left_points_frnt_cntr_bck,   left_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = True)
 
-        points          = [self.q, *points_front_center_back]       # points_front_center_back rows:  0 = front, 1 = center, 2 = back
-        neighbor_points = [neighbors_q, *neighbors_front_center_back]  # neighbors_front_center_back rows: 0 = front, 1 = center, 2 = back
+        points          = [self.q, *right_points_frnt_cntr_bck, *left_points_frnt_cntr_bck]
+        neighbor_points = [neighbors_q, *right_neighbors_frnt_cntr_bck, *left_neighbors_frnt_cntr_bck] 
         return points, neighbor_points
 
     def _track_update(self, half_width, half_track, is_left_track = False):
