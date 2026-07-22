@@ -441,7 +441,7 @@ class Surface:
             self.is_initalization = False
         neighbors_q, self.q[2] = self._point_height(self.q)
         self.q[3:6]            = self._point_orientation()
-        
+
         half_width   = self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0])
         half_track   = self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0])
         right_center = self.q + np.concatenate((half_width, np.zeros(3)))
@@ -450,8 +450,8 @@ class Surface:
 
         neighbors_right_center, _ = self._point_height(right_center)
         right_center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(right_center, front, back, examine_front = True)
-        right_center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(right_center, front, back, examine_front = False)
 
+        right_center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(right_center, front, back, examine_front = False)
         points          = [self.q, right_center, front, back]
         neighbor_points = [neighbors_q, neighbors_right_center, neighbors_front, neighbors_back]
         return points, neighbor_points
@@ -470,7 +470,7 @@ class Surface:
                 front[2]         = surface_height_front
                 back[2]          = surface_height_back
                 center[2]        = (front[2] + back[2])/2
-                angles           = self._track_orientation(front)
+                angles           = self._track_orientation(center, front)
                 half_track = self._rotation_lg(*angles)[:, 0] * self.l / 2
                 front            = np.concatenate((center[:3] + half_track, angles))
                 back             = np.concatenate((center[:3] - half_track, angles))
@@ -487,7 +487,11 @@ class Surface:
             center[3:6] = front[3:6]
         if  back_is_under_ground:
             center[3:6] = back[3:6]
-
+        print(
+            [f"{x:.3f}" for x in center],
+            [f"{x:.3f}" for x in front],
+            [f"{x:.3f}" for x in back],
+        )
         return center, front, back, neighbors_front, neighbors_back
 
     def _point_height(self, point):
@@ -518,7 +522,7 @@ class Surface:
 
         return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
             
-    def _track_orientation(self, point):
+    def _track_orientation(self, center, front):
         """
         Roll/pitch/yaw with the front point in contact: pitch is the climb of
         the front point over its horizontal offset from the center, measured
@@ -529,9 +533,9 @@ class Surface:
         if self.is_backwards:
             vel *= -1
         speed = np.linalg.norm(vel[:2])
-        yaw   = self.q[5] if speed < 1e-9 else np.arctan2(vel[1], vel[0])
+        yaw   = center[5] if speed < 1e-9 else np.arctan2(vel[1], vel[0])
 
-        d     = np.asarray(point[:3]) - self.q[:3]
+        d     = np.asarray(front[:3]) - center[:3]
         horiz = d[0] * np.cos(yaw) + d[1] * np.sin(yaw)
         pitch = -np.arctan2(d[2], horiz)
         
