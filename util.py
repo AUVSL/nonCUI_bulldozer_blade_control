@@ -51,7 +51,7 @@ class Surface:
         self.surf_grid     = self._surface_grid()
 
         # put track on the surface at the start of the simulation
-        points, neighbor_points = self._track_update()
+        points, neighbor_points = self._body_update()
         self.log.append([0, *self.q])
         self.center_log.append(np.array(points[1]))
         self.front_log.append(np.array(points[2]))
@@ -420,7 +420,7 @@ class Surface:
             # update variables
             t += self.dt
 
-            points, neighbor_points = self._track_update()
+            points, neighbor_points = self._body_update()
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
             
             # loop termination check
@@ -434,30 +434,33 @@ class Surface:
             self.back_log.append(np.array(points[3]))
             self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2] + neighbor_points[3])
     
-    def _track_update(self): 
+    def _body_update(self): 
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
         else:
             self.is_initalization = False
         neighbors_q, self.q[2] = self._point_height(self.q)
         self.q[3:6]            = self._point_orientation()
+        
+        half_width   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0]), np.zeros(3)))
+        half_track   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0]), np.zeros(3)))
+        center, front, back, neighbors_right_center, neighbors_front, neighbors_back = self._track_update(half_width, half_track, is_left_track = False)
 
-        half_width   = self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0])
-        half_track   = self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0])
-        right_center = self.q + np.concatenate((half_width, np.zeros(3)))
-        front        = right_center + np.concatenate((half_track, np.zeros(3)))
-        back         = right_center - np.concatenate((half_track, np.zeros(3)))
-
-        neighbors_right_center, _ = self._point_height(right_center)
-        right_center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(right_center, front, back, examine_front = True)
-
-        right_center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(right_center, front, back, examine_front = False)
-        points          = [self.q, right_center, front, back]
+        points          = [self.q, center, front, back]
         neighbor_points = [neighbors_q, neighbors_right_center, neighbors_front, neighbors_back]
         return points, neighbor_points
 
+    def _track_update(self, half_width, half_track, is_left_track = False):
+        center = self.q + is_left_track * half_width - (1-is_left_track) * half_width # a compact if else using True = 1 False = 0
+        front  = center + half_track
+        back   = center - half_track
+            
+        neighbors_right_center, _ = self._point_height(center)
+        center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(center, front, back, examine_front = True)
+        center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(center, front, back, examine_front = False)
+        return center, front, back, neighbors_right_center, neighbors_front, neighbors_back
+    
     def _track_surface_contact(self, center, front, back, examine_front):
-
         # consider tracking front and back points as class vairables
         neighbors_front, surface_height_front = self._point_height(front)
         neighbors_back, surface_height_back   = self._point_height(back)
@@ -487,11 +490,7 @@ class Surface:
             center[3:6] = front[3:6]
         if  back_is_under_ground:
             center[3:6] = back[3:6]
-        print(
-            [f"{x:.3f}" for x in center],
-            [f"{x:.3f}" for x in front],
-            [f"{x:.3f}" for x in back],
-        )
+
         return center, front, back, neighbors_front, neighbors_back
 
     def _point_height(self, point):
