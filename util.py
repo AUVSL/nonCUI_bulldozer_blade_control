@@ -101,7 +101,7 @@ class Surface:
             [-sB,                      sa * cB,                  ca * cB]
         ]).T
  
-    def run_and_plot(self):
+    def run_and_plot(self, show_neighbors: bool = False):
         self._run()
 
         print("Rendering GIF...")
@@ -114,15 +114,21 @@ class Surface:
         lfront_data, lcenter_data, lback_data = point_data[:, 3], point_data[:, 4], point_data[:, 5]  # left track
         track_pts     = point_data.reshape(-1, point_data.shape[-1])  # (frames*6, 6): every logged track point
         neighbor_data = self.neighbor_log[::2]
-        all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
         grid_pts = np.array([[self.surf_grid.nodes[n]['x'],
                               self.surf_grid.nodes[n]['y'],
                               self.surf_grid.nodes[n]['z']] for n in self.surf_grid.nodes])
 
-        # include the surface grid so it isn't clipped flush at a panel edge
-        all_x = np.concatenate([data[:, 1], track_pts[:, 0], all_neighbor_pts[:, 0], grid_pts[:, 0]])
-        all_y = np.concatenate([data[:, 2], track_pts[:, 1], all_neighbor_pts[:, 1], grid_pts[:, 1]])
-        all_z = np.concatenate([data[:, 3], track_pts[:, 2], all_neighbor_pts[:, 2], grid_pts[:, 2]])
+        # bound the view with the track path and the surface grid (so it isn't
+        # clipped flush at a panel edge), plus the grid-neighbor points only when
+        # they will actually be drawn
+        bound_pts = [track_pts[:, :3], grid_pts]
+        if show_neighbors:
+            bound_pts.append(np.array([pt for frame in self.neighbor_log for pt in frame])[:, :3])
+        bound_pts = np.vstack(bound_pts)
+
+        all_x = np.concatenate([data[:, 1], bound_pts[:, 0]])
+        all_y = np.concatenate([data[:, 2], bound_pts[:, 1]])
+        all_z = np.concatenate([data[:, 3], bound_pts[:, 2]])
         
         cx     = (all_x.max() + all_x.min()) / 2
         cy     = (all_y.max() + all_y.min()) / 2
@@ -222,11 +228,14 @@ class Surface:
         link_back_lower, = ax_back.plot([], [], color='darkorange', linewidth=1.5)
         link_side_lower, = ax_side.plot([], [], color='darkorange', linewidth=1.5)
 
-        # green scatter artists for grid vertices within one tile length of the point, updated each frame
-        green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
-        green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
-        green_back = ax_back.scatter([], [], color='green', s=40, zorder=5)
-        green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
+        # green scatter artists for grid vertices within one tile length of the
+        # point, updated each frame (only created when show_neighbors is set)
+        green_3d = green_top = green_back = green_side = None
+        if show_neighbors:
+            green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
+            green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
+            green_back = ax_back.scatter([], [], color='green', s=40, zorder=5)
+            green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
 
         # red arrow at the tracked point showing the center of mass's orientation,
         # i.e. the local forward axis (R_lg(*q[3:6])[:, 0]) for that frame's roll/pitch/yaw
@@ -387,13 +396,17 @@ class Surface:
 
         set_front(0)
         set_back(0)
-        set_neighbors(0)
+        if show_neighbors:
+            set_neighbors(0)
         set_qdot(0)
         set_q_point(0)
 
-        ax_side.legend([link_side, green_side, q_arrow_side],
-                       ["track", "grid neighbors", "q (center of mass)"],
-                       loc="upper right", fontsize=8)
+        legend_handles = [link_side, q_arrow_side]
+        legend_labels  = ["track", "q (center of mass)"]
+        if show_neighbors:
+            legend_handles.insert(1, green_side)
+            legend_labels.insert(1, "grid neighbors")
+        ax_side.legend(legend_handles, legend_labels, loc="upper right", fontsize=8)
 
         # the constrained-layout solver converges over the first few draws,
         # visibly nudging the panels; converge it now, then freeze the layout
@@ -418,18 +431,21 @@ class Surface:
         def update(i):
             set_front(i)
             set_back(i)
-            set_neighbors(i)
+            if show_neighbors:
+                set_neighbors(i)
             set_qdot(i)
             set_q_point(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            return (link, link_top, link_back, link_side,
-                    front_arrow_top, front_arrow_back, front_arrow_side, front_arrow_3d[0],
-                    link_lower, link_top_lower, link_back_lower, link_side_lower,
-                    back_arrow_top, back_arrow_back, back_arrow_side, back_arrow_3d[0],
-                    green_3d, green_top, green_back, green_side,
-                    qdot_top, qdot_back, qdot_side, qdot_3d[0],
-                    q_arrow_top, q_arrow_back, q_arrow_side, q_arrow_3d[0],)
+            artists = [link, link_top, link_back, link_side,
+                       front_arrow_top, front_arrow_back, front_arrow_side, front_arrow_3d[0],
+                       link_lower, link_top_lower, link_back_lower, link_side_lower,
+                       back_arrow_top, back_arrow_back, back_arrow_side, back_arrow_3d[0],
+                       qdot_top, qdot_back, qdot_side, qdot_3d[0],
+                       q_arrow_top, q_arrow_back, q_arrow_side, q_arrow_3d[0]]
+            if show_neighbors:
+                artists += [green_3d, green_top, green_back, green_side]
+            return artists
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
@@ -469,7 +485,10 @@ class Surface:
         half_track   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0]), np.zeros(3)))
         right_points_frnt_cntr_bck, right_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = False)
         left_points_frnt_cntr_bck,   left_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = True)
-
+        
+        self.q[2] = (right_points_frnt_cntr_bck[1,2] + left_points_frnt_cntr_bck[1,2])/2 # height
+        self.q[4] = (right_points_frnt_cntr_bck[1,4] + left_points_frnt_cntr_bck[1,4])/2 # pitch
+        
         points          = [self.q, *right_points_frnt_cntr_bck, *left_points_frnt_cntr_bck]
         neighbor_points = [neighbors_q, *right_neighbors_frnt_cntr_bck, *left_neighbors_frnt_cntr_bck] 
         return points, neighbor_points
@@ -621,5 +640,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=False, is_surface_pitched=True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_backwards=False)
     my_surface.run_and_plot()   
