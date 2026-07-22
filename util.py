@@ -56,7 +56,7 @@ class Surface:
         self.center_log.append(np.array(points[1]))
         self.front_log.append(np.array(points[2]))
         self.back_log.append(np.array(points[3]))
-        self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2] + neighbor_points[3])
+        self.neighbor_log.append(np.vstack(neighbor_points))  # (16, 3): 4 points each for q, center, front, back
         
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -333,7 +333,7 @@ class Surface:
             back_arrow_3d[0] = ax.quiver(bx, by, bz, back_fwd[0], back_fwd[1], back_fwd[2],
                                            length=arrow_len, color='pink', zorder=6)
         def set_neighbors(i):
-            pts = np.array(neighbor_data[i]) if neighbor_data[i] else np.empty((0, 3))
+            pts = np.asarray(neighbor_data[i]) if len(neighbor_data[i]) else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
             green_top.set_offsets(pts[:, [0, 1]])
             green_back.set_offsets(pts[:, [1, 2]])
@@ -432,7 +432,7 @@ class Surface:
             self.center_log.append(np.array(points[1]))
             self.front_log.append(np.array(points[2]))
             self.back_log.append(np.array(points[3]))
-            self.neighbor_log.append(neighbor_points[0] + neighbor_points[1] + neighbor_points[2] + neighbor_points[3])
+            self.neighbor_log.append(np.vstack(neighbor_points))  # (16, 3): 4 points each for q, center, front, back
     
     def _body_update(self): 
         if not self.is_initalization:
@@ -444,54 +444,53 @@ class Surface:
         
         half_width   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0]), np.zeros(3)))
         half_track   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0]), np.zeros(3)))
-        center, front, back, neighbors_right_center, neighbors_front, neighbors_back = self._track_update(half_width, half_track, is_left_track = False)
+        pts, nbrs = self._track_update(half_width, half_track, is_left_track = False)
 
-        points          = [self.q, center, front, back]
-        neighbor_points = [neighbors_q, neighbors_right_center, neighbors_front, neighbors_back]
+        points          = [self.q, *pts]        # pts rows:  0 = center, 1 = front, 2 = back
+        neighbor_points = [neighbors_q, *nbrs] # nbrs rows: 0 = center, 1 = front, 2 = back
         return points, neighbor_points
 
     def _track_update(self, half_width, half_track, is_left_track = False):
         center = self.q + is_left_track * half_width - (1-is_left_track) * half_width # a compact if else using True = 1 False = 0
-        front  = center + half_track
-        back   = center - half_track
-            
-        neighbors_right_center, _ = self._point_height(center)
-        center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(center, front, back, examine_front = True)
-        center, front, back, neighbors_front, neighbors_back = self._track_surface_contact(center, front, back, examine_front = False)
-        return center, front, back, neighbors_right_center, neighbors_front, neighbors_back
-    
-    def _track_surface_contact(self, center, front, back, examine_front):
+        pts    = np.array([center, center + half_track, center - half_track])  # rows: 0 = center, 1 = front, 2 = back
+        nbrs   = np.empty((3, 4, 3))                                           # rows match pts; each holds 4 corner points (x, y, z)
+
+        nbrs[0], _ = self._point_height(center)
+        self._track_surface_contact(pts, nbrs, examine_front = True)   # mutates pts + nbrs in place; first-pass values are refined by the second
+        self._track_surface_contact(pts, nbrs, examine_front = False)
+        return pts, nbrs
+
+    def _track_surface_contact(self, pts, nbrs, examine_front):
         # consider tracking front and back points as class vairables
-        neighbors_front, surface_height_front = self._point_height(front)
-        neighbors_back, surface_height_back   = self._point_height(back)
-        
+        # pts/nbrs rows: 0 = center, 1 = front, 2 = back; both mutated in place
+        nbrs[1], surface_height_front = self._point_height(pts[1])
+        nbrs[2], surface_height_back  = self._point_height(pts[2])
+
         # protect against floating point error with 1e-15
-        front_is_under_ground = (examine_front and (surface_height_front - front[2]) > 1e-15) 
-        back_is_under_ground  = ((not examine_front) and (surface_height_back - back[2]) > 1e-15)
+        front_is_under_ground = (examine_front and (surface_height_front - pts[1][2]) > 1e-15)
+        back_is_under_ground  = ((not examine_front) and (surface_height_back - pts[2][2]) > 1e-15)
         if front_is_under_ground or back_is_under_ground:
             for _ in range(20):
-                front[2]         = surface_height_front
-                back[2]          = surface_height_back
-                center[2]        = (front[2] + back[2])/2
-                angles           = self._track_orientation(center, front)
+                pts[1][2]        = surface_height_front
+                pts[2][2]        = surface_height_back
+                pts[0][2]        = (pts[1][2] + pts[2][2])/2
+                angles           = self._track_orientation(pts[0], pts[1])
                 half_track = self._rotation_lg(*angles)[:, 0] * self.l / 2
-                front            = np.concatenate((center[:3] + half_track, angles))
-                back             = np.concatenate((center[:3] - half_track, angles))
-                
-                neighbors_front, surface_height_front = self._point_height(front)
-                neighbors_back, surface_height_back   = self._point_height(back)
-                
-                if front_is_under_ground and (abs(surface_height_front - front[2]) < 1e-9):
+                pts[1]           = np.concatenate((pts[0][:3] + half_track, angles))
+                pts[2]           = np.concatenate((pts[0][:3] - half_track, angles))
+
+                nbrs[1], surface_height_front = self._point_height(pts[1])
+                nbrs[2], surface_height_back  = self._point_height(pts[2])
+
+                if front_is_under_ground and (abs(surface_height_front - pts[1][2]) < 1e-9):
                     break
-                if back_is_under_ground and (abs(surface_height_back - back[2]) < 1e-9):
+                if back_is_under_ground and (abs(surface_height_back - pts[2][2]) < 1e-9):
                     break
 
         if front_is_under_ground:
-            center[3:6] = front[3:6]
+            pts[0][3:6] = pts[1][3:6]
         if  back_is_under_ground:
-            center[3:6] = back[3:6]
-
-        return center, front, back, neighbors_front, neighbors_back
+            pts[0][3:6] = pts[2][3:6]
 
     def _point_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
