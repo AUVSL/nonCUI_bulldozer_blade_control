@@ -53,8 +53,8 @@ class Surface:
         # put track on the surface at the start of the simulation
         points, neighbor_points = self._body_update()
         self.log.append([0, *self.q])
-        self.point_log.append(np.array(points[1:]))  # (3, 6): rows front, center, back
-        self.neighbor_log.append(np.vstack(neighbor_points))  # (16, 3): 4 points each for q, front, center, back
+        self.point_log.append(np.array(points[1:])) 
+        self.neighbor_log.append(np.vstack(neighbor_points)) 
 
     @property
     def subdivision(self, division_factor: float = 2.0):
@@ -82,9 +82,9 @@ class Surface:
                     w = 0
                     if self.is_surface_rolled and self.is_surface_pitched:
                         w = u_clip + v_clip
-                    if self.is_surface_rolled:
+                    elif self.is_surface_rolled:
                         w = v_clip if self.is_surface_pitched else u_clip
-                    if self.is_surface_pitched:
+                    elif self.is_surface_pitched:
                         w = u_clip if self.is_surface_pitched else v_clip
                     x, y, z = u * e1 + v * e2 + w * self.offset * e3
 
@@ -683,5 +683,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()   
