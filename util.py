@@ -479,16 +479,17 @@ class Surface:
         else:
             self.is_initalization = False
         neighbors_q, self.q[2] = self._point_height(self.q)
-        self.q[3:6]            = self._point_orientation()
+        corners = self._get_neighbor_points(self.q)
+        self.q[3:6] = self._point_orientation(corners)
         
         half_width   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0]), np.zeros(3)))
         half_track   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0]), np.zeros(3)))
         right_points_frnt_cntr_bck, right_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = False)
         left_points_frnt_cntr_bck,   left_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = True)
         
-        self.q[2] = (right_points_frnt_cntr_bck[1,2] + left_points_frnt_cntr_bck[1,2])/2 # height
-        self.q[4] = (right_points_frnt_cntr_bck[1,4] + left_points_frnt_cntr_bck[1,4])/2 # pitch
-        
+        self.q[2]       = (right_points_frnt_cntr_bck[1,2] + left_points_frnt_cntr_bck[1,2])/2 # height
+        corners         = [right_points_frnt_cntr_bck[2], right_points_frnt_cntr_bck[0], left_points_frnt_cntr_bck[2], left_points_frnt_cntr_bck[0]]
+        self.q[3:6]     = self._point_orientation(corners)
         points          = [self.q, *right_points_frnt_cntr_bck, *left_points_frnt_cntr_bck]
         neighbor_points = [neighbors_q, *right_neighbors_frnt_cntr_bck, *left_neighbors_frnt_cntr_bck] 
         return points, neighbor_points
@@ -568,7 +569,7 @@ class Surface:
         Roll/pitch/yaw with the front point in contact: pitch is the climb of
         the front point over its horizontal offset from the center, measured
         along the heading so it works for any travel direction; roll cannot be
-        recovered from a point on the forward axis, so it set to zero for the time being.
+        recovered from a point on the forward axis, so it set to zero arbitrarily.
         """
         vel   = np.array(self.q_dot[:3])
         if self.is_backwards:
@@ -580,12 +581,11 @@ class Surface:
         horiz = d[0] * np.cos(yaw) + d[1] * np.sin(yaw)
         pitch = -np.arctan2(d[2], horiz)
         
-        #TODO: when adding in a second track compute the roll for real 
         roll = 0
 
         return np.array([roll, pitch, yaw])
 
-    def _point_orientation(self):
+    def _point_orientation(self, corners):
         """
         Roll/pitch/yaw of the center of mass crossing the current tile: pitch and
         roll come from the tile's height-field gradient (the edges' angles,
@@ -594,7 +594,6 @@ class Surface:
         q_dot, arctan2(vel_y, vel_x), so (roll, pitch, yaw) form a consistent
         ZYX Euler triple for _rotation_lg.
         """
-        corners = self._get_neighbor_points(self.q)
         grad_xy = self._bilinear_gradient(self.q, corners)
 
         vel   = np.array(self.q_dot[:3])
@@ -640,5 +639,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_backwards=False)
     my_surface.run_and_plot()   
