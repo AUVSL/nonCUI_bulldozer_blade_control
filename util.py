@@ -32,9 +32,7 @@ class Surface:
         self.log                = []
         self.neighbor_points    = []
         self.neighbor_log       = []
-        self.center_log         = []
-        self.front_log          = []
-        self.back_log           = []
+        self.point_log            = []  # per frame: (3, 6) rows front, center, back
         
         # set up the surface grid
         self.u_range       = (-self.b/2, 3 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
@@ -53,11 +51,9 @@ class Surface:
         # put track on the surface at the start of the simulation
         points, neighbor_points = self._body_update()
         self.log.append([0, *self.q])
-        self.front_log.append(np.array(points[1]))
-        self.center_log.append(np.array(points[2]))
-        self.back_log.append(np.array(points[3]))
+        self.point_log.append(np.array(points[1:]))  # (3, 6): rows front, center, back
         self.neighbor_log.append(np.vstack(neighbor_points))  # (16, 3): 4 points each for q, front, center, back
-        
+
     @property
     def subdivision(self, division_factor: float = 2.0):
         """Grid spacing, sized relative to the dozer width self.b."""
@@ -113,9 +109,10 @@ class Surface:
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 0.5
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
-        center_data   = np.array(self.center_log)[::2]
-        front_data    = np.array(self.front_log)[::2]
-        back_data     = np.array(self.back_log)[::2]
+        point_data      = np.array(self.point_log)[::2]  # (frames, 3, 6): rows front, center, back
+        front_data    = point_data[:, 0]
+        center_data   = point_data[:, 1]
+        back_data     = point_data[:, 2]
         neighbor_data = self.neighbor_log[::2]
         all_neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
         grid_pts = np.array([[self.surf_grid.nodes[n]['x'],
@@ -442,9 +439,7 @@ class Surface:
 
             # log variables for plotting
             self.log.append([t, *self.q])
-            self.front_log.append(np.array(points[1]))
-            self.center_log.append(np.array(points[2]))
-            self.back_log.append(np.array(points[3]))
+            self.point_log.append(np.array(points[1:]))  # (3, 6): rows front, center, back
             self.neighbor_log.append(np.vstack(neighbor_points))  # (16, 3): 4 points each for q, front, center, back
     
     def _body_update(self): 
