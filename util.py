@@ -255,7 +255,12 @@ class Surface:
 
         def _fwd(row):
             return self._rotation_lg(*row[3:])[:, 0]
+
+        def _lateral(i):
+            # q's local +y axis scaled to the half-width: R_lg(*q[3:6]) @ [0, b/2, 0]
+            return self._rotation_lg(*data[i, 4:7]) @ np.array([0, self.b / 2, 0])
         fwd0 = _forward(0)
+        lat0 = _lateral(0)
         # each track arrow carries two arrows (right, left); set_qdot repositions them
         qdot_top  = ax_top.quiver([data[0, 1]] * 2, [data[0, 2]] * 2, [fwd0[0]] * 2, [fwd0[1]] * 2,
                                    color='darkorange', scale=1 / arrow_len, scale_units='xy',
@@ -279,6 +284,22 @@ class Surface:
                                        color='blue', scale=1 / arrow_len, scale_units='xy',
                                        angles='xy', zorder=7)
         q_arrow_3d   = [None]
+
+        # purple arrows from q toward each track: q ± R_lg(*q[3:6]) @ [0, b/2, 0].
+        # drawn at true length (scale=1) so each tip lands on a track center
+        q_lat_top  = ax_top.quiver([data[0, 1]] * 2, [data[0, 2]] * 2,
+                                    [lat0[0], -lat0[0]], [lat0[1], -lat0[1]],
+                                    color='purple', scale=1, scale_units='xy',
+                                    angles='xy', zorder=7)
+        q_lat_back = ax_back.quiver([data[0, 2]] * 2, [data[0, 3]] * 2,
+                                     [lat0[1], -lat0[1]], [lat0[2], -lat0[2]],
+                                     color='purple', scale=1, scale_units='xy',
+                                     angles='xy', zorder=7)
+        q_lat_side = ax_side.quiver([data[0, 1]] * 2, [data[0, 3]] * 2,
+                                     [lat0[0], -lat0[0]], [lat0[2], -lat0[2]],
+                                     color='purple', scale=1, scale_units='xy',
+                                     angles='xy', zorder=7)
+        q_lat_3d   = [None]
 
         # orange arrows at the right and left front points (f shares q's orientation)
         front_arrow_top  = ax_top.quiver([front_data[0, 0], lfront_data[0, 0]], [front_data[0, 1], lfront_data[0, 1]],
@@ -402,6 +423,20 @@ class Surface:
                 q_arrow_3d[0].remove()
             q_arrow_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
                                        length=arrow_len, color='blue', zorder=7)
+
+            # lateral half-width arrows from q toward each track (true length)
+            lat = _lateral(i)
+            q_lat_top.set_offsets([[x, y], [x, y]])
+            q_lat_top.set_UVC([lat[0], -lat[0]], [lat[1], -lat[1]])
+            q_lat_back.set_offsets([[y, z], [y, z]])
+            q_lat_back.set_UVC([lat[1], -lat[1]], [lat[2], -lat[2]])
+            q_lat_side.set_offsets([[x, z], [x, z]])
+            q_lat_side.set_UVC([lat[0], -lat[0]], [lat[2], -lat[2]])
+            if q_lat_3d[0] is not None:
+                q_lat_3d[0].remove()
+            q_lat_3d[0] = ax.quiver([x, x], [y, y], [z, z],
+                                     [lat[0], -lat[0]], [lat[1], -lat[1]], [lat[2], -lat[2]],
+                                     length=1, color='purple', zorder=7)
 
         set_front(0)
         set_back(0)
