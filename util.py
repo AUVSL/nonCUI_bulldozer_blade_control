@@ -220,22 +220,16 @@ class Surface:
         link_back, = ax_back.plot([], [], color='darkorange', linewidth=1.5)
         link_side, = ax_side.plot([], [], color='darkorange', linewidth=1.5)
         
-        link_lower,      = ax.plot([], [], [], color='pink', linewidth=1.5)
-        link_top_lower,  = ax_top.plot([], [], color='pink', linewidth=1.5)
-        link_back_lower, = ax_back.plot([], [], color='pink', linewidth=1.5)
-        link_side_lower, = ax_side.plot([], [], color='pink', linewidth=1.5)
+        link_lower,      = ax.plot([], [], [], color='darkorange', linewidth=1.5)
+        link_top_lower,  = ax_top.plot([], [], color='darkorange', linewidth=1.5)
+        link_back_lower, = ax_back.plot([], [], color='darkorange', linewidth=1.5)
+        link_side_lower, = ax_side.plot([], [], color='darkorange', linewidth=1.5)
 
         # green scatter artists for grid vertices within one tile length of the point, updated each frame
         green_3d   = ax.scatter([], [], [], color='green', s=40, zorder=5)
         green_top  = ax_top.scatter([], [], color='green', s=40, zorder=5)
         green_back = ax_back.scatter([], [], color='green', s=40, zorder=5)
         green_side = ax_side.scatter([], [], color='green', s=40, zorder=5)
-
-        # blue star marking the center of mass q, drawn as its own point (no link to the track)
-        q_point_3d   = ax.scatter([], [], [], color='blue', marker='*', s=120, zorder=7)
-        q_point_top  = ax_top.scatter([], [], color='blue', marker='*', s=120, zorder=7)
-        q_point_back = ax_back.scatter([], [], color='blue', marker='*', s=120, zorder=7)
-        q_point_side = ax_side.scatter([], [], color='blue', marker='*', s=120, zorder=7)
 
         # red arrow at the tracked point showing the center of mass's orientation,
         # i.e. the local forward axis (R_lg(*q[3:6])[:, 0]) for that frame's roll/pitch/yaw
@@ -254,15 +248,27 @@ class Surface:
             return self._rotation_lg(*back_data[i, 3:])[:, 0]
         fwd0 = _forward(0)
         qdot_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
-                                   color='red', scale=1 / arrow_len, scale_units='xy',
+                                   color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                    angles='xy', zorder=6)
         qdot_back = ax_back.quiver(data[0, 2], data[0, 3], fwd0[1], fwd0[2],
-                                    color='red', scale=1 / arrow_len, scale_units='xy',
+                                    color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                     angles='xy', zorder=6)
         qdot_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
-                                    color='red', scale=1 / arrow_len, scale_units='xy',
+                                    color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                     angles='xy', zorder=6)
         qdot_3d   = [None]  # mplot3d quiver has no in-place update, so remove/recreate each frame
+
+        # blue arrow marking the center of mass q, showing q's own orientation
+        q_arrow_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
+                                      color='blue', scale=1 / arrow_len, scale_units='xy',
+                                      angles='xy', zorder=7)
+        q_arrow_back = ax_back.quiver(data[0, 2], data[0, 3], fwd0[1], fwd0[2],
+                                       color='blue', scale=1 / arrow_len, scale_units='xy',
+                                       angles='xy', zorder=7)
+        q_arrow_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
+                                       color='blue', scale=1 / arrow_len, scale_units='xy',
+                                       angles='xy', zorder=7)
+        q_arrow_3d   = [None]
 
         # orange arrow at the front point, same forward axis (f shares q's orientation)
         front_arrow_top  = ax_top.quiver(front_data[0, 0], front_data[0, 1], fwd0[0], fwd0[1],
@@ -278,13 +284,13 @@ class Surface:
 
         # pink arrow at the back point, same forward axis (b shares q's orientation)
         back_arrow_top  = ax_top.quiver(back_data[0, 0], back_data[0, 1], fwd0[0], fwd0[1],
-                                          color='pink', scale=1 / arrow_len, scale_units='xy',
+                                          color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                           angles='xy', zorder=6)
         back_arrow_back = ax_back.quiver(back_data[0, 1], back_data[0, 2], fwd0[1], fwd0[2],
-                                           color='pink', scale=1 / arrow_len, scale_units='xy',
+                                           color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=6)
         back_arrow_side = ax_side.quiver(back_data[0, 0], back_data[0, 2], fwd0[0], fwd0[2],
-                                           color='pink', scale=1 / arrow_len, scale_units='xy',
+                                           color='darkorange', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=6)
         back_arrow_3d = [None]
 
@@ -331,7 +337,7 @@ class Surface:
             if back_arrow_3d[0] is not None:
                 back_arrow_3d[0].remove()
             back_arrow_3d[0] = ax.quiver(bx, by, bz, back_fwd[0], back_fwd[1], back_fwd[2],
-                                           length=arrow_len, color='pink', zorder=6)
+                                           length=arrow_len, color='darkorange', zorder=6)
         def set_neighbors(i):
             pts = np.asarray(neighbor_data[i]) if len(neighbor_data[i]) else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
@@ -351,14 +357,21 @@ class Surface:
             if qdot_3d[0] is not None:
                 qdot_3d[0].remove()
             qdot_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
-                                    length=arrow_len, color='red', zorder=6)
+                                    length=arrow_len, color='darkorange', zorder=6)
 
         def set_q_point(i):
             x, y, z = data[i, 1], data[i, 2], data[i, 3]
-            q_point_3d._offsets3d = ([x], [y], [z])
-            q_point_top.set_offsets([[x, y]])
-            q_point_back.set_offsets([[y, z]])
-            q_point_side.set_offsets([[x, z]])
+            fwd = _forward(i)
+            q_arrow_top.set_offsets([[x, y]])
+            q_arrow_top.set_UVC(fwd[0], fwd[1])
+            q_arrow_back.set_offsets([[y, z]])
+            q_arrow_back.set_UVC(fwd[1], fwd[2])
+            q_arrow_side.set_offsets([[x, z]])
+            q_arrow_side.set_UVC(fwd[0], fwd[2])
+            if q_arrow_3d[0] is not None:
+                q_arrow_3d[0].remove()
+            q_arrow_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
+                                       length=arrow_len, color='blue', zorder=7)
 
         set_front(0)
         set_back(0)
@@ -366,8 +379,8 @@ class Surface:
         set_qdot(0)
         set_q_point(0)
 
-        ax_side.legend([link_side, link_side_lower, green_side, q_point_side],
-                       ["center–front link", "center–back link", "grid neighbors", "q (center of mass)"],
+        ax_side.legend([link_side, green_side, q_arrow_side],
+                       ["track", "grid neighbors", "q (center of mass)"],
                        loc="upper right", fontsize=8)
 
         # the constrained-layout solver converges over the first few draws,
@@ -404,7 +417,7 @@ class Surface:
                     back_arrow_top, back_arrow_back, back_arrow_side, back_arrow_3d[0],
                     green_3d, green_top, green_back, green_side,
                     qdot_top, qdot_back, qdot_side, qdot_3d[0],
-                    q_point_3d, q_point_top, q_point_back, q_point_side,)
+                    q_arrow_top, q_arrow_back, q_arrow_side, q_arrow_3d[0],)
 
         anim = animation.FuncAnimation(
             fig, update, frames=len(data), blit=False, interval=50
