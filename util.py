@@ -620,6 +620,8 @@ class Surface:
                 if abs(fwd[axis]) > 1e-12:
                     # grid lines bounding the tiles the ends fall in (+1 stop, +1 for the far tile's upper line)
                     lo, hi = sorted((back_cell[axis], front_cell[axis]))
+                    #TODO: could super sample for smaller grid sizes so that surfaces difference above a certain size 
+                    # are treated as "real" surface differnces
                     near   = grid[lo:hi + 2]
                     # solve grid = base[axis] + s*fwd[axis] for every nearby grid value at once
                     for s in (near - base[axis]) / fwd[axis]:
