@@ -535,44 +535,56 @@ class Surface:
 
     def _body_update_iteration(self):
         """
-        Solve one rigid-body pose (height + roll/pitch/yaw) so the four track
-        contact points settle onto the surface, then return the six track points
-        as [right, left] x [front, center, back]. The body is rigid, so both
-        tracks share a single half_track vector and stay parallel by
-        construction. Orientation is contact-averaged: _point_orientation blends
-        the four snapped corners, so pitch follows the front-vs-back heights and
-        roll the left-vs-right heights.
+        Settle one rigid-body pose (height + roll/pitch/yaw) and return the six
+        track points as [right, left] x [front, center, back]. The body is
+        rigid, so both tracks share a single half_track vector and stay parallel
+        by construction.
+
+        _body_update has already snapped the body flush to the tile under the
+        center of mass (height from _bilinear_height, roll/pitch from that
+        tile's gradient). Keep that snap whenever it leaves every track point on
+        or above the surface: crossing a crest or a uniform slope the body
+        really does lie flush on the tile it is on. Only when the snap would
+        submerge part of a track -- a concave transition, where the tile under
+        the center falls away from the ground the ends rest on -- does the body
+        have to ride up onto its corners, which is what the loop below solves:
+        orientation is contact-averaged (_point_orientation blends the four
+        snapped corners, so pitch follows the front-vs-back heights and roll the
+        left-vs-right heights) and the height rests on the highest support.
         """
-        for _ in range(20):
-            R          = self._rotation_lg(*self.q[3:6])
-            half_width = R @ np.array([         0, self.b / 2, 0])
-            half_track = R @ np.array([self.l / 2,          0, 0])
+        # deepest penetration of the snapped pose; 1e-15 absorbs floating point error
+        is_under_ground = (self._resting_height(self._rotation_lg(*self.q[3:6])) - self.q[2]) > 1e-15
+        if is_under_ground:
+            for _ in range(20):
+                R          = self._rotation_lg(*self.q[3:6])
+                half_width = R @ np.array([         0, self.b / 2, 0])
+                half_track = R @ np.array([self.l / 2,          0, 0])
 
-            right_center = self.q[:3] - half_width
-            left_center  = self.q[:3] + half_width
-            rf, rb = right_center + half_track, right_center - half_track
-            lf, lb = left_center  + half_track, left_center  - half_track
+                right_center = self.q[:3] - half_width
+                left_center  = self.q[:3] + half_width
+                rf, rb = right_center + half_track, right_center - half_track
+                lf, lb = left_center  + half_track, left_center  - half_track
 
-            # drop the four track-contact points onto the surface
-            contacts = [rf, rb, lf, lb]
-            heights  = [self._point_height(p)[1] for p in contacts]
-            for p, h in zip(contacts, heights):
-                p[2] = h
+                # drop the four track-contact points onto the surface
+                contacts = [rf, rb, lf, lb]
+                heights  = [self._point_height(p)[1] for p in contacts]
+                for p, h in zip(contacts, heights):
+                    p[2] = h
 
-            # contact-averaged orientation from the settled corners
-            # (_point_orientation reads [rb, rf, lb, lf] as one bilinear patch)
-            new_orient = self._point_orientation([rb, rf, lb, lf])
+                # contact-averaged orientation from the settled corners
+                # (_point_orientation reads [rb, rf, lb, lf] as one bilinear patch)
+                new_orient = self._point_orientation([rb, rf, lb, lf])
 
-            # rest the rigid body on its highest support: the lowest height that
-            # keeps every point of both tracks on or above the surface, so no
-            # track segment is ever submerged
-            new_z = self._resting_height(self._rotation_lg(*new_orient))
+                # rest the rigid body on its highest support: the lowest height that
+                # keeps every point of both tracks on or above the surface, so no
+                # track segment is ever submerged
+                new_z = self._resting_height(self._rotation_lg(*new_orient))
 
-            converged = (abs(new_z - self.q[2]) < 1e-6 and
-                         np.all(np.abs(new_orient - self.q[3:6]) < 1e-6))
-            self.q[2], self.q[3:6] = new_z, new_orient
-            if converged:
-                break
+                converged = (abs(new_z - self.q[2]) < 1e-6 and
+                             np.all(np.abs(new_orient - self.q[3:6]) < 1e-6))
+                self.q[2], self.q[3:6] = new_z, new_orient
+                if converged:
+                    break
 
         # rebuild both tracks rigidly from the converged pose so they stay parallel
         R          = self._rotation_lg(*self.q[3:6])
@@ -607,7 +619,7 @@ class Surface:
         new_z   = -np.inf
         for side in (1.0, -1.0):              # left (+lat) and right (-lat) tracks
             base = self.q[:3] + side * lat
-            ss   = {-half_l, half_l}          # track ends
+            ss   = {-half_l, 0, half_l}          # track ends
 
             # the track only spans the tiles between its two ends, so search that
             # neighborhood of grid lines instead of the whole grid
@@ -627,10 +639,13 @@ class Surface:
                     for s in (near - base[axis]) / fwd[axis]:
                         if -half_l < s < half_l:   # keep only crossings within the track
                             ss.add(float(s))
+            surface_height = self._point_height(base)[1]
+
             for s in ss:
                 grid_crossing_point = base + s * fwd
                 surface_height      = self._point_height(grid_crossing_point)[1]
-                new_z               = max(new_z, (surface_height - grid_crossing_point[2]) + self.q[2])
+                delta = surface_height - grid_crossing_point[2]
+                new_z = max(new_z, delta + self.q[2])
         return new_z
 
     def _point_height(self, point):
@@ -720,5 +735,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_surface_rolled = False, is_backwards=False)
     my_surface.run_and_plot()   
