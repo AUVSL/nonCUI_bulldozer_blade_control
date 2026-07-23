@@ -525,7 +525,24 @@ class Surface:
         neighbors_q, self.q[2] = self._point_height(self.q)
         corners = self._get_neighbor_points(self.q)
         self.q[3:6] = self._point_orientation(corners)
-        
+        right_points, left_points, right_neighbors, left_neighbors = self._body_update_iteration()
+        half_width = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([0, self.b/2, 0]), np.zeros(3)))
+        left       = self.q + half_width
+        if(abs(left_points[1,0]-left[0]) > 1e-6):
+            for _ in range(20):
+                right_points, left_points, right_neighbors, left_neighbors = self._body_update_iteration()
+            
+                half_width = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([0, self.b/2, 0]), np.zeros(3)))
+                left       = self.q + half_width
+                
+                if(abs(left_points[1,0]-left[0]) > 1e-6):
+                    break
+            
+        points          = [self.q, *right_points, *left_points]
+        neighbor_points = [neighbors_q, *right_neighbors, *left_neighbors] 
+        return points, neighbor_points
+    
+    def _body_update_iteration(self):
         half_width   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0]), np.zeros(3)))
         half_track   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0]), np.zeros(3)))
         right_points_frnt_cntr_bck, right_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = False)
@@ -534,10 +551,9 @@ class Surface:
         self.q[2]       = (right_points_frnt_cntr_bck[1,2] + left_points_frnt_cntr_bck[1,2])/2 # height
         corners         = [right_points_frnt_cntr_bck[2], right_points_frnt_cntr_bck[0], left_points_frnt_cntr_bck[2], left_points_frnt_cntr_bck[0]]
         self.q[3:6]     = self._point_orientation(corners)
-        points          = [self.q, *right_points_frnt_cntr_bck, *left_points_frnt_cntr_bck]
-        neighbor_points = [neighbors_q, *right_neighbors_frnt_cntr_bck, *left_neighbors_frnt_cntr_bck] 
-        return points, neighbor_points
-
+        
+        return  right_points_frnt_cntr_bck, left_points_frnt_cntr_bck, right_neighbors_frnt_cntr_bck, left_neighbors_frnt_cntr_bck
+    
     def _track_update(self, half_width, half_track, is_left_track = False):
         center   = self.q + is_left_track * half_width - (1-is_left_track) * half_width # a compact if else using True = 1 False = 0
         points_front_center_back  = np.array([center + half_track, center, center - half_track])  # rows: 0 = front, 1 = center, 2 = back
@@ -570,9 +586,9 @@ class Surface:
                 neighbors_front_center_back[0], surface_height_front = self._point_height(points_front_center_back[0])
                 neighbors_front_center_back[2], surface_height_back  = self._point_height(points_front_center_back[2])
 
-                if front_is_under_ground and (abs(surface_height_front - points_front_center_back[0][2]) < 1e-9):
+                if front_is_under_ground and (abs(surface_height_front - points_front_center_back[0][2]) < 1e-6):
                     break
-                if back_is_under_ground and (abs(surface_height_back - points_front_center_back[2][2]) < 1e-9):
+                if back_is_under_ground and (abs(surface_height_back - points_front_center_back[2][2]) < 1e-6):
                     break
 
         if front_is_under_ground:
@@ -683,5 +699,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=False, is_surface_pitched=True, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()   
