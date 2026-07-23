@@ -12,7 +12,7 @@ class Surface:
         self.b                  = 1.75
         self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
-        self.u_split            = 0  # u-value where the grid switches to surface_abg2
+        self.u_split            = 2  # u-value where the grid switches to surface_abg2
         self.v_split            = 0  # u-value where the grid switches to surface_abg2
         self.transition_tiles   = self.b                      # tiles over which the offset ramps down past u_split
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
@@ -79,13 +79,12 @@ class Surface:
                     u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
                     v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
                     
-                    w = 0
-                    if self.is_surface_rolled and self.is_surface_pitched:
+                    w = u_clip if self.is_surface_pitched else v_clip
+                    if self.is_surface_rolled:
                         w = u_clip + v_clip
-                    elif self.is_surface_rolled:
+                    elif self.is_surface_rolled and not self.is_surface_pitched:
                         w = v_clip if self.is_surface_pitched else u_clip
-                    elif self.is_surface_pitched:
-                        w = u_clip if self.is_surface_pitched else v_clip
+                        
                     x, y, z = u * e1 + v * e2 + w * self.offset * e3
 
                 node = G.nodes[(i, j)]
@@ -517,84 +516,112 @@ class Surface:
             self.point_log.append(np.array(points[1:]))  # (3, 6): rows front, center, back
             self.neighbor_log.append(np.vstack(neighbor_points))  # (16, 3): 4 points each for q, front, center, back
     
-    def _body_update(self): 
+    def _body_update(self):
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
         else:
             self.is_initalization = False
+
+        # seed the body height + orientation from the tile under the center of mass
         neighbors_q, self.q[2] = self._point_height(self.q)
-        corners = self._get_neighbor_points(self.q)
-        self.q[3:6] = self._point_orientation(corners)
-        right_points, left_points, right_neighbors, left_neighbors = self._body_update_iteration()
-        half_width = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([0, self.b/2, 0]), np.zeros(3)))
-        left       = self.q + half_width
-        if(abs(left_points[1,0]-left[0]) > 1e-6):
-            for _ in range(20):
-                right_points, left_points, right_neighbors, left_neighbors = self._body_update_iteration()
-            
-                half_width = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([0, self.b/2, 0]), np.zeros(3)))
-                left       = self.q + half_width
-                
-                if(abs(left_points[1,0]-left[0]) > 1e-6):
-                    break
-            
-        points          = [self.q, *right_points, *left_points]
-        neighbor_points = [neighbors_q, *right_neighbors, *left_neighbors] 
+        self.q[3:6]            = self._point_orientation(self._get_neighbor_points(self.q))
+
+        # rigid contact-averaged solve, then build both tracks as parallel offsets
+        track_points, track_neighbors = self._body_update_iteration()
+
+        points          = [self.q, *track_points]
+        neighbor_points = [neighbors_q, *track_neighbors]
         return points, neighbor_points
-    
+
     def _body_update_iteration(self):
-        half_width   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([          0, self.b/2, 0]), np.zeros(3)))
-        half_track   = np.concatenate((self._rotation_lg(*self.q[3:6]) @ np.array([self.l / 2,         0, 0]), np.zeros(3)))
-        right_points_frnt_cntr_bck, right_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = False)
-        left_points_frnt_cntr_bck,   left_neighbors_frnt_cntr_bck = self._track_update(half_width, half_track, is_left_track = True)
-        
-        self.q[2]       = (right_points_frnt_cntr_bck[1,2] + left_points_frnt_cntr_bck[1,2])/2 # height
-        corners         = [right_points_frnt_cntr_bck[2], right_points_frnt_cntr_bck[0], left_points_frnt_cntr_bck[2], left_points_frnt_cntr_bck[0]]
-        self.q[3:6]     = self._point_orientation(corners)
-        
-        return  right_points_frnt_cntr_bck, left_points_frnt_cntr_bck, right_neighbors_frnt_cntr_bck, left_neighbors_frnt_cntr_bck
-    
-    def _track_update(self, half_width, half_track, is_left_track = False):
-        center   = self.q + is_left_track * half_width - (1-is_left_track) * half_width # a compact if else using True = 1 False = 0
-        points_front_center_back  = np.array([center + half_track, center, center - half_track])  # rows: 0 = front, 1 = center, 2 = back
-        neighbors_front_center_back = np.empty((3, 4, 3))                                           # rows match points_front_center_back; each holds 4 corner points (x, y, z)
+        """
+        Solve one rigid-body pose (height + roll/pitch/yaw) so the four track
+        contact points settle onto the surface, then return the six track points
+        as [right, left] x [front, center, back]. The body is rigid, so both
+        tracks share a single half_track vector and stay parallel by
+        construction. Orientation is contact-averaged: _point_orientation blends
+        the four snapped corners, so pitch follows the front-vs-back heights and
+        roll the left-vs-right heights.
+        """
+        for _ in range(20):
+            R          = self._rotation_lg(*self.q[3:6])
+            half_width = R @ np.array([         0, self.b / 2, 0])
+            half_track = R @ np.array([self.l / 2,          0, 0])
 
-        neighbors_front_center_back[1], _ = self._point_height(center)
-        self._track_surface_contact(points_front_center_back, neighbors_front_center_back, examine_front = True)   # mutates points_front_center_back + neighbors_front_center_back in place; first-pass values are refined by the second
-        self._track_surface_contact(points_front_center_back, neighbors_front_center_back, examine_front = False)
-        return points_front_center_back, neighbors_front_center_back
+            right_center = self.q[:3] - half_width
+            left_center  = self.q[:3] + half_width
+            rf, rb = right_center + half_track, right_center - half_track
+            lf, lb = left_center  + half_track, left_center  - half_track
 
-    def _track_surface_contact(self, points_front_center_back, neighbors_front_center_back, examine_front):
-        # consider tracking front and back points as class vairables
-        # points_front_center_back/neighbors_front_center_back rows: 0 = front, 1 = center, 2 = back; both mutated in place
-        neighbors_front_center_back[0], surface_height_front = self._point_height(points_front_center_back[0])
-        neighbors_front_center_back[2], surface_height_back  = self._point_height(points_front_center_back[2])
+            # drop the four track-contact points onto the surface
+            contacts = [rf, rb, lf, lb]
+            heights  = [self._point_height(p)[1] for p in contacts]
+            for p, h in zip(contacts, heights):
+                p[2] = h
 
-        # protect against floating point error with 1e-15
-        front_is_under_ground = (examine_front and (surface_height_front - points_front_center_back[0][2]) > 1e-15)
-        back_is_under_ground  = ((not examine_front) and (surface_height_back - points_front_center_back[2][2]) > 1e-15)
-        if front_is_under_ground or back_is_under_ground:
-            for _ in range(20):
-                points_front_center_back[0][2]    = surface_height_front
-                points_front_center_back[2][2]    = surface_height_back
-                points_front_center_back[1][2]    = (points_front_center_back[0][2] + points_front_center_back[2][2])/2
-                angles           = self._track_orientation(points_front_center_back[1], points_front_center_back[0])
-                half_track = self._rotation_lg(*angles)[:, 0] * self.l / 2
-                points_front_center_back[0]       = np.concatenate((points_front_center_back[1][:3] + half_track, angles))
-                points_front_center_back[2]       = np.concatenate((points_front_center_back[1][:3] - half_track, angles))
+            # contact-averaged orientation from the settled corners
+            # (_point_orientation reads [rb, rf, lb, lf] as one bilinear patch)
+            new_orient = self._point_orientation([rb, rf, lb, lf])
 
-                neighbors_front_center_back[0], surface_height_front = self._point_height(points_front_center_back[0])
-                neighbors_front_center_back[2], surface_height_back  = self._point_height(points_front_center_back[2])
+            # rest the rigid body on its highest support: the lowest height that
+            # keeps every point of both tracks on or above the surface, so no
+            # track segment is ever submerged
+            new_z = self._resting_height(self._rotation_lg(*new_orient))
 
-                if front_is_under_ground and (abs(surface_height_front - points_front_center_back[0][2]) < 1e-6):
-                    break
-                if back_is_under_ground and (abs(surface_height_back - points_front_center_back[2][2]) < 1e-6):
-                    break
+            converged = (abs(new_z - self.q[2]) < 1e-6 and
+                         np.all(np.abs(new_orient - self.q[3:6]) < 1e-6))
+            self.q[2], self.q[3:6] = new_z, new_orient
+            if converged:
+                break
 
-        if front_is_under_ground:
-            points_front_center_back[1][3:6] = points_front_center_back[0][3:6]
-        if  back_is_under_ground:
-            points_front_center_back[1][3:6] = points_front_center_back[2][3:6]
+        # rebuild both tracks rigidly from the converged pose so they stay parallel
+        R          = self._rotation_lg(*self.q[3:6])
+        half_width = R @ np.array([         0, self.b / 2, 0])
+        half_track = R @ np.array([self.l / 2,          0, 0])
+        orient     = self.q[3:6].copy()
+
+        right_center = self.q[:3] - half_width
+        left_center  = self.q[:3] + half_width
+        track_xyz    = [right_center + half_track, right_center, right_center - half_track,
+                        left_center  + half_track, left_center,  left_center  - half_track]
+
+        track_points    = [np.concatenate((xyz, orient))           for xyz in track_xyz]
+        track_neighbors = [np.array(self._get_neighbor_points(xyz)) for xyz in track_xyz]
+        return track_points, track_neighbors
+
+    def _resting_height(self, R):
+        """
+        Lowest body height q[2] (for orientation R and the current q[:2]) that
+        keeps every point of both rigid tracks on or above the surface, so the
+        body rests on its highest contact and no track segment is submerged.
+
+        The surface is piecewise planar with kinks only on the grid lines, so a
+        straight track's deepest penetration always occurs at an endpoint or a
+        grid-line crossing; between those the clearance varies linearly. Sampling
+        the ends plus every grid crossing therefore finds the true deepest point
+        exactly (a uniform scan would step over the kinks).
+        """
+        fwd     = R[:, 0]
+        lat     = R[:, 1] * (self.b / 2)      # body center -> track lateral offset (local +y)
+        half_l  = self.l / 2
+        new_z   = -np.inf
+        for side in (1.0, -1.0):              # left (+lat) and right (-lat) tracks
+            base = self.q[:3] + side * lat
+            ss   = {-half_l, half_l}          # track ends
+            # seach x axis tile via (self.us, 0) then y axis tiles via (self.vs, 1)
+            for grid, axis in ((self.us, 0), (self.vs, 1)):
+                # skip if the track runs parallel to this axis' lines (fwd[axis] ~ 0) since it never crosses
+                # plus avoid divide by zero error later
+                if abs(fwd[axis]) > 1e-12:
+                    # solve grid = base[axis] + s*fwd[axis] for every grid value g at once
+                    for s in (grid - base[axis]) / fwd[axis]:
+                        if -half_l < s < half_l:   # keep only crossings within the track
+                            ss.add(float(s))
+            for s in ss:
+                grid_crossing_point = base + s * fwd
+                surface_height      = self._point_height(grid_crossing_point)[1]
+                new_z               = max(new_z, (surface_height - grid_crossing_point[2]) + self.q[2])
+        return new_z
 
     def _point_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
@@ -624,27 +651,6 @@ class Surface:
 
         return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
             
-    def _track_orientation(self, center, front):
-        """
-        Roll/pitch/yaw with the front point in contact: pitch is the climb of
-        the front point over its horizontal offset from the center, measured
-        along the heading so it works for any travel direction; roll cannot be
-        recovered from a point on the forward axis, so it set to zero arbitrarily.
-        """
-        vel   = np.array(self.q_dot[:3])
-        if self.is_backwards:
-            vel *= -1
-        speed = np.linalg.norm(vel[:2])
-        yaw   = center[5] if speed < 1e-9 else np.arctan2(vel[1], vel[0])
-
-        d     = np.asarray(front[:3]) - center[:3]
-        horiz = d[0] * np.cos(yaw) + d[1] * np.sin(yaw)
-        pitch = -np.arctan2(d[2], horiz)
-        
-        roll = 0
-
-        return np.array([roll, pitch, yaw])
-
     def _point_orientation(self, corners):
         """
         Roll/pitch/yaw of the center of mass crossing the current tile: pitch and
@@ -699,5 +705,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=False, is_surface_pitched=True, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()   
