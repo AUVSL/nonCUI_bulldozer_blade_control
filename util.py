@@ -608,13 +608,21 @@ class Surface:
         for side in (1.0, -1.0):              # left (+lat) and right (-lat) tracks
             base = self.q[:3] + side * lat
             ss   = {-half_l, half_l}          # track ends
-            # seach x axis tile via (self.us, 0) then y axis tiles via (self.vs, 1)
+
+            # the track only spans the tiles between its two ends, so search that
+            # neighborhood of grid lines instead of the whole grid
+            back_cell  = self._grid_cell(base - half_l * fwd)
+            front_cell = self._grid_cell(base + half_l * fwd)
+            # seach x axis tiles via (self.us, 0) then y axis tiles via (self.vs, 1)
             for grid, axis in ((self.us, 0), (self.vs, 1)):
                 # skip if the track runs parallel to this axis' lines (fwd[axis] ~ 0) since it never crosses
                 # plus avoid divide by zero error later
                 if abs(fwd[axis]) > 1e-12:
-                    # solve grid = base[axis] + s*fwd[axis] for every grid value g at once
-                    for s in (grid - base[axis]) / fwd[axis]:
+                    # grid lines bounding the tiles the ends fall in (+1 stop, +1 for the far tile's upper line)
+                    lo, hi = sorted((back_cell[axis], front_cell[axis]))
+                    near   = grid[lo:hi + 2]
+                    # solve grid = base[axis] + s*fwd[axis] for every nearby grid value at once
+                    for s in (near - base[axis]) / fwd[axis]:
                         if -half_l < s < half_l:   # keep only crossings within the track
                             ss.add(float(s))
             for s in ss:
@@ -628,13 +636,18 @@ class Surface:
         height_to_surface = self._bilinear_height(point, neighbor_points)
         return neighbor_points, height_to_surface
 
-    def _get_neighbor_points(self, point):
+    def _grid_cell(self, point):
+        """(i, j) index of the grid tile containing point's (x, y), clipped to the grid."""
         i = int(np.clip((point[0] - self.us[0]) // self.subdivision, 0, len(self.us) - 2))
         j = int(np.clip((point[1] - self.vs[0]) // self.subdivision, 0, len(self.vs) - 2))
-        
+        return i, j
+
+    def _get_neighbor_points(self, point):
+        i, j = self._grid_cell(point)
+
         corners         = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
         neighbor_points = [(self.surf_grid.nodes[n]['x'], self.surf_grid.nodes[n]['y'], self.surf_grid.nodes[n]['z']) for n in corners]
-        
+
         return neighbor_points
     
     def _bilinear_height(self, point, corners):
