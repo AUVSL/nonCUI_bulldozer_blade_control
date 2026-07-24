@@ -12,8 +12,8 @@ class Surface:
         self.b                  = 1.75
         self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
-        self.u_split            = 2  # u-value where the grid switches to surface_abg2
-        self.v_split            = 0  # u-value where the grid switches to surface_abg2
+        self.u_split            = 0  # u-value where the grid switches to surface_abg2
+        self.v_split            = 2  # u-value where the grid switches to surface_abg2
         self.transition_tiles   = self.b                      # tiles over which the offset ramps down past u_split
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
@@ -37,8 +37,8 @@ class Surface:
         self.point_log          = []  # per frame: (3, 6) rows front, center, back
         
         # set up the surface grid
-        self.u_range       = (-self.b/2, 3 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
-        self.v_range       = (-self.b/2,   self.b/2) if is_surface_pitched else (-self.b/2, 3 * self.b)
+        self.u_range       = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        self.v_range       = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 4 * self.b)
         if is_backwards:
             self.u_range       = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
             self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
@@ -79,11 +79,11 @@ class Surface:
                     u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
                     v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
                     
-                    w = u_clip if self.is_surface_pitched else v_clip
-                    if self.is_surface_rolled:
-                        w = u_clip + v_clip
-                    elif self.is_surface_rolled and not self.is_surface_pitched:
-                        w = v_clip if self.is_surface_pitched else u_clip
+                    # w = u_clip if self.is_surface_pitched else v_clip
+                    # if self.is_surface_rolled and self.is_surface_pitched:
+                    w = u_clip + v_clip
+                    # elif self.is_surface_rolled:
+                        # w = v_clip if self.is_surface_pitched else u_clip
                         
                     x, y, z = u * e1 + v * e2 + w * self.offset * e3
 
@@ -545,35 +545,23 @@ class Surface:
         tile's gradient). Keep that snap whenever it leaves every track point on
         or above the surface: crossing a crest or a uniform slope the body
         really does lie flush on the tile it is on. Only when the snap would
-        submerge part of a track -- a concave transition, where the tile under
-        the center falls away from the ground the ends rest on -- does the body
-        have to ride up onto its corners, which is what the loop below solves:
-        orientation is contact-averaged (_point_orientation blends the four
-        snapped corners, so pitch follows the front-vs-back heights and roll the
-        left-vs-right heights) and the height rests on the highest support.
+        submerge part of a track does the loop below solve, alternating
+        _contact_roll and _contact_pitch to settle the pose onto the ground so
+        no quarter of the body hangs, with the height resting on the highest
+        support.
         """
         # deepest penetration of the snapped pose; 1e-15 absorbs floating point error
         is_under_ground = (self._resting_height(self._rotation_lg(*self.q[3:6])) - self.q[2]) > 1e-15
         if is_under_ground:
             for _ in range(20):
-                R          = self._rotation_lg(*self.q[3:6])
-                half_width = R @ np.array([         0, self.b / 2, 0])
-                half_track = R @ np.array([self.l / 2,          0, 0])
-
-                right_center = self.q[:3] - half_width
-                left_center  = self.q[:3] + half_width
-                rf, rb = right_center + half_track, right_center - half_track
-                lf, lb = left_center  + half_track, left_center  - half_track
-
-                # drop the four track-contact points onto the surface
-                contacts = [rf, rb, lf, lb]
-                heights  = [self._point_height(p)[1] for p in contacts]
-                for p, h in zip(contacts, heights):
-                    p[2] = h
-
-                # contact-averaged orientation from the settled corners
-                # (_point_orientation reads [rb, rf, lb, lf] as one bilinear patch)
-                new_orient = self._point_orientation([rb, rf, lb, lf])
+                # roll and pitch settle onto the ground so no quarter of the body
+                # hangs (yaw is the heading, which the settling cannot change).
+                # Each starts from the pose the body already holds, so on
+                # convergence the two are balanced against one another's settled
+                # value rather than against a guess at it.
+                new_orient    = self.q[3:6].copy()
+                new_orient[0] = self._contact_roll(new_orient)
+                new_orient[1] = self._contact_pitch(new_orient)
 
                 # rest the rigid body on its highest support: the lowest height that
                 # keeps every point of both tracks on or above the surface, so no
@@ -601,11 +589,34 @@ class Surface:
         track_neighbors = [np.array(self._get_neighbor_points(xyz)) for xyz in track_xyz]
         return track_points, track_neighbors
 
-    def _resting_height(self, R):
+    def _contact_roll(self, orient):
+        """Roll (at orient's pitch and yaw) that leaves both tracks on the ground."""
+        def imbalance(roll):
+            z_left, z_right = self._track_resting_heights(
+                self._rotation_lg(roll, orient[1], orient[2]))
+            return z_left - z_right
+        return self._contact_angle(imbalance, orient[0])
+
+    def _track_resting_heights(self, R):
         """
-        Lowest body height q[2] (for orientation R and the current q[:2]) that
-        keeps every point of both rigid tracks on or above the surface, so the
-        body rests on its highest contact and no track segment is submerged.
+        The lowest-height question asked of each track on its own, as
+        (left, right). _contact_roll balances the pair.
+        """
+        support = self._support_heights(R)
+        return float(support[1].max()), float(support[0].max())
+
+    def _support_heights(self, R):
+        """
+        Lowest body height each quarter of the contact patch calls for, as a
+        [right, left] x [back, front] array. The rigid body can only rest at the
+        highest of the four, so any quarter asking for less hangs clear of the
+        ground unless the pose balances them: _contact_roll balances left
+        against right, _contact_pitch front against back.
+
+        The halves overlap at the track midpoint, so a body pivoting on a peak
+        directly beneath its center reads as balanced from every direction --
+        which it is, since no rotation can bring anything else down onto the
+        ground without driving that peak through the belly.
 
         The surface is piecewise planar with kinks only on the grid lines, so a
         straight track's deepest penetration always occurs at an endpoint or a
@@ -616,10 +627,10 @@ class Surface:
         fwd     = R[:, 0]
         lat     = R[:, 1] * (self.b / 2)      # body center -> track lateral offset (local +y)
         half_l  = self.l / 2
-        new_z   = -np.inf
-        for side in (1.0, -1.0):              # left (+lat) and right (-lat) tracks
-            base = self.q[:3] + side * lat
-            ss   = {-half_l, 0, half_l}          # track ends
+        support = np.full((2, 2), -np.inf)    # [right, left] x [back, front]
+        for i, side in enumerate((-1.0, 1.0)):   # right (-lat) and left (+lat) tracks
+            base  = self.q[:3] + side * lat
+            ss    = {-half_l, 0, half_l}         # track ends
 
             # the track only spans the tiles between its two ends, so search that
             # neighborhood of grid lines instead of the whole grid
@@ -639,14 +650,96 @@ class Surface:
                     for s in (near - base[axis]) / fwd[axis]:
                         if -half_l < s < half_l:   # keep only crossings within the track
                             ss.add(float(s))
-            surface_height = self._point_height(base)[1]
 
             for s in ss:
                 grid_crossing_point = base + s * fwd
                 surface_height      = self._point_height(grid_crossing_point)[1]
                 delta = surface_height - grid_crossing_point[2]
-                new_z = max(new_z, delta + self.q[2])
-        return new_z
+                needed = delta + self.q[2]
+                # the midpoint (s == 0) is the last point of both halves
+                if s <= 0:
+                    support[i, 0] = max(support[i, 0], needed)
+                if s >= 0:
+                    support[i, 1] = max(support[i, 1], needed)
+        return support
+
+    def _contact_angle(self, imbalance, fitted):
+        """
+        The angle at which two opposed quarters of the contact patch call for
+        the same body height, starting from the fitted one.
+
+        _point_orientation fits a plane through the four dropped corners, which
+        is exact only where the surface really is a plane. Where the body
+        bridges a kink that fit is an average of the terrain underneath, while
+        _resting_height rests on the highest support, so the body pivots up onto
+        its high quarter and the opposite one hangs. Solving instead for the
+        angle that balances the pair plants both by construction, and reproduces
+        the fitted angle wherever that fit was already right (on a plane,
+        balanced is flush).
+
+        Turning toward a quarter lowers it and lifts the one opposite, so the
+        imbalance is monotonic in the angle and a bracketed root find is safe.
+        The Illinois weighting keeps false position from stalling against the
+        kinks, where the binding contact jumps from one end of a track to the
+        other.
+        """
+        # the fit only misses by the amount the terrain departs from a plane, so
+        # bracket around it and widen only if the bracket does not include angles 
+        # that get one track above and below the surface contact plane so a value in 
+        # the middle gets both tracks on the same surface contacting plane
+        # # (+-90 deg is the whole range before the contact patch stands vertical)
+        limit, span = np.pi / 2 - 1e-3, 0.25
+        while True:
+            lo,   hi   = max(fitted - span, -limit), min(fitted + span, limit)
+            f_lo, f_hi = imbalance(lo), imbalance(hi)
+            if f_lo * f_hi <= 0:
+                break
+            if lo <= -limit and hi >= limit:   # no balanced angle exists here,
+                return fitted                  # so keep the fitted one
+            span *= 2
+
+        angle = fitted
+        for _ in range(60):
+            if f_hi == f_lo:      # already balanced across the whole bracket
+                break
+            # regula falsi (false position) method used pick angle between high and low
+            # to get both tracks near the surface contact plane with unknown roll/pitch
+            angle = (lo * f_hi - hi * f_lo) / (f_hi - f_lo)
+
+            f = imbalance(angle)
+            if abs(f) < 1e-7 or hi - lo < 1e-7:   # 0.1 um of hang, 1e-7 rad of angle
+                break
+            if f * f_lo > 0:
+                lo, f_lo = angle, f
+                f_hi    *= 0.5   # Illinois: relax the retained end so it can move next pass
+            else:
+                hi, f_hi = angle, f
+                f_lo    *= 0.5
+        return angle
+
+    def _contact_pitch(self, orient):
+        """Pitch (at orient's roll and yaw) that leaves both ends on the ground."""
+        def imbalance(pitch):
+            z_front, z_back = self._half_resting_heights(
+                self._rotation_lg(orient[0], pitch, orient[2]))
+            return z_front - z_back
+        return self._contact_angle(imbalance, orient[1])
+
+    def _half_resting_heights(self, R):
+        """
+        The same question asked of each half of the body, as (front, back).
+        _contact_pitch balances the pair.
+        """
+        support = self._support_heights(R)
+        return float(support[:, 1].max()), float(support[:, 0].max())
+
+    def _resting_height(self, R):
+        """
+        Lowest body height q[2] (for orientation R and the current q[:2]) that
+        keeps every point of both rigid tracks on or above the surface, so the
+        body rests on its highest contact and no track segment is submerged.
+        """
+        return float(self._support_heights(R).max())
 
     def _point_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
@@ -735,5 +828,5 @@ class Surface:
         return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=True, is_surface_rolled = False, is_backwards=False)
-    my_surface.run_and_plot()   
+    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface.run_and_plot()
