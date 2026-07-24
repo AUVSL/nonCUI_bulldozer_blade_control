@@ -31,6 +31,11 @@ class Surface:
         self.is_surface_pitched = is_surface_pitched
         self.is_surface_sigmoid = False
         self.is_surface_rolled = is_surface_rolled
+        # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
+        # tighter than the settle loop's 1e-6 convergence check, or the pose it
+        # returns is noisier than that check and the settle loop never converges
+        # -- which burns *more* passes, so loosening this is a net slowdown.
+        self.contact_tol        = 1e-7
         self.log                = []
         self.neighbor_points    = []
         self.neighbor_log       = []
@@ -49,6 +54,13 @@ class Surface:
         self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
         
         self.surf_grid     = self._surface_grid()
+
+        # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
+        # hot height lookups skip the networkx attribute dicts entirely
+        self.grid_pts = [[(self.surf_grid.nodes[(i, j)]['x'],
+                           self.surf_grid.nodes[(i, j)]['y'],
+                           self.surf_grid.nodes[(i, j)]['z'])
+                          for j in range(len(self.vs))] for i in range(len(self.us))]
 
         # put track on the surface at the start of the simulation
         points, neighbor_points = self._body_update()
@@ -707,7 +719,7 @@ class Surface:
             angle = (lo * f_hi - hi * f_lo) / (f_hi - f_lo)
 
             f = imbalance(angle)
-            if abs(f) < 1e-7 or hi - lo < 1e-7:   # 0.1 um of hang, 1e-7 rad of angle
+            if abs(f) < self.contact_tol or hi - lo < self.contact_tol:
                 break
             if f * f_lo > 0:
                 lo, f_lo = angle, f
@@ -748,29 +760,31 @@ class Surface:
 
     def _grid_cell(self, point):
         """(i, j) index of the grid tile containing point's (x, y), clipped to the grid."""
-        i = int(np.clip((point[0] - self.us[0]) // self.subdivision, 0, len(self.us) - 2))
-        j = int(np.clip((point[1] - self.vs[0]) // self.subdivision, 0, len(self.vs) - 2))
+        i = int((point[0] - self.us[0]) // self.subdivision)
+        j = int((point[1] - self.vs[0]) // self.subdivision)
+        i_max, j_max = len(self.us) - 2, len(self.vs) - 2
+        i = 0 if i < 0 else i_max if i > i_max else i
+        j = 0 if j < 0 else j_max if j > j_max else j
         return i, j
 
     def _get_neighbor_points(self, point):
         i, j = self._grid_cell(point)
+        col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
+        return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
 
-        corners         = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)]
-        neighbor_points = [(self.surf_grid.nodes[n]['x'], self.surf_grid.nodes[n]['y'], self.surf_grid.nodes[n]['z']) for n in corners]
-
-        return neighbor_points
-    
     def _bilinear_height(self, point, corners):
         """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
-        p1, p2, p3, p4 = (np.array(c) for c in corners)
-        h1, h2, h3, h4 = p1[2], p2[2], p3[2], p4[2]
+        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
 
-        xy  = np.array(point[:2])
-        e_s = (p2 - p1)[:2]
-        e_t = (p3 - p1)[:2]
-
-        s = np.clip(np.dot(xy - p1[:2], e_s) / np.dot(e_s, e_s), 0.0, 1.0)
-        t = np.clip(np.dot(xy - p1[:2], e_t) / np.dot(e_t, e_t), 0.0, 1.0)
+        # same bilinear as before, but on plain floats so numpy's array-function
+        # dispatch (np.dot / np.clip on scalars) never runs on the hot path
+        dx,   dy   = point[0] - x1, point[1] - y1
+        esx,  esy  = x2 - x1, y2 - y1
+        etx,  ety  = x3 - x1, y3 - y1
+        s = (dx * esx + dy * esy) / (esx * esx + esy * esy)
+        t = (dx * etx + dy * ety) / (etx * etx + ety * ety)
+        s = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
+        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
 
         return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
             
@@ -809,23 +823,23 @@ class Surface:
         """(dh/dx, dh/dy) of the same bilinear patch _bilinear_height blends,
         found by differentiating it w.r.t. the tile's (s,t) edge parameters
         and mapping back to the xy-plane via the edge vectors."""
-        p1, p2, p3, p4 = (np.array(c) for c in corners)
-        h1, h2, h3, h4 = p1[2], p2[2], p3[2], p4[2]
+        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
 
-        xy  = np.array(point[:2])
-        e_s = (p2 - p1)[:2]
-        e_t = (p3 - p1)[:2]
+        dx,  dy  = point[0] - x1, point[1] - y1
+        e_s = np.array([x2 - x1, y2 - y1])
+        e_t = np.array([x3 - x1, y3 - y1])
+        es2, et2 = e_s @ e_s, e_t @ e_t
 
-        s = np.clip(np.dot(xy - p1[:2], e_s) / np.dot(e_s, e_s), 0.0, 1.0)
-        t = np.clip(np.dot(xy - p1[:2], e_t) / np.dot(e_t, e_t), 0.0, 1.0)
+        s = min(max((dx * e_s[0] + dy * e_s[1]) / es2, 0.0), 1.0)
+        t = min(max((dx * e_t[0] + dy * e_t[1]) / et2, 0.0), 1.0)
 
         dh_ds = (h2 - h1) * (1 - t) + (h4 - h3) * t
         dh_dt = (h3 - h1) * (1 - s) + (h4 - h2) * s
-        
+
         # [dh/dx, dh/dy]^T = dh_ds*[ds/dx, ds/dy]^T + dh_dt*[dt/dx, dt/dy]^T,
-        # [ds/dx, ds/dy]^T = e_s / (e_s . e_s), 
+        # [ds/dx, ds/dy]^T = e_s / (e_s . e_s),
         # [dt/dx, dt/dy]^T = e_t / (e_t . e_t).
-        return dh_ds * e_s / np.dot(e_s, e_s) + dh_dt * e_t / np.dot(e_t, e_t)
+        return dh_ds * e_s / es2 + dh_dt * e_t / et2
 
 if __name__ == "__main__":
     my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
