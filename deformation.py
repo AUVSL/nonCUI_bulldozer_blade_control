@@ -9,12 +9,13 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 class Surface:
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
         # simulation parameters
+        self.division_factor    = 2
         self.b                  = 1.75
         self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.u_split            = 0  # u-value where the grid switches to surface_abg2
         self.v_split            = 2  # u-value where the grid switches to surface_abg2
-        self.transition_tiles   = self.b                      # tiles over which the offset ramps down past u_split
+        self.transition_tiles   = 1/2 *self.b * self.division_factor # tiles over which the offset ramps down past u_split
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
         self.is_initalization   = True
@@ -32,6 +33,7 @@ class Surface:
         self.is_surface_rolled = is_surface_rolled
         self.log                = []
         self.neighbor_log       = []
+        self.grid_log           = []
         
         # set up the surface grid
         self.u_range       = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
@@ -48,21 +50,24 @@ class Surface:
         self.surf_grid     = self._surface_grid()
 
         # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
-        # hot height lookups skip the networkx attribute dicts entirely
+        # hot height lookups skip the networkx attribute dicts entirely.
+        # _neighbor_deformation writes new heights here (and through to the
+        # graph), so this - not surf_grid - is the live surface
         self.grid_pts = [[(self.surf_grid.nodes[(i, j)]['x'],
                            self.surf_grid.nodes[(i, j)]['y'],
                            self.surf_grid.nodes[(i, j)]['z'])
                           for j in range(len(self.vs))] for i in range(len(self.us))]
 
         # put the body on the surface at the start of the simulation
-        neighbor_points = self._body_update()
+        neighbor_points, self.q[2] = self._point_height(self.q)
         self.log.append([0, *self.q])
         self.neighbor_log.append(np.array(neighbor_points))
+        self.grid_log.append(self._grid_heights())
 
     @property
-    def subdivision(self, division_factor: float = 2.0):
+    def subdivision(self):
         """Grid spacing, sized relative to the dozer width self.b."""
-        return self.b / division_factor
+        return self.b / self.division_factor
 
     def _surface_grid(self):
         R_surf     = self._rotation_lg(*self.surface_abg)
@@ -111,7 +116,42 @@ class Surface:
             [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
             [-sB,                      sa * cB,                  ca * cB]
         ]).T
- 
+
+    def _point_height(self, point):
+        neighbor_points   = self._get_neighbor_points(point)
+        height_to_surface = self._bilinear_height(point, neighbor_points)
+        return neighbor_points, height_to_surface
+
+    def _get_neighbor_points(self, point):
+        i, j = self._grid_cell(point)
+        col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
+        return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
+    
+    def _grid_cell(self, point):
+        """(i, j) index of the grid tile containing point's (x, y), clipped to the grid."""
+        i = int((point[0] - self.us[0]) // self.subdivision)
+        j = int((point[1] - self.vs[0]) // self.subdivision)
+        i_max, j_max = len(self.us) - 2, len(self.vs) - 2
+        i = 0 if i < 0 else i_max if i > i_max else i
+        j = 0 if j < 0 else j_max if j > j_max else j
+        return i, j
+
+    def _bilinear_height(self, point, corners):
+        """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
+        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
+
+        # same bilinear as before, but on plain floats so numpy's array-function
+        # dispatch (np.dot / np.clip on scalars) never runs on the hot path
+        dx,   dy   = point[0] - x1, point[1] - y1
+        esx,  esy  = x2 - x1, y2 - y1
+        etx,  ety  = x3 - x1, y3 - y1
+        s = (dx * esx + dy * esy) / (esx * esx + esy * esy)
+        t = (dx * etx + dy * ety) / (etx * etx + ety * ety)
+        s = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
+        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+
+        return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
+            
     def run_and_plot(self, show_neighbors: bool = False):
         self._run()
 
@@ -121,21 +161,28 @@ class Surface:
         margin = 0.5
         data          = np.array(self.log)[::2]  # every 2nd frame represented to speed up rendering
         neighbor_data = self.neighbor_log[::2]
-        grid_pts = np.array([[self.surf_grid.nodes[n]['x'],
-                              self.surf_grid.nodes[n]['y'],
-                              self.surf_grid.nodes[n]['z']] for n in self.surf_grid.nodes])
+        grid_z_data   = self.grid_log[::2]
 
-        # bound the view with the surface grid (so the q path isn't clipped flush
-        # at a panel edge), plus the grid-neighbor points only when they will
-        # actually be drawn
-        bound_pts = [grid_pts]
+        # deformation only moves heights, so x/y are fixed for the whole run and
+        # a frame's surface is these two arrays plus that frame's z snapshot
+        grid_x = np.array([[pt[0] for pt in col] for col in self.grid_pts])
+        grid_y = np.array([[pt[1] for pt in col] for col in self.grid_pts])
+
+        # bound the view with every height the surface takes over the run (so
+        # neither the q path nor a fresh cut is clipped flush at a panel edge),
+        # plus the grid-neighbor points only when they will actually be drawn
+        bound_x = [grid_x.ravel()]
+        bound_y = [grid_y.ravel()]
+        bound_z = [np.asarray(self.grid_log).ravel()]
         if show_neighbors:
-            bound_pts.append(np.array([pt for frame in self.neighbor_log for pt in frame])[:, :3])
-        bound_pts = np.vstack(bound_pts)
+            neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
+            bound_x.append(neighbor_pts[:, 0])
+            bound_y.append(neighbor_pts[:, 1])
+            bound_z.append(neighbor_pts[:, 2])
 
-        all_x = np.concatenate([data[:, 1], bound_pts[:, 0]])
-        all_y = np.concatenate([data[:, 2], bound_pts[:, 1]])
-        all_z = np.concatenate([data[:, 3], bound_pts[:, 2]])
+        all_x = np.concatenate([data[:, 1], *bound_x])
+        all_y = np.concatenate([data[:, 2], *bound_y])
+        all_z = np.concatenate([data[:, 3], *bound_z])
         
         cx     = (all_x.max() + all_x.min()) / 2
         cy     = (all_y.max() + all_y.min()) / 2
@@ -175,32 +222,37 @@ class Surface:
             a2d.xaxis.set_major_locator(MaxNLocator(integer=True))
             a2d.yaxis.set_major_locator(MaxNLocator(integer=True))
 
-        # draw the surface grid
-        grid_segments = [
-            [(self.surf_grid.nodes[u]['x'], self.surf_grid.nodes[u]['y'], self.surf_grid.nodes[u]['z']),
-             (self.surf_grid.nodes[v]['x'], self.surf_grid.nodes[v]['y'], self.surf_grid.nodes[v]['z'])]
-            for u, v in self.surf_grid.edges()
-        ]
-        grid_segments1 = [
-            [(self.surf_grid.nodes[u]['x'], self.surf_grid.nodes[u]['y']),
-             (self.surf_grid.nodes[v]['x'], self.surf_grid.nodes[v]['y'])]
-            for u, v in self.surf_grid.edges()
-        ]
-        grid_segments2 = [
-            [(self.surf_grid.nodes[u]['x'], self.surf_grid.nodes[u]['z']),
-             (self.surf_grid.nodes[v]['x'], self.surf_grid.nodes[v]['z'])]
-            for u, v in self.surf_grid.edges()
-        ]
-        grid_segments3 = [
-            [(self.surf_grid.nodes[u]['y'], self.surf_grid.nodes[u]['z']),
-             (self.surf_grid.nodes[v]['y'], self.surf_grid.nodes[v]['z'])]
-            for u, v in self.surf_grid.edges()
-        ]
+        # draw the surface grid. the edges never change, only the heights they
+        # hang off, so each edge's two endpoints are held as (i, j) index arrays
+        # and a frame's segments are a straight gather from its z snapshot
+        edge_a = np.array([a for a, _ in self.surf_grid.edges()])
+        edge_b = np.array([b for _, b in self.surf_grid.edges()])
+        ia, ja = edge_a[:, 0], edge_a[:, 1]
+        ib, jb = edge_b[:, 0], edge_b[:, 1]
 
-        ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
-        ax_top.add_collection(LineCollection(grid_segments1, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
-        ax_back.add_collection(LineCollection(grid_segments3, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
-        ax_side.add_collection(LineCollection(grid_segments2, colors="black", linewidths=0.5, alpha=0.5, zorder=0))
+        def grid_segments(z):
+            """(edges, 2, 3) endpoint array for one frame's heights."""
+            return np.stack([np.column_stack([grid_x[ia, ja], grid_y[ia, ja], z[ia, ja]]),
+                             np.column_stack([grid_x[ib, jb], grid_y[ib, jb], z[ib, jb]])], axis=1)
+
+        segs0      = grid_segments(grid_z_data[0])
+        grid_3d    = Line3DCollection(segs0, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0)
+        grid_back  = LineCollection(segs0[:, :, [1, 2]], colors="black", linewidths=0.5, alpha=0.5, zorder=0)
+        grid_side  = LineCollection(segs0[:, :, [0, 2]], colors="black", linewidths=0.5, alpha=0.5, zorder=0)
+
+        ax.add_collection3d(grid_3d)
+        ax_back.add_collection(grid_back)
+        ax_side.add_collection(grid_side)
+        # the top view is x/y only, which deformation never touches, so it is
+        # drawn once and left alone
+        ax_top.add_collection(LineCollection(segs0[:, :, [0, 1]], colors="black",
+                                             linewidths=0.5, alpha=0.5, zorder=0))
+
+        def set_grid(i):
+            segs = grid_segments(grid_z_data[i])
+            grid_3d.set_segments(segs)
+            grid_back.set_segments(segs[:, :, [1, 2]])
+            grid_side.set_segments(segs[:, :, [0, 2]])
 
         # remaining plot settings
         ax.set_box_aspect((half_x, half_y, half_z), zoom=1)
@@ -242,17 +294,17 @@ class Surface:
             return self._rotation_lg(*data[i, 4:7])[:, 0]
         fwd0 = _forward(0)
 
-        # blue arrow marking the center of mass q, showing q's own orientation.
+        # red arrow marking the center of mass q, showing q's own orientation.
         # mplot3d quiver has no in-place update, so the 3D twin of each artist is
         # held in a 1-element list and removed/recreated each frame
         q_arrow_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
-                                      color='blue', scale=1 / arrow_len, scale_units='xy',
+                                      color='red', scale=1 / arrow_len, scale_units='xy',
                                       angles='xy', zorder=7)
         q_arrow_back = ax_back.quiver(data[0, 2], data[0, 3], fwd0[1], fwd0[2],
-                                       color='blue', scale=1 / arrow_len, scale_units='xy',
+                                       color='red', scale=1 / arrow_len, scale_units='xy',
                                        angles='xy', zorder=7)
         q_arrow_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
-                                       color='blue', scale=1 / arrow_len, scale_units='xy',
+                                       color='red', scale=1 / arrow_len, scale_units='xy',
                                        angles='xy', zorder=7)
         q_arrow_3d   = [None]
 
@@ -275,7 +327,7 @@ class Surface:
             if q_arrow_3d[0] is not None:
                 q_arrow_3d[0].remove()
             q_arrow_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
-                                       length=arrow_len, color='blue', zorder=7)
+                                       length=arrow_len, color='red', zorder=7)
 
         if show_neighbors:
             set_neighbors(0)
@@ -309,12 +361,14 @@ class Surface:
 
         # animation update function
         def update(i):
+            set_grid(i)
             if show_neighbors:
                 set_neighbors(i)
             set_q_point(i)
 
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            artists = [q_arrow_top, q_arrow_back, q_arrow_side, q_arrow_3d[0]]
+            artists = [q_arrow_top, q_arrow_back, q_arrow_side, q_arrow_3d[0],
+                       grid_3d, grid_back, grid_side]
             if show_neighbors:
                 artists += [green_3d, green_top, green_back, green_side]
             return artists
@@ -338,7 +392,9 @@ class Surface:
             else:
                 self.is_initalization = False
             
-            neighbor_points, _ = self._point_height(self.q)
+            # drive over the tile under the body, deforming the grid, and read
+            # the neighbors back off the surface the cut just left behind
+            neighbor_points = self._neighbor_deformation(self.q)
 
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
 
@@ -349,20 +405,36 @@ class Surface:
             # log variables for plotting
             self.log.append([t, *self.q])
             self.neighbor_log.append(np.array(neighbor_points))
+            self.grid_log.append(self._grid_heights())
 
-    def _get_neighbor_points(self, point):
+    def _neighbor_deformation(self, point):
+        """Cut the tile corners the body has already driven past down to the
+        body's height, writing the new heights into self.grid_pts.
+
+        Returns that tile's 4 corner vertices, read back off the deformed grid.
+        """
+        x, y, z = point[0], point[1], point[2]
+        vel     = np.array(self.q_dot[:3])
+        if self.is_backwards:
+            vel *= -1
+
         i, j = self._grid_cell(point)
+        for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)):
+            cx, cy, ch = self.grid_pts[ci][cj]
+            # a corner more than 90 deg off the direction of travel is behind
+            # the body, i.e. already driven over; the blade cuts, so heights
+            # already at or below the body are left alone
+            is_behind = (cx - x) * vel[0] + (cy - y) * vel[1] < 0.0
+            if is_behind and ch > z:
+                self.grid_pts[ci][cj]           = (cx, cy, z)
+                self.surf_grid.nodes[(ci, cj)]['z'] = z
+
         col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
         return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
-    
-    def _grid_cell(self, point):
-        """(i, j) index of the grid tile containing point's (x, y), clipped to the grid."""
-        i = int((point[0] - self.us[0]) // self.subdivision)
-        j = int((point[1] - self.vs[0]) // self.subdivision)
-        i_max, j_max = len(self.us) - 2, len(self.vs) - 2
-        i = 0 if i < 0 else i_max if i > i_max else i
-        j = 0 if j < 0 else j_max if j > j_max else j
-        return i, j
+
+    def _grid_heights(self):
+        """Snapshot of every node height, indexed [i][j], for the GIF's surface."""
+        return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
     my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
