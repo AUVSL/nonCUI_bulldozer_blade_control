@@ -1,7 +1,7 @@
 import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+from PIL import Image
 from matplotlib.collections import LineCollection
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
@@ -334,7 +334,7 @@ class Surface:
         set_q_point(0)
 
         legend_handles = [q_arrow_side]
-        legend_labels  = ["q (center of mass)"]
+        legend_labels  = ["blade corner"]
         if show_neighbors:
             legend_handles.append(green_side)
             legend_labels.append("grid neighbors")
@@ -365,19 +365,64 @@ class Surface:
             if show_neighbors:
                 set_neighbors(i)
             set_q_point(i)
-
             ax_top.set_title(f"t = {data[i, 0]:.2f} s")
-            artists = [q_arrow_top, q_arrow_back, q_arrow_side, q_arrow_3d[0],
-                       grid_3d, grid_back, grid_side]
-            if show_neighbors:
-                artists += [green_3d, green_top, green_back, green_side]
-            return artists
 
-        anim = animation.FuncAnimation(
-            fig, update, frames=len(data), blit=False, interval=50
-        )
+        # only the arrows, the grid collections and the title move between
+        # frames. everything else - panes, ticks, tick labels, axis labels, the
+        # legend - is identical throughout, so it is rasterized once here and
+        # replayed under each frame. redrawing it per frame dominated the render,
+        # because matplotlib re-measures every tick and axis label on each draw.
+        # the artists listed per axes are ordered by zorder, since drawing them
+        # by hand skips the sort a full draw would do
+        flat_artists = [grid_back, grid_side]
+        if show_neighbors:
+            flat_artists += [green_back, green_side, green_top]
+        flat_artists += [q_arrow_top, q_arrow_back, q_arrow_side]
+        three_d       = [grid_3d] + ([green_3d] if show_neighbors else [])
+
+        # the background has to hold no frame-specific state, or frame 0's
+        # arrows and grid ghost behind the whole animation. the 3D quiver is
+        # replaced rather than updated each frame, so it is simply dropped and
+        # the first update() rebuilds it
+        q_arrow_3d[0].remove()
+        q_arrow_3d[0] = None
+        for art in flat_artists + three_d:
+            art.set_visible(False)
+        ax_top.set_title("")
+        fig.canvas.draw()
+        background = fig.canvas.copy_from_bbox(fig.bbox)
+        for art in flat_artists + three_d:
+            art.set_visible(True)
+
+        fps        = 20
+        frame_size = fig.canvas.get_width_height()
+        frames     = []
+        for i in range(len(data)):
+            update(i)
+            fig.canvas.restore_region(background)
+
+            for art in flat_artists:
+                art.axes.draw_artist(art)
+            # Axes3D.draw is what normally refreshes these projections, so
+            # bypassing it means projecting by hand. that is only valid because
+            # the view angle - and with it ax.M - is fixed for the whole run
+            for art in three_d + [q_arrow_3d[0]]:
+                art.do_3d_projection()
+                ax.draw_artist(art)
+            ax_top.draw_artist(ax_top.title)
+
+            frames.append(Image.frombuffer("RGBA", frame_size, fig.canvas.buffer_rgba(),
+                                           "raw", "RGBA", 0, 1).convert("RGB"))
+
+        # one palette shared by every frame, rather than an adaptive palette per
+        # frame: the frames differ only in where a few lines sit, so frame 0's
+        # colors cover the run, and matching them is far cheaper than rebuilding
+        palette = frames[0].convert("P", palette=Image.ADAPTIVE, colors=128)
+        frames  = [f.quantize(palette=palette, dither=Image.NONE) for f in frames]
+
         fname = "figures/simulation.gif"
-        anim.save(fname, writer=animation.PillowWriter(fps=20))
+        frames[0].save(fname, save_all=True, append_images=frames[1:],
+                       duration=int(1000 / fps), loop=0)
         plt.close(fig)
         print(f"Saved {fname}")
 
@@ -437,5 +482,5 @@ class Surface:
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()
