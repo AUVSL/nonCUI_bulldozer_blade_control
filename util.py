@@ -349,11 +349,10 @@ class Surface:
             rfwd, lfwd = _fwd(rf), _fwd(lf)
 
             # two disjoint center→front segments carried by one line artist (NaN breaks the line)
-            xs = [rc[0], rf[0], np.nan, lc[0], lf[0]]
-            ys = [rc[1], rf[1], np.nan, lc[1], lf[1]]
-            zs = [rc[2], rf[2], np.nan, lc[2], lf[2]]
-            link.set_data(xs, ys)
-            link.set_3d_properties(zs)
+            xs = np.array([rc[0], rf[0], np.nan, lc[0], lf[0]], dtype=float)
+            ys = np.array([rc[1], rf[1], np.nan, lc[1], lf[1]], dtype=float)
+            zs = np.array([rc[2], rf[2], np.nan, lc[2], lf[2]], dtype=float)
+            link.set_data_3d(xs, ys, zs)
             link_top.set_data(xs, ys)
             link_back.set_data(ys, zs)
             link_side.set_data(xs, zs)
@@ -378,11 +377,10 @@ class Surface:
             rfwd, lfwd = _fwd(rb), _fwd(lb)
 
             # two disjoint back→center segments carried by one line artist (NaN breaks the line)
-            xs = [rb[0], rc[0], np.nan, lb[0], lc[0]]
-            ys = [rb[1], rc[1], np.nan, lb[1], lc[1]]
-            zs = [rb[2], rc[2], np.nan, lb[2], lc[2]]
-            link_lower.set_data(xs, ys)
-            link_lower.set_3d_properties(zs)
+            xs = np.array([rb[0], rc[0], np.nan, lb[0], lc[0]], dtype=float)
+            ys = np.array([rb[1], rc[1], np.nan, lb[1], lc[1]], dtype=float)
+            zs = np.array([rb[2], rc[2], np.nan, lb[2], lc[2]], dtype=float)
+            link_lower.set_data_3d(xs, ys, zs)
             link_top_lower.set_data(xs, ys)
             link_back_lower.set_data(ys, zs)
             link_side_lower.set_data(xs, zs)
