@@ -607,6 +607,18 @@ class Surface:
         with division_factor so finer grids -- more, smaller tiles over the
         same path -- take proportionally shallower bites per tile.
 
+        The 4 corners are cut together as one tile rather than on their own
+        individual schedules: gating each corner separately on its own
+        is_behind meant the trailing corners (behind almost as soon as the
+        blade enters the tile) racked up many more cut-steps than the
+        leading corners (behind only right as the blade is about to leave),
+        leaving the tile lopsided -- non-planar -- for most of the crossing.
+        That transient unevenness is exactly what _point_orientation's
+        single-tile plane fit picks up on, showing up as roll/pitch wobble
+        that gets amplified into a visible dip at the blade point's lever
+        arm. Cutting the whole tile in lockstep once the blade has reached
+        any part of it keeps all 4 corners level with each other throughout.
+
         Returns that tile's 4 corner vertices, read back off the deformed grid.
         """
         x, y, z = point[0], point[1], point[2]
@@ -614,19 +626,24 @@ class Surface:
         if self.is_backwards:
             vel *= -1
 
-        n         = 10 * self.division_factor
-        max_cut   = self.H / n
-        i, j = self._grid_cell(point)
-        for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)):
-            cx, cy, ch = self.grid_pts[ci][cj]
-            # a corner more than 90 deg off the direction of travel is behind
-            # the body, i.e. already driven over; the blade cuts, so heights
-            # already at or below the body are left alone
-            is_behind = (cx - x) * vel[0] + (cy - y) * vel[1] < 0.0
-            if is_behind and ch > z:
-                new_h = max(z, ch - max_cut)
-                self.grid_pts[ci][cj]           = (cx, cy, new_h)
-                self.surf_grid.nodes[(ci, cj)]['z'] = new_h
+        n       = 10 * self.division_factor
+        max_cut = self.H / n
+        i, j    = self._grid_cell(point)
+        corners = ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
+
+        # a corner more than 90 deg off the direction of travel is behind the
+        # body, i.e. already driven over; the tile counts as reached once any
+        # one corner is
+        any_behind = any((cx - x) * vel[0] + (cy - y) * vel[1] < 0.0
+                          for cx, cy, _ in (self.grid_pts[ci][cj] for ci, cj in corners))
+        if any_behind:
+            for ci, cj in corners:
+                cx, cy, ch = self.grid_pts[ci][cj]
+                # heights already at or below the blade are left alone
+                if ch > z:
+                    new_h = max(z, ch - max_cut)
+                    self.grid_pts[ci][cj]               = (cx, cy, new_h)
+                    self.surf_grid.nodes[(ci, cj)]['z'] = new_h
 
         col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
         return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
