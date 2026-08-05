@@ -71,10 +71,10 @@ class Surface:
         self.neighbor_log.append(np.array(neighbor_points))
         self.grid_log.append(self._grid_heights())
 
-        # seed the blade point the same way, so blade_log stays aligned frame
+        # seed the blade points the same way, so blade_log stays aligned frame
         # for frame with log/neighbor_log/grid_log
-        blade_point, _ = self._blade_update()
-        self.blade_log.append(blade_point)
+        blade_points, _ = self._blade_update()
+        self.blade_log.append(blade_points)
 
     @property
     def subdivision(self):
@@ -225,7 +225,8 @@ class Surface:
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 0.5
         data          = np.array(self.log)[::2]  # every 2nd frame represented to speed up rendering
-        blade_data    = np.array(self.blade_log)[::2]  # [x, y, z, roll, pitch, yaw] per logged frame
+        blade_data    = np.array(self.blade_log)[::2]  # (frames, 2, 6): right, left blade points
+        right_data, left_data = blade_data[:, 0], blade_data[:, 1]
         neighbor_data = self.neighbor_log[::2]
         grid_z_data   = self.grid_log[::2]
 
@@ -235,12 +236,12 @@ class Surface:
         grid_y = np.array([[pt[1] for pt in col] for col in self.grid_pts])
 
         # bound the view with every height the surface takes over the run (so
-        # neither the q path, the blade path, nor a fresh cut is clipped flush
+        # neither the q path, the blade paths, nor a fresh cut is clipped flush
         # at a panel edge), plus the grid-neighbor points only when they will
         # actually be drawn
-        bound_x = [grid_x.ravel(), blade_data[:, 0]]
-        bound_y = [grid_y.ravel(), blade_data[:, 1]]
-        bound_z = [np.asarray(self.grid_log).ravel(), blade_data[:, 2]]
+        bound_x = [grid_x.ravel(), blade_data[:, :, 0].ravel()]
+        bound_y = [grid_y.ravel(), blade_data[:, :, 1].ravel()]
+        bound_z = [np.asarray(self.grid_log).ravel(), blade_data[:, :, 2].ravel()]
         if show_neighbors:
             neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
             bound_x.append(neighbor_pts[:, 0])
@@ -365,7 +366,7 @@ class Surface:
         # reflects that frame's surface height -- unlike recomputing it here
         # against self.grid_pts, which by plot time holds only the final,
         # fully-deformed grid
-        bx0, by0, bz0 = blade_data[0, 0], blade_data[0, 1], blade_data[0, 2]
+        rb0, lb0 = right_data[0], left_data[0]
 
         # blue arrow marking the center of mass q, showing q's own orientation;
         # q sticks to the surface because q[2] already comes from _point_height
@@ -382,16 +383,19 @@ class Surface:
                                        angles='xy', zorder=7)
         q_arrow_3d   = [None]
 
-        # red arrow marking the deformation blade point, self.L forward of q
-        # along q's local x axis and likewise snapped to the surface, sharing
-        # q's orientation
-        blade_arrow_top  = ax_top.quiver(bx0, by0, fwd0[0], fwd0[1],
+        # red arrows marking the two deformation blade points, offset from q
+        # by self.L forward and ±self.B1/2 laterally and likewise snapped to
+        # the surface, sharing q's orientation
+        blade_arrow_top  = ax_top.quiver([rb0[0], lb0[0]], [rb0[1], lb0[1]],
+                                          [fwd0[0]] * 2, [fwd0[1]] * 2,
                                           color='red', scale=1 / arrow_len, scale_units='xy',
                                           angles='xy', zorder=7)
-        blade_arrow_back = ax_back.quiver(by0, bz0, fwd0[1], fwd0[2],
+        blade_arrow_back = ax_back.quiver([rb0[1], lb0[1]], [rb0[2], lb0[2]],
+                                           [fwd0[1]] * 2, [fwd0[2]] * 2,
                                            color='red', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=7)
-        blade_arrow_side = ax_side.quiver(bx0, bz0, fwd0[0], fwd0[2],
+        blade_arrow_side = ax_side.quiver([rb0[0], lb0[0]], [rb0[2], lb0[2]],
+                                           [fwd0[0]] * 2, [fwd0[2]] * 2,
                                            color='red', scale=1 / arrow_len, scale_units='xy',
                                            angles='xy', zorder=7)
         blade_arrow_3d   = [None]
@@ -417,16 +421,17 @@ class Surface:
             q_arrow_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
                                        length=arrow_len, color='blue', zorder=7)
 
-            bx, by, bz = blade_data[i, 0], blade_data[i, 1], blade_data[i, 2]
-            blade_arrow_top.set_offsets([[bx, by]])
-            blade_arrow_top.set_UVC(fwd[0], fwd[1])
-            blade_arrow_back.set_offsets([[by, bz]])
-            blade_arrow_back.set_UVC(fwd[1], fwd[2])
-            blade_arrow_side.set_offsets([[bx, bz]])
-            blade_arrow_side.set_UVC(fwd[0], fwd[2])
+            rb, lb = right_data[i], left_data[i]
+            blade_arrow_top.set_offsets([[rb[0], rb[1]], [lb[0], lb[1]]])
+            blade_arrow_top.set_UVC([fwd[0]] * 2, [fwd[1]] * 2)
+            blade_arrow_back.set_offsets([[rb[1], rb[2]], [lb[1], lb[2]]])
+            blade_arrow_back.set_UVC([fwd[1]] * 2, [fwd[2]] * 2)
+            blade_arrow_side.set_offsets([[rb[0], rb[2]], [lb[0], lb[2]]])
+            blade_arrow_side.set_UVC([fwd[0]] * 2, [fwd[2]] * 2)
             if blade_arrow_3d[0] is not None:
                 blade_arrow_3d[0].remove()
-            blade_arrow_3d[0] = ax.quiver(bx, by, bz, fwd[0], fwd[1], fwd[2],
+            blade_arrow_3d[0] = ax.quiver([rb[0], lb[0]], [rb[1], lb[1]], [rb[2], lb[2]],
+                                           [fwd[0]] * 2, [fwd[1]] * 2, [fwd[2]] * 2,
                                            length=arrow_len, color='red', zorder=7)
 
         if show_neighbors:
@@ -434,7 +439,7 @@ class Surface:
         set_q_point(0)
 
         legend_handles = [q_arrow_side, blade_arrow_side]
-        legend_labels  = ["q (center of mass)", "blade point"]
+        legend_labels  = ["q (center of mass)", "blade points"]
         if show_neighbors:
             legend_handles.append(green_side)
             legend_labels.append("grid neighbors")
@@ -536,7 +541,7 @@ class Surface:
             t += self.dt
 
             neighbor_points          = self._body_update()
-            blade_point, _           = self._blade_update()
+            blade_points, _          = self._blade_update()
 
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
 
@@ -547,7 +552,7 @@ class Surface:
             # log variables for plotting
             self.log.append([t, *self.q])
             self.neighbor_log.append(np.array(neighbor_points))
-            self.blade_log.append(blade_point)
+            self.blade_log.append(blade_points)
             self.grid_log.append(self._grid_heights())
 
     def _body_update(self):
@@ -563,23 +568,33 @@ class Surface:
         return neighbor_points
 
     def _blade_update(self):
-        """Deformation blade point: offset from q by self.L forward (local
-        +x), self.B1/2 to the left (local +y), and self.H/4 down (local -z),
-        rotated into the global frame the same way util.py places the two
-        tracks (R @ local_offset). Cuts any ground behind it down to that
-        height, the same way q's own footprint would.
+        """Deformation blade points: the two ends of the blade, offset from q
+        by self.L forward (local +x), ±self.B1/2 laterally (local y -- right
+        is -B1/2, its mirror across q left is +B1/2), and self.H/4 down
+        (local -z), rotated into the global frame the same way util.py places
+        the two tracks (R @ local_offset). The blade is a rigid straight edge,
+        so both ends share whichever end's rotated offset sits lower, rather
+        than each cutting its own (possibly shallower) depth. Each point cuts
+        any ground behind it down to that height, the same way q's own
+        footprint would.
 
-        Returns the blade point as a 6-vector [x, y, z, roll, pitch, yaw]
-        (sharing q's orientation) plus that tile's 4 deformed corner neighbors.
+        Returns the two blade points as (right, left), each a 6-vector
+        [x, y, z, roll, pitch, yaw] (sharing q's orientation), plus each
+        point's tile's 4 deformed corner neighbors.
         """
         R      = self._rotation_lg(*self.q[3:6])
-        offset = R @ np.array([self.L, self.B1 / 2, -self.H / 4])
         orient = self.q[3:6].copy()
 
-        x, y, z         = self.q[:3] + offset
-        blade_neighbors = self._neighbor_deformation(np.array([x, y, z]))
-        blade_point     = np.concatenate(([x, y, z], orient))
-        return blade_point, blade_neighbors
+        # right (-B1/2) then its mirror, left (+B1/2)
+        xyz = [self.q[:3] + R @ np.array([self.L, side * self.B1 / 2, -self.H / 4])
+               for side in (-1.0, 1.0)]
+        z   = min(p[2] for p in xyz)
+
+        blade_points, blade_neighbors = [], []
+        for x, y, _ in xyz:
+            blade_neighbors.append(self._neighbor_deformation(np.array([x, y, z])))
+            blade_points.append(np.concatenate(([x, y, z], orient)))
+        return blade_points, blade_neighbors
 
 
     def _neighbor_deformation(self, point):
