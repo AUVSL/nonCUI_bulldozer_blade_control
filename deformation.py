@@ -31,7 +31,7 @@ class Surface:
         # Excavation is distance-based, not timestep-based. This default takes
         # roughly five grid-cell lengths to reach the blade's full depth.
         self.max_dig_depth_per_meter = self.H / (5 * self.subdivision)
-        self.blade_blend_weight      = 0.25
+        self.blade_blend_weight      = 0.0
 
         if is_backwards:
             self.q_dot   *= -1
@@ -77,7 +77,7 @@ class Surface:
 
         # seed the blade points the same way, so blade_log stays aligned frame
         # for frame with log/neighbor_log/grid_log
-        blade_points, blade_neighbors = self._blade_update(travel_distance=0.0)
+        blade_points, blade_neighbors = self._blade_update()
         neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
         self.neighbor_log.append(np.array(neighbor_points))
         self.blade_log.append(blade_points)
@@ -549,12 +549,11 @@ class Surface:
             # update variables
             t += self.dt
 
-            q_before = self.q[:3].copy()
+            blade_points, _ = self._blade_update()
             neighbor_points = self._body_update()
-            travel_distance = np.linalg.norm(self.q[:3] - q_before)
-            blade_points, _ = self._blade_update(travel_distance)
+            
 
-            self.total_distance += travel_distance
+            self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
 
             # loop termination check
             if self.total_distance >= self.stop_distance:
@@ -578,7 +577,7 @@ class Surface:
 
         return neighbor_points
 
-    def _blade_update(self, travel_distance=0.0):
+    def _blade_update(self):
         """Deformation contact points sampled across the blade, offset from q
         by self.L forward (local +x), ±self.B1/2 laterally (local y -- right
         is -B1/2, its mirror across q left is +B1/2), and self.H/4 down
@@ -617,14 +616,15 @@ class Surface:
             contacts_by_tile.setdefault(self._grid_cell(point), []).append(point)
             contact_points.append(point)
 
-        self._deform_blade_tiles(contacts_by_tile, travel_distance)
+        self._deform_blade_tiles(contacts_by_tile)
 
         blade_points = [np.concatenate(([x, y, z], orient)) for x, y, _ in xyz]
         blade_neighbors = [self._get_neighbor_points(point) for point in contact_points]
         return blade_points, blade_neighbors
 
-    def _deform_blade_tiles(self, contacts_by_tile, travel_distance):
+    def _deform_blade_tiles(self, contacts_by_tile):
         """Apply one distance-limited cut per reached tile, then soften its edge."""
+        travel_distance = np.linalg.norm(self.q_dot[:3] * self.dt)
         max_cut = self.max_dig_depth_per_meter * max(0.0, travel_distance)
         if max_cut == 0.0:
             return
