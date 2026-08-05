@@ -9,7 +9,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 class Surface:
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
         # simulation parameters
-        self.division_factor    = 2
+        self.division_factor    = 4
         self.b                  = 1.75
         self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
@@ -563,19 +563,20 @@ class Surface:
         return neighbor_points
 
     def _blade_update(self):
-        """Deformation blade point: self.L forward of q along q's local x
-        axis, resting at the surface height there. Cuts any ground behind it
-        down to that height, the same way q's own footprint would.
+        """Deformation blade point: offset from q by self.L forward (local
+        +x), self.B1/2 to the left (local +y), and self.H/4 down (local -z),
+        rotated into the global frame the same way util.py places the two
+        tracks (R @ local_offset). Cuts any ground behind it down to that
+        height, the same way q's own footprint would.
 
         Returns the blade point as a 6-vector [x, y, z, roll, pitch, yaw]
         (sharing q's orientation) plus that tile's 4 deformed corner neighbors.
         """
         R      = self._rotation_lg(*self.q[3:6])
-        fwd    = R[:, 0]
-        x, y   = self.q[0] + self.L * fwd[0], self.q[1] + self.L * fwd[1]
+        offset = R @ np.array([self.L, self.B1 / 2, -self.H / 4])
         orient = self.q[3:6].copy()
 
-        _, z            = self._point_height(np.array([x, y, 0.0]))
+        x, y, z         = self.q[:3] + offset
         blade_neighbors = self._neighbor_deformation(np.array([x, y, z]))
         blade_point     = np.concatenate(([x, y, z], orient))
         return blade_point, blade_neighbors
@@ -585,6 +586,12 @@ class Surface:
         """Cut the tile corners the body has already driven past down to the
         body's height, writing the new heights into self.grid_pts.
 
+        Each corner is cut by at most self.H / n per call, rather than
+        straight to z, so a single pass can't gouge a tile arbitrarily deep;
+        n starts at 10 for the default grid (division_factor == 2) and grows
+        with division_factor so finer grids -- more, smaller tiles over the
+        same path -- take proportionally shallower bites per tile.
+
         Returns that tile's 4 corner vertices, read back off the deformed grid.
         """
         x, y, z = point[0], point[1], point[2]
@@ -592,6 +599,8 @@ class Surface:
         if self.is_backwards:
             vel *= -1
 
+        n         = 10 * self.division_factor
+        max_cut   = self.H / n
         i, j = self._grid_cell(point)
         for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)):
             cx, cy, ch = self.grid_pts[ci][cj]
@@ -600,8 +609,9 @@ class Surface:
             # already at or below the body are left alone
             is_behind = (cx - x) * vel[0] + (cy - y) * vel[1] < 0.0
             if is_behind and ch > z:
-                self.grid_pts[ci][cj]           = (cx, cy, z)
-                self.surf_grid.nodes[(ci, cj)]['z'] = z
+                new_h = max(z, ch - max_cut)
+                self.grid_pts[ci][cj]           = (cx, cy, new_h)
+                self.surf_grid.nodes[(ci, cj)]['z'] = new_h
 
         col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
         return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
