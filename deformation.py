@@ -594,13 +594,10 @@ class Surface:
         R      = self._rotation_lg(*self.q[3:6])
         orient = self.q[3:6].copy()
 
-        # right (-B1/2) then its mirror, left (+B1/2)
-        # xyz = [self.q[:3] + R @ np.array([self.L, side * self.B1 / 2, -self.H / 4])
-        #        for side in (-1.0, 1.0)]
-
         p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.H / 4])
         p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.H / 4])
 
+        # TODO: when go back to optimize the code consider using the vector between p0 and p1 so not O(n) points
         length = np.linalg.norm(p1 - p0)
         n_segments = max(1, int(np.ceil(length / self.subdivision)))
 
