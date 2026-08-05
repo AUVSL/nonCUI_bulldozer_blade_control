@@ -28,6 +28,10 @@ class Surface:
         self.B1   = 2.921
         self.H    = 0.955
         self.L    = 1.2 
+        # Excavation is distance-based, not timestep-based. This default takes
+        # roughly five grid-cell lengths to reach the blade's full depth.
+        self.max_dig_depth_per_meter = self.H / (5 * self.subdivision)
+        self.blade_blend_weight      = 0.25
 
         if is_backwards:
             self.q_dot   *= -1
@@ -73,7 +77,7 @@ class Surface:
 
         # seed the blade points the same way, so blade_log stays aligned frame
         # for frame with log/neighbor_log/grid_log
-        blade_points, _ = self._blade_update()
+        blade_points, _ = self._blade_update(travel_distance=0.0)
         self.blade_log.append(blade_points)
 
     @property
@@ -154,7 +158,8 @@ class Surface:
         s_l = np.dot(grad_xy, left_xy)  # lateral slope
         s_f = np.dot(grad_xy, fwd_xy)   # forward slope
          
-        roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
+        # roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
+        roll = 0
         pitch = np.arctan2(-s_f, 1.0)                 
         yaw   = np.arctan2(vel[1], vel[0])
 
@@ -542,10 +547,12 @@ class Surface:
             # update variables
             t += self.dt
 
-            neighbor_points          = self._body_update()
-            blade_points, _          = self._blade_update()
+            q_before = self.q[:3].copy()
+            neighbor_points = self._body_update()
+            travel_distance = np.linalg.norm(self.q[:3] - q_before)
+            blade_points, _ = self._blade_update(travel_distance)
 
-            self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
+            self.total_distance += travel_distance
 
             # loop termination check
             if self.total_distance >= self.stop_distance:
@@ -569,7 +576,7 @@ class Surface:
 
         return neighbor_points
 
-    def _blade_update(self):
+    def _blade_update(self, travel_distance=0.0):
         """Deformation contact points sampled across the blade, offset from q
         by self.L forward (local +x), ±self.B1/2 laterally (local y -- right
         is -B1/2, its mirror across q left is +B1/2), and self.H/4 down
@@ -577,8 +584,8 @@ class Surface:
         the two tracks (R @ local_offset). The blade is a rigid straight edge,
         so both ends share whichever end's rotated offset sits lower, rather
         than each cutting its own (possibly shallower) depth. Each point cuts
-        any ground behind it down to that height, the same way q's own
-        footprint would.
+        any ground behind it down to that height. Contact points that land in
+        the same tile are aggregated, so one frame can cut each tile only once.
 
         Returns the right-to-left blade points, each a 6-vector
         [x, y, z, roll, pitch, yaw] (sharing q's orientation), plus each
@@ -604,62 +611,71 @@ class Surface:
 
         z   = min(p[2] for p in xyz)
 
-        blade_points, blade_neighbors = [], []
+        contacts_by_tile = {}
+        contact_points = []
         for x, y, _ in xyz:
-            blade_neighbors.append(self._neighbor_deformation(np.array([x, y, z])))
-            blade_points.append(np.concatenate(([x, y, z], orient)))
+            point = np.array([x, y, z])
+            contacts_by_tile.setdefault(self._grid_cell(point), []).append(point)
+            contact_points.append(point)
+
+        self._deform_blade_tiles(contacts_by_tile, travel_distance)
+
+        blade_points = [np.concatenate(([x, y, z], orient)) for x, y, _ in xyz]
+        blade_neighbors = [self._get_neighbor_points(point) for point in contact_points]
         return blade_points, blade_neighbors
 
-    def _neighbor_deformation(self, point):
-        """Cut the tile corners the body has already driven past down to the
-        body's height, writing the new heights into self.grid_pts.
+    def _deform_blade_tiles(self, contacts_by_tile, travel_distance):
+        """Apply one distance-limited cut per reached tile, then soften its edge."""
+        max_cut = self.max_dig_depth_per_meter * max(0.0, travel_distance)
+        if max_cut == 0.0:
+            return
 
-        Each corner is cut by at most self.H / n per call, rather than
-        straight to z, so a single pass can't gouge a tile arbitrarily deep;
-        n starts at 10 for the default grid (division_factor == 2) and grows
-        with division_factor so finer grids -- more, smaller tiles over the
-        same path -- take proportionally shallower bites per tile.
-
-        The 4 corners are cut together as one tile rather than on their own
-        individual schedules: gating each corner separately on its own
-        is_behind meant the trailing corners (behind almost as soon as the
-        blade enters the tile) racked up many more cut-steps than the
-        leading corners (behind only right as the blade is about to leave),
-        leaving the tile lopsided -- non-planar -- for most of the crossing.
-        That transient unevenness is exactly what _point_orientation's
-        single-tile plane fit picks up on, showing up as roll/pitch wobble
-        that gets amplified into a visible dip at the blade point's lever
-        arm. Cutting the whole tile in lockstep once the blade has reached
-        any part of it keeps all 4 corners level with each other throughout.
-
-        Returns that tile's 4 corner vertices, read back off the deformed grid.
-        """
-        x, y, z = point[0], point[1], point[2]
         vel     = np.array(self.q_dot[:3])
         if self.is_backwards:
             vel *= -1
 
-        n       = 10 * self.division_factor
-        max_cut = self.H / n
-        i, j    = self._grid_cell(point)
-        corners = ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
-
-        # a corner more than 90 deg off the direction of travel is behind the
-        # body, i.e. already driven over; the tile counts as reached once any
-        # one corner is
-        any_behind = any((cx - x) * vel[0] + (cy - y) * vel[1] < 0.0
+        # Determine the direct footprint first. A vertex shared by adjacent
+        # touched tiles is still cut only once in this frame.
+        direct_nodes = set()
+        blade_z = min(point[2] for contacts in contacts_by_tile.values()
+                      for point in contacts)
+        for (i, j), contacts in contacts_by_tile.items():
+            corners = ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
+            reached = any((cx - point[0]) * vel[0] + (cy - point[1]) * vel[1] < 0.0
+                          for point in contacts
                           for cx, cy, _ in (self.grid_pts[ci][cj] for ci, cj in corners))
-        if any_behind:
-            for ci, cj in corners:
-                cx, cy, ch = self.grid_pts[ci][cj]
-                # heights already at or below the blade are left alone
-                if ch > z:
-                    new_h = max(z, ch - max_cut)
-                    self.grid_pts[ci][cj]               = (cx, cy, new_h)
-                    self.surf_grid.nodes[(ci, cj)]['z'] = new_h
+            if reached:
+                direct_nodes.update(corners)
 
-        col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
-        return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
+        drops = {}
+        for i, j in direct_nodes:
+            x, y, height = self.grid_pts[i][j]
+            new_height = max(blade_z, height - max_cut)
+            if new_height < height:
+                drops[(i, j)] = height - new_height
+                self.grid_pts[i][j] = (x, y, new_height)
+                self.surf_grid.nodes[(i, j)]['z'] = new_height
+
+        # A single surrounding vertex ring gets a smaller, capped depression.
+        # This removes the abrupt one-tile step without broadening the cut
+        # indefinitely across repeated frames.
+        blend_drops = {}
+        i_max, j_max = len(self.us) - 1, len(self.vs) - 1
+        for (i, j), drop in drops.items():
+            for ni in range(max(0, i - 1), min(i_max, i + 1) + 1):
+                for nj in range(max(0, j - 1), min(j_max, j + 1) + 1):
+                    if (ni, nj) not in direct_nodes:
+                        blend_drops[(ni, nj)] = max(
+                            blend_drops.get((ni, nj), 0.0),
+                            drop * self.blade_blend_weight,
+                        )
+
+        for (i, j), drop in blend_drops.items():
+            x, y, height = self.grid_pts[i][j]
+            new_height = max(blade_z, height - drop)
+            if new_height < height:
+                self.grid_pts[i][j] = (x, y, new_height)
+                self.surf_grid.nodes[(i, j)]['z'] = new_height
 
     def _grid_heights(self):
         """Snapshot of every node height, indexed [i][j], for the GIF's surface."""
