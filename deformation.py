@@ -22,7 +22,13 @@ class Surface:
 
         self.stop_time          = 300.0
         self.total_distance     = 0.0
-        self.dt                 = 1/100  
+        self.dt                 = 1/100 
+
+        # Bulldozer blade parameters
+        self.B1   = 2.921
+        self.H    = 0.955
+        self.L    = 1.2 
+
         if is_backwards:
             self.q_dot   *= -1
             self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
@@ -32,6 +38,7 @@ class Surface:
         self.is_surface_sigmoid = False
         self.is_surface_rolled = is_surface_rolled
         self.log                = []
+        self.blade_log          = []
         self.neighbor_log       = []
         self.grid_log           = []
         
@@ -63,6 +70,11 @@ class Surface:
         self.log.append([0, *self.q])
         self.neighbor_log.append(np.array(neighbor_points))
         self.grid_log.append(self._grid_heights())
+
+        # seed the blade point the same way, so blade_log stays aligned frame
+        # for frame with log/neighbor_log/grid_log
+        blade_point, _ = self._blade_update()
+        self.blade_log.append(blade_point)
 
     @property
     def subdivision(self):
@@ -116,6 +128,59 @@ class Surface:
             [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
             [-sB,                      sa * cB,                  ca * cB]
         ]).T
+          
+    def _point_orientation(self, corners):
+        """
+        Roll/pitch/yaw of the center of mass crossing the current tile: pitch and
+        roll come from the tile's height-field gradient (the edges' angles,
+        blended the same s,t weights as _bilinear_height) read off along and
+        across the direction of travel; yaw is the global-frame heading of
+        q_dot, arctan2(vel_y, vel_x), so (roll, pitch, yaw) form a consistent
+        ZYX Euler triple for _rotation_lg.
+        """
+        grad_xy = self._bilinear_gradient(self.q, corners)
+
+        vel   = np.array(self.q_dot[:3])
+        if self.is_backwards:
+            vel *= -1
+        speed = np.linalg.norm(vel[:2])
+        if speed < 1e-9:
+            return self.q[3:6].copy()
+
+        # the velocity in the the local body frame
+        fwd_xy  = vel[:2] / speed
+        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
+        
+        s_l = np.dot(grad_xy, left_xy)  # lateral slope
+        s_f = np.dot(grad_xy, fwd_xy)   # forward slope
+         
+        roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
+        pitch = np.arctan2(-s_f, 1.0)                 
+        yaw   = np.arctan2(vel[1], vel[0])
+
+        return np.array([roll, pitch, yaw])
+    
+    def _bilinear_gradient(self, point, corners):
+        """(dh/dx, dh/dy) of the same bilinear patch _bilinear_height blends,
+        found by differentiating it w.r.t. the tile's (s,t) edge parameters
+        and mapping back to the xy-plane via the edge vectors."""
+        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
+
+        dx,  dy  = point[0] - x1, point[1] - y1
+        e_s = np.array([x2 - x1, y2 - y1])
+        e_t = np.array([x3 - x1, y3 - y1])
+        es2, et2 = e_s @ e_s, e_t @ e_t
+
+        s = min(max((dx * e_s[0] + dy * e_s[1]) / es2, 0.0), 1.0)
+        t = min(max((dx * e_t[0] + dy * e_t[1]) / et2, 0.0), 1.0)
+
+        dh_ds = (h2 - h1) * (1 - t) + (h4 - h3) * t
+        dh_dt = (h3 - h1) * (1 - s) + (h4 - h2) * s
+
+        # [dh/dx, dh/dy]^T = dh_ds*[ds/dx, ds/dy]^T + dh_dt*[dt/dx, dt/dy]^T,
+        # [ds/dx, ds/dy]^T = e_s / (e_s . e_s),
+        # [dt/dx, dt/dy]^T = e_t / (e_t . e_t).
+        return dh_ds * e_s / es2 + dh_dt * e_t / et2
 
     def _point_height(self, point):
         neighbor_points   = self._get_neighbor_points(point)
@@ -160,6 +225,7 @@ class Surface:
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 0.5
         data          = np.array(self.log)[::2]  # every 2nd frame represented to speed up rendering
+        blade_data    = np.array(self.blade_log)[::2]  # [x, y, z, roll, pitch, yaw] per logged frame
         neighbor_data = self.neighbor_log[::2]
         grid_z_data   = self.grid_log[::2]
 
@@ -169,11 +235,12 @@ class Surface:
         grid_y = np.array([[pt[1] for pt in col] for col in self.grid_pts])
 
         # bound the view with every height the surface takes over the run (so
-        # neither the q path nor a fresh cut is clipped flush at a panel edge),
-        # plus the grid-neighbor points only when they will actually be drawn
-        bound_x = [grid_x.ravel()]
-        bound_y = [grid_y.ravel()]
-        bound_z = [np.asarray(self.grid_log).ravel()]
+        # neither the q path, the blade path, nor a fresh cut is clipped flush
+        # at a panel edge), plus the grid-neighbor points only when they will
+        # actually be drawn
+        bound_x = [grid_x.ravel(), blade_data[:, 0]]
+        bound_y = [grid_y.ravel(), blade_data[:, 1]]
+        bound_z = [np.asarray(self.grid_log).ravel(), blade_data[:, 2]]
         if show_neighbors:
             neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
             bound_x.append(neighbor_pts[:, 0])
@@ -294,19 +361,40 @@ class Surface:
             return self._rotation_lg(*data[i, 4:7])[:, 0]
         fwd0 = _forward(0)
 
-        # red arrow marking the center of mass q, showing q's own orientation.
-        # mplot3d quiver has no in-place update, so the 3D twin of each artist is
-        # held in a 1-element list and removed/recreated each frame
+        # blade_data is logged by _blade_update every frame, so it already
+        # reflects that frame's surface height -- unlike recomputing it here
+        # against self.grid_pts, which by plot time holds only the final,
+        # fully-deformed grid
+        bx0, by0, bz0 = blade_data[0, 0], blade_data[0, 1], blade_data[0, 2]
+
+        # blue arrow marking the center of mass q, showing q's own orientation;
+        # q sticks to the surface because q[2] already comes from _point_height
+        # each frame. mplot3d quiver has no in-place update, so the 3D twin of
+        # each artist is held in a 1-element list and removed/recreated each frame
         q_arrow_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
-                                      color='red', scale=1 / arrow_len, scale_units='xy',
+                                      color='blue', scale=1 / arrow_len, scale_units='xy',
                                       angles='xy', zorder=7)
         q_arrow_back = ax_back.quiver(data[0, 2], data[0, 3], fwd0[1], fwd0[2],
-                                       color='red', scale=1 / arrow_len, scale_units='xy',
+                                       color='blue', scale=1 / arrow_len, scale_units='xy',
                                        angles='xy', zorder=7)
         q_arrow_side = ax_side.quiver(data[0, 1], data[0, 3], fwd0[0], fwd0[2],
-                                       color='red', scale=1 / arrow_len, scale_units='xy',
+                                       color='blue', scale=1 / arrow_len, scale_units='xy',
                                        angles='xy', zorder=7)
         q_arrow_3d   = [None]
+
+        # red arrow marking the deformation blade point, self.L forward of q
+        # along q's local x axis and likewise snapped to the surface, sharing
+        # q's orientation
+        blade_arrow_top  = ax_top.quiver(bx0, by0, fwd0[0], fwd0[1],
+                                          color='red', scale=1 / arrow_len, scale_units='xy',
+                                          angles='xy', zorder=7)
+        blade_arrow_back = ax_back.quiver(by0, bz0, fwd0[1], fwd0[2],
+                                           color='red', scale=1 / arrow_len, scale_units='xy',
+                                           angles='xy', zorder=7)
+        blade_arrow_side = ax_side.quiver(bx0, bz0, fwd0[0], fwd0[2],
+                                           color='red', scale=1 / arrow_len, scale_units='xy',
+                                           angles='xy', zorder=7)
+        blade_arrow_3d   = [None]
 
         def set_neighbors(i):
             pts = np.asarray(neighbor_data[i]) if len(neighbor_data[i]) else np.empty((0, 3))
@@ -327,14 +415,26 @@ class Surface:
             if q_arrow_3d[0] is not None:
                 q_arrow_3d[0].remove()
             q_arrow_3d[0] = ax.quiver(x, y, z, fwd[0], fwd[1], fwd[2],
-                                       length=arrow_len, color='red', zorder=7)
+                                       length=arrow_len, color='blue', zorder=7)
+
+            bx, by, bz = blade_data[i, 0], blade_data[i, 1], blade_data[i, 2]
+            blade_arrow_top.set_offsets([[bx, by]])
+            blade_arrow_top.set_UVC(fwd[0], fwd[1])
+            blade_arrow_back.set_offsets([[by, bz]])
+            blade_arrow_back.set_UVC(fwd[1], fwd[2])
+            blade_arrow_side.set_offsets([[bx, bz]])
+            blade_arrow_side.set_UVC(fwd[0], fwd[2])
+            if blade_arrow_3d[0] is not None:
+                blade_arrow_3d[0].remove()
+            blade_arrow_3d[0] = ax.quiver(bx, by, bz, fwd[0], fwd[1], fwd[2],
+                                           length=arrow_len, color='red', zorder=7)
 
         if show_neighbors:
             set_neighbors(0)
         set_q_point(0)
 
-        legend_handles = [q_arrow_side]
-        legend_labels  = ["blade corner"]
+        legend_handles = [q_arrow_side, blade_arrow_side]
+        legend_labels  = ["q (center of mass)", "blade point"]
         if show_neighbors:
             legend_handles.append(green_side)
             legend_labels.append("grid neighbors")
@@ -377,15 +477,18 @@ class Surface:
         flat_artists = [grid_back, grid_side]
         if show_neighbors:
             flat_artists += [green_back, green_side, green_top]
-        flat_artists += [q_arrow_top, q_arrow_back, q_arrow_side]
+        flat_artists += [q_arrow_top, q_arrow_back, q_arrow_side,
+                         blade_arrow_top, blade_arrow_back, blade_arrow_side]
         three_d       = [grid_3d] + ([green_3d] if show_neighbors else [])
 
         # the background has to hold no frame-specific state, or frame 0's
-        # arrows and grid ghost behind the whole animation. the 3D quiver is
-        # replaced rather than updated each frame, so it is simply dropped and
-        # the first update() rebuilds it
+        # arrows and grid ghost behind the whole animation. the 3D quivers are
+        # replaced rather than updated each frame, so they are simply dropped
+        # and the first update() rebuilds them
         q_arrow_3d[0].remove()
         q_arrow_3d[0] = None
+        blade_arrow_3d[0].remove()
+        blade_arrow_3d[0] = None
         for art in flat_artists + three_d:
             art.set_visible(False)
         ax_top.set_title("")
@@ -406,7 +509,7 @@ class Surface:
             # Axes3D.draw is what normally refreshes these projections, so
             # bypassing it means projecting by hand. that is only valid because
             # the view angle - and with it ax.M - is fixed for the whole run
-            for art in three_d + [q_arrow_3d[0]]:
+            for art in three_d + [q_arrow_3d[0], blade_arrow_3d[0]]:
                 art.do_3d_projection()
                 ax.draw_artist(art)
             ax_top.draw_artist(ax_top.title)
@@ -431,15 +534,9 @@ class Surface:
         for _ in range(int(self.stop_time / self.dt)):
             # update variables
             t += self.dt
-            
-            if not self.is_initalization:
-                self.q += self.dt * self.q_dot
-            else:
-                self.is_initalization = False
-            
-            # drive over the tile under the body, deforming the grid, and read
-            # the neighbors back off the surface the cut just left behind
-            neighbor_points = self._neighbor_deformation(self.q)
+
+            neighbor_points          = self._body_update()
+            blade_point, _           = self._blade_update()
 
             self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
 
@@ -450,7 +547,39 @@ class Surface:
             # log variables for plotting
             self.log.append([t, *self.q])
             self.neighbor_log.append(np.array(neighbor_points))
+            self.blade_log.append(blade_point)
             self.grid_log.append(self._grid_heights())
+
+    def _body_update(self):
+        if not self.is_initalization:
+            self.q += self.dt * self.q_dot
+        else:
+            self.is_initalization = False
+
+        # seed the body height + orientation from the tile under the center of mass
+        neighbor_points, self.q[2] = self._point_height(self.q)
+        self.q[3:6]                = self._point_orientation(self._get_neighbor_points(self.q))
+
+        return neighbor_points
+
+    def _blade_update(self):
+        """Deformation blade point: self.L forward of q along q's local x
+        axis, resting at the surface height there. Cuts any ground behind it
+        down to that height, the same way q's own footprint would.
+
+        Returns the blade point as a 6-vector [x, y, z, roll, pitch, yaw]
+        (sharing q's orientation) plus that tile's 4 deformed corner neighbors.
+        """
+        R      = self._rotation_lg(*self.q[3:6])
+        fwd    = R[:, 0]
+        x, y   = self.q[0] + self.L * fwd[0], self.q[1] + self.L * fwd[1]
+        orient = self.q[3:6].copy()
+
+        _, z            = self._point_height(np.array([x, y, 0.0]))
+        blade_neighbors = self._neighbor_deformation(np.array([x, y, z]))
+        blade_point     = np.concatenate(([x, y, z], orient))
+        return blade_point, blade_neighbors
+
 
     def _neighbor_deformation(self, point):
         """Cut the tile corners the body has already driven past down to the
@@ -482,5 +611,5 @@ class Surface:
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()
