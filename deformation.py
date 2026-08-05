@@ -77,7 +77,9 @@ class Surface:
 
         # seed the blade points the same way, so blade_log stays aligned frame
         # for frame with log/neighbor_log/grid_log
-        blade_points, _ = self._blade_update(travel_distance=0.0)
+        blade_points, blade_neighbors = self._blade_update(travel_distance=0.0)
+        neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
+        self.neighbor_log.append(np.array(neighbor_points))
         self.blade_log.append(blade_points)
 
     @property
@@ -679,5 +681,5 @@ class Surface:
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()
