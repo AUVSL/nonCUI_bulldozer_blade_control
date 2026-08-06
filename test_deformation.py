@@ -45,3 +45,35 @@ def test_initial_blade_geometry_does_not_deform_the_surface():
     surface = Surface(is_uphill=False)
 
     np.testing.assert_allclose(surface._grid_heights(), surface.grid_log[0])
+
+
+def test_repeated_cuts_stop_at_each_vertex_starting_height_limit():
+    surface = Surface(is_uphill=False)
+    surface.max_dig_depth_per_meter = 100.0
+    surface.max_world_cut_depth = 0.25
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface)
+    starting_heights = surface.starting_grid_heights.copy()
+
+    for _ in range(3):
+        surface._deform_blade_tiles({(1, 1): [contact]})
+
+    for i, j in ((1, 1), (2, 1), (1, 2), (2, 2)):
+        assert surface.grid_pts[i][j][2] == pytest.approx(
+            starting_heights[i, j] - surface.max_world_cut_depth
+        )
+
+
+def test_blended_cut_respects_vertex_starting_height_limit():
+    surface = Surface(is_uphill=False)
+    surface.max_dig_depth_per_meter = 100.0
+    surface.max_world_cut_depth = 0.25
+    surface.blade_blend_weight = 1.0
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface)
+
+    surface._deform_blade_tiles({(1, 1): [contact]})
+
+    assert surface.grid_pts[0][0][2] == pytest.approx(
+        surface.starting_grid_heights[0, 0] - surface.max_world_cut_depth
+    )

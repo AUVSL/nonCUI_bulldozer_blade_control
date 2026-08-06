@@ -30,8 +30,13 @@ class Surface:
         self.L    = 1.2 
         # Excavation is distance-based, not timestep-based. This default takes
         # roughly five grid-cell lengths to reach the blade's full depth.
-        self.max_dig_depth_per_meter = self.H / (5 * self.subdivision)
-        self.blade_blend_weight      = 0.0
+        
+        
+        # No vertex may be cut farther than this below its own starting height.
+        # Keeping this separate from the per-meter rate prevents repeated passes
+        # from excavating the world without bound.
+        self.max_world_cut_depth     = self.H
+
 
         if is_backwards:
             self.q_dot   *= -1
@@ -68,6 +73,7 @@ class Surface:
                            self.surf_grid.nodes[(i, j)]['y'],
                            self.surf_grid.nodes[(i, j)]['z'])
                           for j in range(len(self.vs))] for i in range(len(self.us))]
+        self.starting_grid_heights = self._grid_heights().copy()
 
         # put the body on the surface at the start of the simulation
         neighbor_points, self.q[2] = self._point_height(self.q)
@@ -631,10 +637,7 @@ class Surface:
     def _deform_blade_tiles(self, contacts_by_tile):
         """Apply one distance-limited cut per reached tile, then soften its edge."""
         travel_distance = np.linalg.norm(self.q_dot[:3] * self.dt)
-        max_cut = self.max_dig_depth_per_meter * max(0.0, travel_distance)
-        if max_cut == 0.0:
-            return
-
+        
         vel     = np.array(self.q_dot[:3])
         if self.is_backwards:
             vel *= -1
@@ -655,30 +658,10 @@ class Surface:
         drops = {}
         for i, j in direct_nodes:
             x, y, height = self.grid_pts[i][j]
-            new_height = max(blade_z, height - max_cut)
+            min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
+            new_height = max(blade_z, min_height)
             if new_height < height:
                 drops[(i, j)] = height - new_height
-                self.grid_pts[i][j] = (x, y, new_height)
-                self.surf_grid.nodes[(i, j)]['z'] = new_height
-
-        # A single surrounding vertex ring gets a smaller, capped depression.
-        # This removes the abrupt one-tile step without broadening the cut
-        # indefinitely across repeated frames.
-        blend_drops = {}
-        i_max, j_max = len(self.us) - 1, len(self.vs) - 1
-        for (i, j), drop in drops.items():
-            for ni in range(max(0, i - 1), min(i_max, i + 1) + 1):
-                for nj in range(max(0, j - 1), min(j_max, j + 1) + 1):
-                    if (ni, nj) not in direct_nodes:
-                        blend_drops[(ni, nj)] = max(
-                            blend_drops.get((ni, nj), 0.0),
-                            drop * self.blade_blend_weight,
-                        )
-
-        for (i, j), drop in blend_drops.items():
-            x, y, height = self.grid_pts[i][j]
-            new_height = max(blade_z, height - drop)
-            if new_height < height:
                 self.grid_pts[i][j] = (x, y, new_height)
                 self.surf_grid.nodes[(i, j)]['z'] = new_height
 
