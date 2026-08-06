@@ -9,7 +9,7 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection
 class Surface:
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
         # simulation parameters
-        self.division_factor    = 4
+        self.division_factor    = 4*2
         self.b                  = 1.75
         self.offset             = 0*np.array([0, 0, self.b]) if is_uphill else 0*np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
@@ -28,13 +28,8 @@ class Surface:
         self.B1   = 2.921
         self.H    = 0.955
         self.L    = 1.2 
-        # Excavation is distance-based, not timestep-based. This default takes
-        # roughly five grid-cell lengths to reach the blade's full depth.
-        
-        
+
         # No vertex may be cut farther than this below its own starting height.
-        # Keeping this separate from the per-meter rate prevents repeated passes
-        # from excavating the world without bound.
         self.max_world_cut_depth     = self.H
 
 
@@ -242,6 +237,7 @@ class Surface:
         # The point count follows the blade/grid resolution rather than being
         # fixed at the two blade endpoints.
         blade_data    = np.asarray(self.blade_log)[::2]
+        blade_path    = np.asarray(self.blade_log)
         neighbor_data = self.neighbor_log[::2]
         grid_z_data   = self.grid_log[::2]
 
@@ -255,8 +251,8 @@ class Surface:
         # at a panel edge), plus the grid-neighbor points only when they will
         # actually be drawn
         bound_x = [grid_x.ravel(), blade_data[:, :, 0].ravel()]
-        bound_y = [grid_y.ravel(), blade_data[:, :, 1].ravel()]
-        bound_z = [np.asarray(self.grid_log).ravel(), blade_data[:, :, 2].ravel()]
+        bound_y = [grid_y.ravel(), blade_path[:, :, 1].ravel()]
+        bound_z = [np.asarray(self.grid_log).ravel(), blade_path[:, :, 2].ravel()]
         if show_neighbors:
             neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
             bound_x.append(neighbor_pts[:, 0])
@@ -353,6 +349,16 @@ class Surface:
         ax_back.grid(False)
         ax_back.set_xlabel("Y (m)")
         ax_back.set_ylabel("Z (m)")
+
+        # Show the complete, unsampled trajectory of each blade contact point
+        # in the Y-Z projection. These paths remain static behind the animated
+        # red blade arrows, making it clear where the blade has traveled.
+        blade_path_back = [
+            ax_back.plot(blade_path[:, k, 1], blade_path[:, k, 2],
+                         color="red", linewidth=1.0, alpha=0.45, zorder=2,
+                         label="blade trajectory" if k == 0 else None)[0]
+            for k in range(blade_path.shape[1])
+        ]
 
         ax_side.set_aspect('equal')
         ax_side.grid(False)
@@ -453,8 +459,8 @@ class Surface:
             set_neighbors(0)
         set_q_point(0)
 
-        legend_handles = [q_arrow_side, blade_arrow_side]
-        legend_labels  = ["q (center of mass)", "blade contact points"]
+        legend_handles = [q_arrow_side, blade_arrow_side, blade_path_back[0]]
+        legend_labels  = ["q (center of mass)", "blade contact points", "blade trajectory"]
         if show_neighbors:
             legend_handles.append(green_side)
             legend_labels.append("grid neighbors")
@@ -545,7 +551,7 @@ class Surface:
 
         fname = "figures/simulation.gif"
         frames[0].save(fname, save_all=True, append_images=frames[1:],
-                       duration=int(1000 / fps), loop=0)
+                       duration=int(4_000 / fps), loop=0)
         plt.close(fig)
         print(f"Saved {fname}")
 
@@ -635,14 +641,13 @@ class Surface:
         return blade_points, blade_neighbors
 
     def _deform_blade_tiles(self, contacts_by_tile):
-        """Cut only the tile vertices ahead of the blade's travel direction."""
-        vel     = np.array(self.q_dot[:3])
+        """Cut only the two vertices ahead of the blade in each contacted tile."""
+        vel = np.array(self.q_dot[:3])
         if self.is_backwards:
             vel *= -1
 
-        # Determine the direct footprint first.  Selecting individual leading
-        # vertices prevents a tile's trailing edge from being lowered again
-        # after the blade has moved into its neighbor.
+        # Determine the direct footprint first. A shared vertex is still cut
+        # only once when the blade contacts adjacent tiles in the same frame.
         direct_nodes = set()
         blade_z = min(point[2] for contacts in contacts_by_tile.values()
                       for point in contacts)
@@ -654,6 +659,9 @@ class Surface:
                        for point in contacts):
                     direct_nodes.add((ci, cj))
 
+        if not direct_nodes:
+            return
+
         drops = {}
         for i, j in direct_nodes:
             x, y, height = self.grid_pts[i][j]
@@ -663,6 +671,7 @@ class Surface:
                 drops[(i, j)] = height - new_height
                 self.grid_pts[i][j] = (x, y, new_height)
                 self.surf_grid.nodes[(i, j)]['z'] = new_height
+
 
     def _grid_heights(self):
         """Snapshot of every node height, indexed [i][j], for the GIF's surface."""

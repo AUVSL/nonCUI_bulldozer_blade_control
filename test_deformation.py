@@ -47,7 +47,7 @@ def test_initial_blade_geometry_does_not_deform_the_surface():
     np.testing.assert_allclose(surface._grid_heights(), surface.grid_log[0])
 
 
-def test_only_tile_vertices_ahead_of_blade_are_deformed():
+def test_only_forward_vertices_of_a_contacted_tile_deform():
     surface = Surface(is_uphill=False)
     surface.q_dot[:3] = [0.0, 10.0, 0.0]
     contact = _reached_contact(surface)
@@ -55,7 +55,7 @@ def test_only_tile_vertices_ahead_of_blade_are_deformed():
 
     surface._deform_blade_tiles({(1, 1): [contact]})
 
-    # +Y motion: the j=2 edge is ahead of the blade; j=1 is behind it.
+    # +Y motion: j=2 is directly cut; j=1 remains untouched.
     assert surface.grid_pts[1][1][2] == pytest.approx(before[1, 1])
     assert surface.grid_pts[2][1][2] == pytest.approx(before[2, 1])
     assert surface.grid_pts[1][2][2] < before[1, 2]
