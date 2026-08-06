@@ -635,25 +635,24 @@ class Surface:
         return blade_points, blade_neighbors
 
     def _deform_blade_tiles(self, contacts_by_tile):
-        """Apply one distance-limited cut per reached tile, then soften its edge."""
-        travel_distance = np.linalg.norm(self.q_dot[:3] * self.dt)
-        
+        """Cut only the tile vertices ahead of the blade's travel direction."""
         vel     = np.array(self.q_dot[:3])
         if self.is_backwards:
             vel *= -1
 
-        # Determine the direct footprint first. A vertex shared by adjacent
-        # touched tiles is still cut only once in this frame.
+        # Determine the direct footprint first.  Selecting individual leading
+        # vertices prevents a tile's trailing edge from being lowered again
+        # after the blade has moved into its neighbor.
         direct_nodes = set()
         blade_z = min(point[2] for contacts in contacts_by_tile.values()
                       for point in contacts)
         for (i, j), contacts in contacts_by_tile.items():
             corners = ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
-            reached = any((cx - point[0]) * vel[0] + (cy - point[1]) * vel[1] < 0.0
-                          for point in contacts
-                          for cx, cy, _ in (self.grid_pts[ci][cj] for ci, cj in corners))
-            if reached:
-                direct_nodes.update(corners)
+            for ci, cj in corners:
+                cx, cy, _ = self.grid_pts[ci][cj]
+                if any((cx - point[0]) * vel[0] + (cy - point[1]) * vel[1] > 0.0
+                       for point in contacts):
+                    direct_nodes.add((ci, cj))
 
         drops = {}
         for i, j in direct_nodes:
