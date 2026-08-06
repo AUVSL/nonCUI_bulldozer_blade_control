@@ -595,20 +595,7 @@ class Surface:
         return neighbor_points
 
     def _blade_update(self, deform=True):
-        """Deformation contact points sampled across the blade, offset from q
-        by self.L forward (local +x), ±self.B1/2 laterally (local y -- right
-        is -B1/2, its mirror across q left is +B1/2), and self.H/4 down
-        (local -z), rotated into the global frame the same way util.py places
-        the two tracks (R @ local_offset). The blade is a rigid straight edge,
-        so both ends share whichever end's rotated offset sits lower, rather
-        than each cutting its own (possibly shallower) depth. Each point cuts
-        any ground behind it down to that height. Contact points that land in
-        the same tile are aggregated, so one frame can cut each tile only once.
 
-        Returns the right-to-left blade points, each a 6-vector
-        [x, y, z, roll, pitch, yaw] (sharing q's orientation), plus each
-        point's tile's 4 deformed corner neighbors.
-        """
         R      = self._rotation_lg(*self.q[3:6])
         orient = self.q[3:6].copy()
 
@@ -624,7 +611,26 @@ class Surface:
             for t in np.linspace(0.0, 1.0, n_segments + 1)
         ]
 
-        z   = min(p[2] for p in xyz)
+        proposed_z = min(p[2] for p in xyz)
+
+        # Keep the entire rigid blade edge above the deformation floor.  The
+        # floor follows the undeformed surface, so sloped terrain gets the same
+        # maximum cut depth at every contact point.  Because all sampled blade
+        # points share one height, the highest local floor is the limiting one.
+        deformation_floors = []
+        for x, y, _ in xyz:
+            point = np.array([x, y, proposed_z])
+            i, j = self._grid_cell(point)
+            starting_corners = (
+                (*self.grid_pts[i][j][:2], self.starting_grid_heights[i, j]),
+                (*self.grid_pts[i + 1][j][:2], self.starting_grid_heights[i + 1, j]),
+                (*self.grid_pts[i][j + 1][:2], self.starting_grid_heights[i, j + 1]),
+                (*self.grid_pts[i + 1][j + 1][:2], self.starting_grid_heights[i + 1, j + 1]),
+            )
+            deformation_floors.append(
+                self._bilinear_height(point, starting_corners) - self.max_world_cut_depth
+            )
+        z = max(proposed_z, max(deformation_floors))
 
         contacts_by_tile = {}
         contact_points = []
@@ -665,12 +671,10 @@ class Surface:
         drops = {}
         for i, j in direct_nodes:
             x, y, height = self.grid_pts[i][j]
-            min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
-            new_height = max(blade_z, min_height)
-            if new_height < height:
-                drops[(i, j)] = height - new_height
-                self.grid_pts[i][j] = (x, y, new_height)
-                self.surf_grid.nodes[(i, j)]['z'] = new_height
+            if blade_z < height:
+                drops[(i, j)] = height - blade_z
+                self.grid_pts[i][j] = (x, y, blade_z)
+                self.surf_grid.nodes[(i, j)]['z'] = blade_z
 
 
     def _grid_heights(self):

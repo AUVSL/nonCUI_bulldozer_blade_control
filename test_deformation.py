@@ -77,3 +77,22 @@ def test_repeated_cuts_stop_at_each_vertex_starting_height_limit():
         assert surface.grid_pts[i][j][2] == pytest.approx(
             starting_heights[i, j] - surface.max_world_cut_depth
         )
+
+
+def test_blade_stops_at_maximum_soil_deformation_depth():
+    surface = Surface(is_uphill=False)
+    surface.max_world_cut_depth = 0.1
+    surface.q[2] = -10.0
+
+    blade_points, _ = surface._blade_update(deform=False)
+
+    for point in blade_points:
+        i, j = surface._grid_cell(point)
+        starting_corners = (
+            (*surface.grid_pts[i][j][:2], surface.starting_grid_heights[i, j]),
+            (*surface.grid_pts[i + 1][j][:2], surface.starting_grid_heights[i + 1, j]),
+            (*surface.grid_pts[i][j + 1][:2], surface.starting_grid_heights[i, j + 1]),
+            (*surface.grid_pts[i + 1][j + 1][:2], surface.starting_grid_heights[i + 1, j + 1]),
+        )
+        minimum_z = surface._bilinear_height(point, starting_corners) - surface.max_world_cut_depth
+        assert point[2] >= minimum_z - 1e-12
