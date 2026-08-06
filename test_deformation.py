@@ -15,10 +15,11 @@ def _reached_contact(surface, tile=(1, 1), depth=-10.0):
 def test_duplicate_blade_contacts_cut_a_tile_once_per_frame():
     surface = Surface(is_uphill=False)
     surface.max_dig_depth_per_meter = 2.0
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]  # 0.1 m per step
     contact = _reached_contact(surface)
     before = surface.grid_pts[1][1][2]
 
-    surface._deform_blade_tiles({(1, 1): [contact, contact.copy()]}, 0.1)
+    surface._deform_blade_tiles({(1, 1): [contact, contact.copy()]})
 
     assert surface.grid_pts[1][1][2] == pytest.approx(before - 0.2)
 
@@ -28,11 +29,19 @@ def test_dig_depth_depends_on_distance_not_step_count():
     split_steps = Surface(is_uphill=False)
     for surface in (one_step, split_steps):
         surface.max_dig_depth_per_meter = 2.0
+        surface.q_dot[:3] = [0.0, 10.0, 0.0]
 
     one_contact = _reached_contact(one_step)
     split_contact = _reached_contact(split_steps)
-    one_step._deform_blade_tiles({(1, 1): [one_contact]}, 0.1)
-    split_steps._deform_blade_tiles({(1, 1): [split_contact]}, 0.05)
-    split_steps._deform_blade_tiles({(1, 1): [split_contact]}, 0.05)
+    one_step._deform_blade_tiles({(1, 1): [one_contact]})
+    split_steps.dt = 0.005
+    split_steps._deform_blade_tiles({(1, 1): [split_contact]})
+    split_steps._deform_blade_tiles({(1, 1): [split_contact]})
 
     assert split_steps.grid_pts[1][1][2] == pytest.approx(one_step.grid_pts[1][1][2])
+
+
+def test_initial_blade_geometry_does_not_deform_the_surface():
+    surface = Surface(is_uphill=False)
+
+    np.testing.assert_allclose(surface._grid_heights(), surface.grid_log[0])

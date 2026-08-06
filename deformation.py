@@ -11,7 +11,7 @@ class Surface:
         # simulation parameters
         self.division_factor    = 4
         self.b                  = 1.75
-        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
+        self.offset             = 0*np.array([0, 0, self.b]) if is_uphill else 0*np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.u_split            = 0  # u-value where the grid switches to surface_abg2
         self.v_split            = 2  # u-value where the grid switches to surface_abg2
@@ -77,7 +77,7 @@ class Surface:
 
         # seed the blade points the same way, so blade_log stays aligned frame
         # for frame with log/neighbor_log/grid_log
-        blade_points, blade_neighbors = self._blade_update()
+        blade_points, blade_neighbors = self._blade_update(deform=False)
         neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
         self.neighbor_log.append(np.array(neighbor_points))
         self.blade_log.append(blade_points)
@@ -549,9 +549,14 @@ class Surface:
             # update variables
             t += self.dt
 
-            blade_points, _ = self._blade_update()
+            # Cut with the blade at its current pose, then settle the body on
+            # the newly deformed terrain.
+            self._blade_update()
             neighbor_points = self._body_update()
-            
+
+            # Store the blade at the same updated pose as q and the grid log.
+            # This is geometry-only: cutting again here would double the cut.
+            blade_points, _ = self._blade_update(deform=False)
 
             self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
 
@@ -577,7 +582,7 @@ class Surface:
 
         return neighbor_points
 
-    def _blade_update(self):
+    def _blade_update(self, deform=True):
         """Deformation contact points sampled across the blade, offset from q
         by self.L forward (local +x), ±self.B1/2 laterally (local y -- right
         is -B1/2, its mirror across q left is +B1/2), and self.H/4 down
@@ -616,7 +621,8 @@ class Surface:
             contacts_by_tile.setdefault(self._grid_cell(point), []).append(point)
             contact_points.append(point)
 
-        self._deform_blade_tiles(contacts_by_tile)
+        if deform:
+            self._deform_blade_tiles(contacts_by_tile)
 
         blade_points = [np.concatenate(([x, y, z], orient)) for x, y, _ in xyz]
         blade_neighbors = [self._get_neighbor_points(point) for point in contact_points]
@@ -681,5 +687,5 @@ class Surface:
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = False, is_backwards=False)
     my_surface.run_and_plot()
