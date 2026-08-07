@@ -120,7 +120,7 @@ def test_body_contact_updates_only_pitch_on_forward_slope():
     assert surface.q[5] == pytest.approx(np.pi / 2)
 
 
-def test_blade_keeps_vertical_cut_offset_on_forward_slope():
+def test_blade_keeps_local_offset_on_forward_slope():
     surface = Surface(is_uphill=False)
     slope = 0.2
     for i in range(len(surface.us)):
@@ -134,10 +134,16 @@ def test_blade_keeps_vertical_cut_offset_on_forward_slope():
 
     blade_points, _ = surface._blade_update(deform=False)
 
-    for point in blade_points:
-        assert point[2] == pytest.approx(
-            surface.q[2] - surface.starting_vertical_cut_offset
-        )
+    blade = np.asarray(blade_points)
+    midpoint = (blade[0, :3] + blade[-1, :3]) / 2
+    local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
+    np.testing.assert_allclose(
+        local_midpoint, [surface.L, 0.0, -surface.starting_vertical_cut_offset], atol=1e-12
+    )
+    assert midpoint[2] == pytest.approx(
+        surface._point_height(midpoint)[1] - surface.starting_vertical_cut_offset,
+        abs=1e-6,
+    )
 
 
 def test_blade_descends_with_q_after_surface_is_cut():
@@ -153,7 +159,7 @@ def test_blade_descends_with_q_after_surface_is_cut():
     )
 
 
-def test_blade_midpoint_keeps_global_offsets_from_q_until_depth_limit():
+def test_blade_midpoint_keeps_local_offsets_from_q_until_depth_limit():
     surface = Surface(is_uphill=False)
     surface.max_world_cut_depth = 10.0
     surface.q[2] = -0.3
@@ -163,9 +169,9 @@ def test_blade_midpoint_keeps_global_offsets_from_q_until_depth_limit():
     blade = np.asarray(blade)
     midpoint = (blade[0, :3] + blade[-1, :3]) / 2
 
-    assert np.linalg.norm(midpoint[:2] - surface.q[:2]) == pytest.approx(surface.L)
-    assert midpoint[2] - surface.q[2] == pytest.approx(
-        -surface.starting_vertical_cut_offset
+    local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
+    np.testing.assert_allclose(
+        local_midpoint, [surface.L, 0.0, -surface.starting_vertical_cut_offset], atol=1e-12
     )
 
 
@@ -179,3 +185,13 @@ def test_blade_vertical_motion_stops_at_maximum_cut_depth():
     after, _ = surface._blade_update(deform=False)
 
     np.testing.assert_allclose(np.asarray(after)[:, 2], np.asarray(before)[:, 2])
+
+
+def test_normal_run_deepens_with_q_but_stops_at_maximum_depth():
+    surface = Surface(is_uphill=False)
+
+    surface._run()
+
+    depths = surface.starting_grid_heights - surface._grid_heights()
+    assert depths.max() > surface.starting_vertical_cut_offset
+    assert depths.max() <= surface.max_world_cut_depth + 2e-7

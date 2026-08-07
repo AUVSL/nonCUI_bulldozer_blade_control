@@ -214,41 +214,33 @@ class Surface:
         return self._bilinear_height(point, corners)
 
     def _contact_pitch(self, orient):
-        """Pitch (at the commanded roll/yaw) that balances front and back."""
+        """Pitch that balances surface contact at q and the blade midpoint."""
         def imbalance(pitch):
-            back, front = self._half_resting_heights(
-                self._rotation_lg(orient[0], pitch, orient[2])
+            R = self._rotation_lg(orient[0], pitch, orient[2])
+            blade_offset = R @ np.array(
+                [self.L, 0.0, -self.starting_vertical_cut_offset]
             )
-            return front - back
+            blade_midpoint = self.q[:3] + blade_offset
+
+            q_surface = self._point_height(self.q)[1]
+            starting_blade_surface = self._starting_height(blade_midpoint)
+            q_cut_depth = max(0.0, self._starting_height(self.q) - q_surface)
+            cut_depth = min(
+                self.starting_vertical_cut_offset + q_cut_depth,
+                self.max_world_cut_depth,
+            )
+            # q remains on the live surface. As it descends into the previous
+            # cut, carry that accumulated descent forward to the blade, plus
+            # the blade's initial offset, until the maximum depth is reached.
+            blade_target = starting_blade_surface - cut_depth
+
+            # Required q height for each contact. Their difference is zero when
+            # q is on the surface and the rigid blade midpoint is at its target.
+            q_required = q_surface
+            blade_required = blade_target - blade_offset[2]
+            return blade_required - q_required
 
         return self._contact_angle(imbalance, orient[1])
-
-    def _half_resting_heights(self, R):
-        """Required q heights for the back and front halves of both tracks."""
-        fwd = R[:, 0]
-        lat = R[:, 1] * (self.b / 2)
-        half_l = self.l / 2
-        support = np.full(2, -np.inf)  # back, front
-        for side in (-1.0, 1.0):
-            base = self.q[:3] + side * lat
-            ss = {-half_l, 0.0, half_l}
-            back_cell = self._grid_cell(base - half_l * fwd)
-            front_cell = self._grid_cell(base + half_l * fwd)
-            for grid, axis in ((self.us, 0), (self.vs, 1)):
-                if abs(fwd[axis]) <= 1e-12:
-                    continue
-                lo, hi = sorted((back_cell[axis], front_cell[axis]))
-                for s in (grid[lo:hi + 2] - base[axis]) / fwd[axis]:
-                    if -half_l < s < half_l:
-                        ss.add(float(s))
-            for s in ss:
-                point = base + s * fwd
-                needed = self._point_height(point)[1] - point[2] + self.q[2]
-                if s <= 0:
-                    support[0] = max(support[0], needed)
-                if s >= 0:
-                    support[1] = max(support[1], needed)
-        return float(support[0]), float(support[1])
 
     def _contact_angle(self, imbalance, fitted):
         """Bracketed contact-angle solve shared with util.Surface."""
