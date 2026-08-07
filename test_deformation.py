@@ -96,3 +96,86 @@ def test_blade_stops_at_maximum_soil_deformation_depth():
         )
         minimum_z = surface._bilinear_height(point, starting_corners) - surface.max_world_cut_depth
         assert point[2] >= minimum_z - 1e-12
+
+
+def test_body_contact_updates_only_pitch_on_forward_slope():
+    surface = Surface(is_uphill=False)
+    slope = 0.2
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            z = slope * y
+            surface.grid_pts[i][j] = (x, y, z)
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.starting_grid_heights = surface._grid_heights().copy()
+    surface.is_initalization = True
+    surface.q[3] = 0.17
+    surface.q[5] = np.pi / 2
+
+    surface._body_update()
+
+    assert surface.q[2] == pytest.approx(slope * surface.q[1])
+    assert surface.q[4] != pytest.approx(0.0)
+    assert surface.q[3] == pytest.approx(0.17)
+    assert surface.q[5] == pytest.approx(np.pi / 2)
+
+
+def test_blade_keeps_vertical_cut_offset_on_forward_slope():
+    surface = Surface(is_uphill=False)
+    slope = 0.2
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            z = slope * y
+            surface.grid_pts[i][j] = (x, y, z)
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.starting_grid_heights = surface._grid_heights().copy()
+    surface._body_update()
+
+    blade_points, _ = surface._blade_update(deform=False)
+
+    for point in blade_points:
+        assert point[2] == pytest.approx(
+            surface.q[2] - surface.starting_vertical_cut_offset
+        )
+
+
+def test_blade_descends_with_q_after_surface_is_cut():
+    surface = Surface(is_uphill=False)
+    surface.max_world_cut_depth = 1.0
+    before, _ = surface._blade_update(deform=False)
+
+    surface.q[2] -= 0.1
+    after, _ = surface._blade_update(deform=False)
+
+    np.testing.assert_allclose(
+        np.asarray(after)[:, 2], np.asarray(before)[:, 2] - 0.1
+    )
+
+
+def test_blade_midpoint_keeps_global_offsets_from_q_until_depth_limit():
+    surface = Surface(is_uphill=False)
+    surface.max_world_cut_depth = 10.0
+    surface.q[2] = -0.3
+    surface.q[4] = 0.4
+
+    blade, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade)
+    midpoint = (blade[0, :3] + blade[-1, :3]) / 2
+
+    assert np.linalg.norm(midpoint[:2] - surface.q[:2]) == pytest.approx(surface.L)
+    assert midpoint[2] - surface.q[2] == pytest.approx(
+        -surface.starting_vertical_cut_offset
+    )
+
+
+def test_blade_vertical_motion_stops_at_maximum_cut_depth():
+    surface = Surface(is_uphill=False)
+    surface.max_world_cut_depth = 0.25
+    surface.q[2] = -1.0
+
+    before, _ = surface._blade_update(deform=False)
+    surface.q[2] -= 0.2
+    after, _ = surface._blade_update(deform=False)
+
+    np.testing.assert_allclose(np.asarray(after)[:, 2], np.asarray(before)[:, 2])

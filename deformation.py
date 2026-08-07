@@ -3,15 +3,16 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from PIL import Image
 from matplotlib.collections import LineCollection
+from matplotlib.patches import Polygon
 from matplotlib.ticker import MaxNLocator
-from mpl_toolkits.mplot3d.art3d import Line3DCollection
+from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 class Surface:
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
         # simulation parameters
         self.division_factor    = 4*2
         self.b                  = 1.75
-        self.offset             = 0*np.array([0, 0, self.b]) if is_uphill else 0*np.array([0, 0, -self.b])
+        self.offset             =0* np.array([0, 0, self.b]) if is_uphill else 0*np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.u_split            = 0  # u-value where the grid switches to surface_abg2
         self.v_split            = 2  # u-value where the grid switches to surface_abg2
@@ -28,6 +29,9 @@ class Surface:
         self.B1   = 2.921
         self.H    = 0.955
         self.L    = 1.2 
+        self.l    = 2.349
+        self.starting_vertical_cut_offset = self.H / 4
+        self.contact_tol = 1e-7
 
         # No vertex may be cut farther than this below its own starting height.
         self.max_world_cut_depth     = self.H
@@ -72,6 +76,9 @@ class Surface:
 
         # put the body on the surface at the start of the simulation
         neighbor_points, self.q[2] = self._point_height(self.q)
+        initial_orient = self.q[3:6].copy()
+        initial_orient[1] = self._point_orientation(neighbor_points)[1]
+        self.q[4] = self._contact_pitch(initial_orient)
         self.log.append([0, *self.q])
         self.neighbor_log.append(np.array(neighbor_points))
         self.grid_log.append(self._grid_heights())
@@ -195,6 +202,82 @@ class Surface:
         height_to_surface = self._bilinear_height(point, neighbor_points)
         return neighbor_points, height_to_surface
 
+    def _starting_height(self, point):
+        """Undeformed surface height at point's horizontal position."""
+        i, j = self._grid_cell(point)
+        corners = (
+            (*self.grid_pts[i][j][:2], self.starting_grid_heights[i, j]),
+            (*self.grid_pts[i + 1][j][:2], self.starting_grid_heights[i + 1, j]),
+            (*self.grid_pts[i][j + 1][:2], self.starting_grid_heights[i, j + 1]),
+            (*self.grid_pts[i + 1][j + 1][:2], self.starting_grid_heights[i + 1, j + 1]),
+        )
+        return self._bilinear_height(point, corners)
+
+    def _contact_pitch(self, orient):
+        """Pitch (at the commanded roll/yaw) that balances front and back."""
+        def imbalance(pitch):
+            back, front = self._half_resting_heights(
+                self._rotation_lg(orient[0], pitch, orient[2])
+            )
+            return front - back
+
+        return self._contact_angle(imbalance, orient[1])
+
+    def _half_resting_heights(self, R):
+        """Required q heights for the back and front halves of both tracks."""
+        fwd = R[:, 0]
+        lat = R[:, 1] * (self.b / 2)
+        half_l = self.l / 2
+        support = np.full(2, -np.inf)  # back, front
+        for side in (-1.0, 1.0):
+            base = self.q[:3] + side * lat
+            ss = {-half_l, 0.0, half_l}
+            back_cell = self._grid_cell(base - half_l * fwd)
+            front_cell = self._grid_cell(base + half_l * fwd)
+            for grid, axis in ((self.us, 0), (self.vs, 1)):
+                if abs(fwd[axis]) <= 1e-12:
+                    continue
+                lo, hi = sorted((back_cell[axis], front_cell[axis]))
+                for s in (grid[lo:hi + 2] - base[axis]) / fwd[axis]:
+                    if -half_l < s < half_l:
+                        ss.add(float(s))
+            for s in ss:
+                point = base + s * fwd
+                needed = self._point_height(point)[1] - point[2] + self.q[2]
+                if s <= 0:
+                    support[0] = max(support[0], needed)
+                if s >= 0:
+                    support[1] = max(support[1], needed)
+        return float(support[0]), float(support[1])
+
+    def _contact_angle(self, imbalance, fitted):
+        """Bracketed contact-angle solve shared with util.Surface."""
+        limit, span = np.pi / 2 - 1e-3, 0.25
+        while True:
+            lo, hi = max(fitted - span, -limit), min(fitted + span, limit)
+            f_lo, f_hi = imbalance(lo), imbalance(hi)
+            if f_lo * f_hi <= 0:
+                break
+            if lo <= -limit and hi >= limit:
+                return fitted
+            span *= 2
+
+        angle = fitted
+        for _ in range(60):
+            if f_hi == f_lo:
+                break
+            angle = (lo * f_hi - hi * f_lo) / (f_hi - f_lo)
+            value = imbalance(angle)
+            if abs(value) < self.contact_tol or hi - lo < self.contact_tol:
+                break
+            if value * f_lo > 0:
+                lo, f_lo = angle, value
+                f_hi *= 0.5
+            else:
+                hi, f_hi = angle, value
+                f_lo *= 0.5
+        return angle
+
     def _get_neighbor_points(self, point):
         i, j = self._grid_cell(point)
         col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
@@ -238,6 +321,11 @@ class Surface:
         # fixed at the two blade endpoints.
         blade_data    = np.asarray(self.blade_log)[::2]
         blade_path    = np.asarray(self.blade_log)
+        blade_top_data = np.array([
+            frame[[0, -1], :3]
+            + self._rotation_lg(*frame[0, 3:6])[:, 2] * self.H
+            for frame in blade_data
+        ])
         neighbor_data = self.neighbor_log[::2]
         grid_z_data   = self.grid_log[::2]
 
@@ -250,9 +338,10 @@ class Surface:
         # neither the q path, the blade paths, nor a fresh cut is clipped flush
         # at a panel edge), plus the grid-neighbor points only when they will
         # actually be drawn
-        bound_x = [grid_x.ravel(), blade_data[:, :, 0].ravel()]
-        bound_y = [grid_y.ravel(), blade_path[:, :, 1].ravel()]
-        bound_z = [np.asarray(self.grid_log).ravel(), blade_path[:, :, 2].ravel()]
+        bound_x = [grid_x.ravel(), blade_data[:, :, 0].ravel(), blade_top_data[:, :, 0].ravel()]
+        bound_y = [grid_y.ravel(), blade_path[:, :, 1].ravel(), blade_top_data[:, :, 1].ravel()]
+        bound_z = [np.asarray(self.grid_log).ravel(), blade_path[:, :, 2].ravel(),
+                   blade_top_data[:, :, 2].ravel()]
         if show_neighbors:
             neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
             bound_x.append(neighbor_pts[:, 0])
@@ -350,16 +439,6 @@ class Surface:
         ax_back.set_xlabel("Y (m)")
         ax_back.set_ylabel("Z (m)")
 
-        # Show the complete, unsampled trajectory of each blade contact point
-        # in the Y-Z projection. These paths remain static behind the animated
-        # red blade arrows, making it clear where the blade has traveled.
-        blade_path_back = [
-            ax_back.plot(blade_path[:, k, 1], blade_path[:, k, 2],
-                         color="red", linewidth=1.0, alpha=0.45, zorder=2,
-                         label="blade trajectory" if k == 0 else None)[0]
-            for k in range(blade_path.shape[1])
-        ]
-
         ax_side.set_aspect('equal')
         ax_side.grid(False)
         ax_side.set_xlabel("X (m)")
@@ -421,6 +500,24 @@ class Surface:
                                            angles='xy', zorder=7)
         blade_arrow_3d   = [None]
 
+        # A semi-transparent face spans the two lower contact endpoints and the
+        # two upper corners obtained along the blade's local +Z axis.
+        blade_top0 = blade_top_data[0]
+        blade_face0 = np.vstack([blade0[0, :3], blade0[-1, :3],
+                                 blade_top0[-1], blade_top0[0]])
+        blade_face_top = Polygon(blade_face0[:, [0, 1]], closed=True,
+                                 facecolor="red", edgecolor="darkred", alpha=0.35, zorder=6)
+        blade_face_back = Polygon(blade_face0[:, [1, 2]], closed=True,
+                                  facecolor="red", edgecolor="darkred", alpha=0.35, zorder=6)
+        blade_face_side = Polygon(blade_face0[:, [0, 2]], closed=True,
+                                  facecolor="red", edgecolor="darkred", alpha=0.35, zorder=6)
+        blade_face_3d = Poly3DCollection([blade_face0], facecolors="red",
+                                         edgecolors="darkred", alpha=0.35, zorder=6)
+        ax_top.add_patch(blade_face_top)
+        ax_back.add_patch(blade_face_back)
+        ax_side.add_patch(blade_face_side)
+        ax.add_collection3d(blade_face_3d)
+
         def set_neighbors(i):
             pts = np.asarray(neighbor_data[i]) if len(neighbor_data[i]) else np.empty((0, 3))
             green_3d._offsets3d = (pts[:, 0], pts[:, 1], pts[:, 2])
@@ -455,12 +552,20 @@ class Surface:
                                            np.full(len(blade), fwd[0]), np.full(len(blade), fwd[1]), np.full(len(blade), fwd[2]),
                                            length=arrow_len, color='red', zorder=7)
 
+            blade_top = blade_top_data[i]
+            blade_face = np.vstack([blade[0, :3], blade[-1, :3],
+                                    blade_top[-1], blade_top[0]])
+            blade_face_top.set_xy(blade_face[:, [0, 1]])
+            blade_face_back.set_xy(blade_face[:, [1, 2]])
+            blade_face_side.set_xy(blade_face[:, [0, 2]])
+            blade_face_3d.set_verts([blade_face])
+
         if show_neighbors:
             set_neighbors(0)
         set_q_point(0)
 
-        legend_handles = [q_arrow_side, blade_arrow_side, blade_path_back[0]]
-        legend_labels  = ["q (center of mass)", "blade contact points", "blade trajectory"]
+        legend_handles = [q_arrow_side, blade_arrow_side, blade_face_side]
+        legend_labels  = ["q (center of mass)", "blade contact points", "blade face"]
         if show_neighbors:
             legend_handles.append(green_side)
             legend_labels.append("grid neighbors")
@@ -504,8 +609,9 @@ class Surface:
         if show_neighbors:
             flat_artists += [green_back, green_side, green_top]
         flat_artists += [q_arrow_top, q_arrow_back, q_arrow_side,
-                         blade_arrow_top, blade_arrow_back, blade_arrow_side]
-        three_d       = [grid_3d] + ([green_3d] if show_neighbors else [])
+                         blade_arrow_top, blade_arrow_back, blade_arrow_side,
+                         blade_face_top, blade_face_back, blade_face_side]
+        three_d       = [grid_3d, blade_face_3d] + ([green_3d] if show_neighbors else [])
 
         # the background has to hold no frame-specific state, or frame 0's
         # arrows and grid ghost behind the whole animation. the 3D quivers are
@@ -523,7 +629,7 @@ class Surface:
         for art in flat_artists + three_d:
             art.set_visible(True)
 
-        fps        = 20
+        fps        = 30
         frame_size = fig.canvas.get_width_height()
         frames     = []
         for i in range(len(data)):
@@ -551,7 +657,7 @@ class Surface:
 
         fname = "figures/simulation.gif"
         frames[0].save(fname, save_all=True, append_images=frames[1:],
-                       duration=int(4_000 / fps), loop=0)
+                       duration=int(1_000 / fps), loop=0)
         plt.close(fig)
         print(f"Saved {fname}")
 
@@ -590,17 +696,18 @@ class Surface:
 
         # seed the body height + orientation from the tile under the center of mass
         neighbor_points, self.q[2] = self._point_height(self.q)
-        self.q[3:6]                = self._point_orientation(self._get_neighbor_points(self.q))
-
+        fitted_pitch = self._point_orientation(neighbor_points)[1]
+        orient = self.q[3:6].copy()
+        orient[1] = fitted_pitch
+        self.q[4] = self._contact_pitch(orient)
+       
         return neighbor_points
 
     def _blade_update(self, deform=True):
-
-        R      = self._rotation_lg(*self.q[3:6])
         orient = self.q[3:6].copy()
-
-        p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.H / 4])
-        p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.H / 4])
+        R      = self._rotation_lg(*self.q[3:6])
+        p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.starting_vertical_cut_offset])
+        p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.starting_vertical_cut_offset])
 
         # TODO: when go back to optimize the code consider using the vector between p0 and p1 so not O(n) points
         length = np.linalg.norm(p1 - p0)
@@ -611,38 +718,26 @@ class Surface:
             for t in np.linspace(0.0, 1.0, n_segments + 1)
         ]
 
-        proposed_z = min(p[2] for p in xyz)
-
-        # Keep the entire rigid blade edge above the deformation floor.  The
-        # floor follows the undeformed surface, so sloped terrain gets the same
-        # maximum cut depth at every contact point.  Because all sampled blade
-        # points share one height, the highest local floor is the limiting one.
-        deformation_floors = []
-        for x, y, _ in xyz:
-            point = np.array([x, y, proposed_z])
-            i, j = self._grid_cell(point)
-            starting_corners = (
-                (*self.grid_pts[i][j][:2], self.starting_grid_heights[i, j]),
-                (*self.grid_pts[i + 1][j][:2], self.starting_grid_heights[i + 1, j]),
-                (*self.grid_pts[i][j + 1][:2], self.starting_grid_heights[i, j + 1]),
-                (*self.grid_pts[i + 1][j + 1][:2], self.starting_grid_heights[i + 1, j + 1]),
-            )
-            deformation_floors.append(
-                self._bilinear_height(point, starting_corners) - self.max_world_cut_depth
-            )
-        z = max(proposed_z, max(deformation_floors))
+        # The horizontal and vertical q-to-blade offsets remain constant until
+        # the edge reaches the maximum cutting depth. At that point only its Z
+        # motion stops; q remains free to follow the live surface.
+        deepest_excess = max(
+            self._starting_height(point) - point[2] - self.max_world_cut_depth
+            for point in xyz
+        )
+        if deepest_excess > 0.0:
+            xyz = [point + np.array([0.0, 0.0, deepest_excess]) for point in xyz]
 
         contacts_by_tile = {}
         contact_points = []
-        for x, y, _ in xyz:
-            point = np.array([x, y, z])
+        for point in xyz:
             contacts_by_tile.setdefault(self._grid_cell(point), []).append(point)
             contact_points.append(point)
 
         if deform:
             self._deform_blade_tiles(contacts_by_tile)
 
-        blade_points = [np.concatenate(([x, y, z], orient)) for x, y, _ in xyz]
+        blade_points = [np.concatenate((point, orient)) for point in xyz]
         blade_neighbors = [self._get_neighbor_points(point) for point in contact_points]
         return blade_points, blade_neighbors
 
@@ -654,28 +749,30 @@ class Surface:
 
         # Determine the direct footprint first. A shared vertex is still cut
         # only once when the blade contacts adjacent tiles in the same frame.
-        direct_nodes = set()
-        blade_z = min(point[2] for contacts in contacts_by_tile.values()
-                      for point in contacts)
+        direct_nodes = {}
         for (i, j), contacts in contacts_by_tile.items():
+            contact_depth = min(
+                max(self._starting_height(point) - point[2] for point in contacts),
+                self.max_world_cut_depth,
+            )
             corners = ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
             for ci, cj in corners:
                 cx, cy, _ = self.grid_pts[ci][cj]
                 if any((cx - point[0]) * vel[0] + (cy - point[1]) * vel[1] > 0.0
                        for point in contacts):
-                    direct_nodes.add((ci, cj))
+                    direct_nodes[(ci, cj)] = max(
+                        direct_nodes.get((ci, cj), 0.0), contact_depth
+                    )
 
         if not direct_nodes:
             return
 
-        drops = {}
-        for i, j in direct_nodes:
+        for (i, j), cut_depth in direct_nodes.items():
             x, y, height = self.grid_pts[i][j]
+            blade_z = self.starting_grid_heights[i, j] - cut_depth
             if blade_z < height:
-                drops[(i, j)] = height - blade_z
                 self.grid_pts[i][j] = (x, y, blade_z)
                 self.surf_grid.nodes[(i, j)]['z'] = blade_z
-
 
     def _grid_heights(self):
         """Snapshot of every node height, indexed [i][j], for the GIF's surface."""
