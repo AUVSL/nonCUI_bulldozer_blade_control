@@ -195,3 +195,43 @@ def test_normal_run_deepens_with_q_but_stops_at_maximum_depth():
     depths = surface.starting_grid_heights - surface._grid_heights()
     assert depths.max() > surface.starting_vertical_cut_offset
     assert depths.max() <= surface.max_world_cut_depth + 2e-7
+
+
+def test_unrolled_transition_and_cut_are_uniform_across_blade_width():
+    surface = Surface(is_uphill=False, is_surface_rolled=False)
+    np.testing.assert_allclose(
+        np.ptp(surface.starting_grid_heights, axis=0), 0.0, atol=1e-12
+    )
+
+    surface._run()
+
+    depths = surface.starting_grid_heights - surface._grid_heights()
+    cut_columns = np.flatnonzero(depths.max(axis=0) > 1e-9)
+    for j in cut_columns:
+        np.testing.assert_allclose(depths[:, j], depths[0, j], atol=2e-7)
+
+
+def test_contact_pitch_uses_cut_floor_pitch_after_cutoff_depth():
+    surface = Surface(is_uphill=False)
+    cutoff_q_depth = (
+        surface.max_world_cut_depth - surface.starting_vertical_cut_offset
+    )
+    surface.grid_pts = [
+        [(x, y, z - cutoff_q_depth) for x, y, z in column]
+        for column in surface.grid_pts
+    ]
+    for i, column in enumerate(surface.grid_pts):
+        for j, (_, _, z) in enumerate(column):
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.q[2] = surface._point_height(surface.q)[1]
+    surface_pitch = surface._point_orientation(surface._get_neighbor_points(surface.q))[1]
+    orient = surface.q[3:6].copy()
+    orient[1] = surface_pitch
+
+    R = surface._rotation_lg(*orient)
+    blade_midpoint = surface.q[:3] + R @ np.array(
+        [surface.L, 0.0, -surface.starting_vertical_cut_offset]
+    )
+    assert surface._contact_pitch(orient) == pytest.approx(
+        surface._starting_pitch(blade_midpoint)
+    )

@@ -12,7 +12,7 @@ class Surface:
         # simulation parameters
         self.division_factor    = 4*2
         self.b                  = 1.75
-        self.offset             =0* np.array([0, 0, self.b]) if is_uphill else 0*np.array([0, 0, -self.b])
+        self.offset             = 0*np.array([0, 0, self.b]) if is_uphill else 0*np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.u_split            = 0  # u-value where the grid switches to surface_abg2
         self.v_split            = 2  # u-value where the grid switches to surface_abg2
@@ -113,11 +113,13 @@ class Surface:
                     u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
                     v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
                     
-                    # w = u_clip if self.is_surface_pitched else v_clip
-                    # if self.is_surface_rolled and self.is_surface_pitched:
-                    w = u_clip + v_clip
-                    # elif self.is_surface_rolled:
-                        # w = v_clip if self.is_surface_pitched else u_clip
+                    # The transition changes only along the direction of
+                    # travel unless a cross-slope was explicitly requested.
+                    # Adding both clips unconditionally creates an unintended
+                    # diagonal slope across the blade and a V-shaped cut.
+                    w = u_clip if self.is_surface_pitched else v_clip
+                    if self.is_surface_rolled:
+                        w += v_clip if self.is_surface_pitched else u_clip
                         
                     x, y, z = u * e1 + v * e2 + w * self.offset * e3
 
@@ -213,8 +215,47 @@ class Surface:
         )
         return self._bilinear_height(point, corners)
 
+    def _starting_pitch(self, point):
+        """Pitch of the maximum-depth cut floor at point.
+
+        The cut floor is the starting surface translated downward by a constant
+        maximum depth, so it has the same gradient as the starting surface.
+        """
+        i, j = self._grid_cell(point)
+        corners = (
+            (*self.grid_pts[i][j][:2], self.starting_grid_heights[i, j]),
+            (*self.grid_pts[i + 1][j][:2], self.starting_grid_heights[i + 1, j]),
+            (*self.grid_pts[i][j + 1][:2], self.starting_grid_heights[i, j + 1]),
+            (*self.grid_pts[i + 1][j + 1][:2], self.starting_grid_heights[i + 1, j + 1]),
+        )
+        gradient = self._bilinear_gradient(point, corners)
+        velocity = np.array(self.q_dot[:2])
+        if self.is_backwards:
+            velocity *= -1
+        speed = np.linalg.norm(velocity)
+        if speed < 1e-9:
+            return self.q[4]
+        forward = velocity / speed
+        return np.arctan2(-np.dot(gradient, forward), 1.0)
+
     def _contact_pitch(self, orient):
         """Pitch that balances surface contact at q and the blade midpoint."""
+        q_surface = self._point_height(self.q)[1]
+        q_cut_depth = max(0.0, self._starting_height(self.q) - q_surface)
+        cut_depth = min(
+            self.starting_vertical_cut_offset + q_cut_depth,
+            self.max_world_cut_depth,
+        )
+        if cut_depth >= self.max_world_cut_depth - self.contact_tol:
+            # Bypass the root solver entirely once the blade target reaches the
+            # floor. Returning this value from imbalance() would only report a
+            # zero residual and leave the solver's candidate pitch in place.
+            fitted_R = self._rotation_lg(*orient)
+            blade_midpoint = self.q[:3] + fitted_R @ np.array(
+                [self.L, 0.0, -self.starting_vertical_cut_offset]
+            )
+            return self._starting_pitch(blade_midpoint)
+
         def imbalance(pitch):
             R = self._rotation_lg(orient[0], pitch, orient[2])
             blade_offset = R @ np.array(
@@ -222,13 +263,7 @@ class Surface:
             )
             blade_midpoint = self.q[:3] + blade_offset
 
-            q_surface = self._point_height(self.q)[1]
             starting_blade_surface = self._starting_height(blade_midpoint)
-            q_cut_depth = max(0.0, self._starting_height(self.q) - q_surface)
-            cut_depth = min(
-                self.starting_vertical_cut_offset + q_cut_depth,
-                self.max_world_cut_depth,
-            )
             # q remains on the live surface. As it descends into the previous
             # cut, carry that accumulated descent forward to the blade, plus
             # the blade's initial offset, until the maximum depth is reached.
@@ -771,5 +806,5 @@ class Surface:
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = False, is_backwards=False)
+    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()
