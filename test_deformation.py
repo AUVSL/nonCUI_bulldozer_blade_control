@@ -235,3 +235,26 @@ def test_contact_pitch_uses_cut_floor_pitch_after_cutoff_depth():
     assert surface._contact_pitch(orient) == pytest.approx(
         surface._starting_pitch(blade_midpoint)
     )
+
+
+def test_rolled_soil_is_never_cut_below_the_blade_plane():
+    surface = Surface(is_uphill=False, is_surface_rolled=True)
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface, tile=(4, 1), depth=-0.3)
+
+    surface._deform_blade_tiles({(4, 1): [contact]})
+
+    for i, j in ((4, 2), (5, 2)):
+        assert surface.grid_pts[i][j][2] == pytest.approx(contact[2])
+
+
+def test_rolled_soil_is_graded_flat_across_the_blade():
+    surface = Surface(is_uphill=False, is_surface_rolled=True)
+
+    surface._run()
+
+    heights = surface._grid_heights()
+    deformed = np.abs(heights - surface.starting_grid_heights) > 1e-9
+    columns = np.flatnonzero(deformed.any(axis=0))
+    for j in columns:
+        np.testing.assert_allclose(heights[:, j], heights[0, j], atol=2e-7)

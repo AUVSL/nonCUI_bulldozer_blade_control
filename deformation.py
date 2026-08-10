@@ -12,7 +12,7 @@ class Surface:
         # simulation parameters
         self.division_factor    = 4*2
         self.b                  = 1.75
-        self.offset             = 0*np.array([0, 0, self.b]) if is_uphill else 0*np.array([0, 0, -self.b])
+        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.u_split            = 0  # u-value where the grid switches to surface_abg2
         self.v_split            = 2  # u-value where the grid switches to surface_abg2
@@ -778,26 +778,27 @@ class Surface:
         # only once when the blade contacts adjacent tiles in the same frame.
         direct_nodes = {}
         for (i, j), contacts in contacts_by_tile.items():
-            contact_depth = min(
-                max(self._starting_height(point) - point[2] for point in contacts),
-                self.max_world_cut_depth,
-            )
+            local_blade_z = min(point[2] for point in contacts)
             corners = ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
             for ci, cj in corners:
                 cx, cy, _ = self.grid_pts[ci][cj]
                 if any((cx - point[0]) * vel[0] + (cy - point[1]) * vel[1] > 0.0
                        for point in contacts):
-                    direct_nodes[(ci, cj)] = max(
-                        direct_nodes.get((ci, cj), 0.0), contact_depth
+                    # Shared vertices take the deepest actual blade plane from
+                    # their contacted tiles, never a relative depth copied from
+                    # terrain at a different lateral height.
+                    direct_nodes[(ci, cj)] = min(
+                        direct_nodes.get((ci, cj), np.inf), local_blade_z
                     )
 
         if not direct_nodes:
             return
 
-        for (i, j), cut_depth in direct_nodes.items():
+        for (i, j), local_blade_z in direct_nodes.items():
             x, y, height = self.grid_pts[i][j]
-            blade_z = self.starting_grid_heights[i, j] - cut_depth
-            if blade_z < height:
+            min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
+            blade_z = max(local_blade_z, min_height)
+            if blade_z < height :
                 self.grid_pts[i][j] = (x, y, blade_z)
                 self.surf_grid.nodes[(i, j)]['z'] = blade_z
 
@@ -806,5 +807,5 @@ class Surface:
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=False, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
     my_surface.run_and_plot()
