@@ -6,7 +6,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
-class Surface:
+class Body:
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
         # simulation parameters
         self.b                  = 1.75
@@ -840,5 +840,5 @@ class Surface:
         return dh_ds * e_s / es2 + dh_dt * e_t / et2
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
-    my_surface.run_and_plot()
+    my_body = Body(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_body.run_and_plot()

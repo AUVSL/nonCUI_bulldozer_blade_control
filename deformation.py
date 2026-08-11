@@ -7,7 +7,7 @@ from matplotlib.patches import Polygon
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
-class Surface:
+class Blade:
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
                  is_backwards: bool = False, blade_local_yaw: float = 0.0,
                  blade_local_roll: float = 0.0, blade_pitch: float = None):
@@ -801,11 +801,11 @@ class Surface:
 
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill          = True, 
+    my_blade = Blade(is_uphill          = True, 
                          is_surface_pitched = False, 
                          is_surface_rolled  = True, 
                          is_backwards       = False,  
                          blade_local_yaw    = 0.0,
                          blade_local_roll   = -0.3, 
                          blade_pitch        = 0.0)
-    my_surface.run_and_plot()
+    my_blade.run_and_plot()
