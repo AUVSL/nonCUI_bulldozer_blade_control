@@ -788,13 +788,34 @@ class Surface:
             contact_points.append(point)
 
         if deform:
-            self._deform_blade_tiles(contacts_by_tile)
+            self._deform_blade_tiles(contacts_by_tile, blade_span=(p0, p1))
 
         blade_points = [np.concatenate((point, orient)) for point in xyz]
         blade_neighbors = [self._get_neighbor_points(point) for point in contact_points]
         return blade_points, blade_neighbors
 
-    def _deform_blade_tiles(self, contacts_by_tile):
+    def _blade_span(self):
+        """Current blade endpoints, including body roll/yaw and local roll/yaw."""
+        R = self._blade_rotation_lg(self.q[3:6])
+        cut_depth = self.blade_cut_depth
+        p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -cut_depth])
+        p1 = self.q[:3] + R @ np.array([self.L, self.B1 / 2, -cut_depth])
+        return p0, p1
+
+    def _rolled_cut_floor(self, blade_span):
+        """Detect cross-blade roll and its cut floor from the undeformed surface."""
+        p0, p1 = blade_span
+        horizontal_length = np.linalg.norm(p1[:2] - p0[:2])
+        n_segments = max(1, int(np.ceil(horizontal_length / self.subdivision)))
+        starting_heights = np.array([
+            self._starting_height((1.0 - t) * p0 + t * p1)
+            for t in np.linspace(0.0, 1.0, n_segments + 1)
+        ])
+        is_rolled = np.ptp(starting_heights) > self.contact_tol
+        cut_floor = np.max(starting_heights) - self.max_world_cut_depth
+        return is_rolled, cut_floor
+
+    def _deform_blade_tiles(self, contacts_by_tile, blade_span=None):
         """Cut only the two vertices ahead of the blade in each contacted tile."""
         vel = np.array(self.q_dot[:3])
         if self.is_backwards:
@@ -820,13 +841,14 @@ class Surface:
         if not direct_nodes:
             return
 
+        detected_roll, rolled_min_height = self._rolled_cut_floor(
+            self._blade_span() if blade_span is None else blade_span
+        )
+
         for (i, j), local_blade_z in direct_nodes.items():
             x, y, height = self.grid_pts[i][j]
-            if self.is_surface_rolled:
-                min_height = (
-                    np.max(self.starting_grid_heights[:, j])
-                    - self.max_world_cut_depth
-                )
+            if detected_roll:
+                min_height = rolled_min_height
             else:
                 min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
             blade_z = max(local_blade_z, min_height)
@@ -840,10 +862,10 @@ class Surface:
 
 if __name__ == "__main__":
     my_surface = Surface(is_uphill          = True, 
-                         is_surface_pitched = False, 
+                         is_surface_pitched = True, 
                          is_surface_rolled  = True, 
                          is_backwards       = False,  
-                         blade_local_yaw    = 0.3,
-                         blade_local_roll   = 0.3, 
-                         blade_pitch        = -0.3)
+                         blade_local_yaw    = 0.0,
+                         blade_local_roll   = 0.0, 
+                         blade_pitch        = 0.3)
     my_surface.run_and_plot()

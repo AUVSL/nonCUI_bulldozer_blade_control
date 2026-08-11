@@ -287,6 +287,40 @@ def test_rolled_soil_is_never_cut_below_the_blade_plane():
         assert surface.grid_pts[i][j][2] == pytest.approx(contact[2])
 
 
+@pytest.mark.parametrize(
+    "p0, p1",
+    [
+        ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+        ([-1.0, -1.0, 0.0], [1.0, 1.0, 0.0]),
+    ],
+)
+def test_rolled_cut_floor_follows_blade_span_for_axis_and_diagonal_travel(p0, p1):
+    surface = Surface(is_uphill=False, is_surface_rolled=True)
+    surface.max_world_cut_depth = 0.4
+    surface._starting_height = lambda point: 2.0 * point[0] + 3.0 * point[1]
+
+    is_rolled, floor = surface._rolled_cut_floor((np.array(p0), np.array(p1)))
+
+    endpoint_heights = [
+        surface._starting_height(np.array(p0)),
+        surface._starting_height(np.array(p1)),
+    ]
+    assert is_rolled
+    assert floor == pytest.approx(max(endpoint_heights) - surface.max_world_cut_depth)
+
+
+def test_rolled_cut_floor_detects_flat_precut_surface():
+    surface = Surface(is_uphill=False, is_surface_rolled=True)
+    surface._starting_height = lambda point: 1.25
+
+    is_rolled, floor = surface._rolled_cut_floor(
+        (np.array([-1.0, -1.0, 0.0]), np.array([1.0, 1.0, 0.0]))
+    )
+
+    assert not is_rolled
+    assert floor == pytest.approx(1.25 - surface.max_world_cut_depth)
+
+
 def test_rolled_soil_is_graded_flat_across_the_blade():
     surface = Surface(is_uphill=False, is_surface_rolled=True)
 
