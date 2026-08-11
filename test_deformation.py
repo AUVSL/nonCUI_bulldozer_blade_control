@@ -61,10 +61,10 @@ def test_blade_local_yaw_and_roll_are_composed_after_body_rotation():
     body_R = surface._rotation_lg(*surface.q[3:6])
     local_R = surface._rotation_lg(local_roll, 0.0, local_yaw)
     expected_p0 = surface.q[:3] + body_R @ local_R @ np.array(
-        [surface.L, -surface.B1 / 2, -surface.starting_vertical_cut_offset]
+        [surface.L, -surface.B1 / 2, -surface.blade_cut_depth]
     )
     expected_p1 = surface.q[:3] + body_R @ local_R @ np.array(
-        [surface.L, surface.B1 / 2, -surface.starting_vertical_cut_offset]
+        [surface.L, surface.B1 / 2, -surface.blade_cut_depth]
     )
 
     np.testing.assert_allclose(blade_points[0][:3], expected_p0, atol=1e-12)
@@ -189,10 +189,10 @@ def test_blade_keeps_local_offset_on_forward_slope():
     midpoint = (blade[0, :3] + blade[-1, :3]) / 2
     local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
     np.testing.assert_allclose(
-        local_midpoint, [surface.L, 0.0, -surface.starting_vertical_cut_offset], atol=1e-12
+        local_midpoint, [surface.L, 0.0, -surface.blade_cut_depth], atol=1e-12
     )
     assert midpoint[2] == pytest.approx(
-        surface._point_height(midpoint)[1] - surface.starting_vertical_cut_offset,
+        surface._point_height(midpoint)[1] - surface.blade_cut_depth,
         abs=1e-6,
     )
 
@@ -222,7 +222,7 @@ def test_blade_midpoint_keeps_local_offsets_from_q_until_depth_limit():
 
     local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
     np.testing.assert_allclose(
-        local_midpoint, [surface.L, 0.0, -surface.starting_vertical_cut_offset], atol=1e-12
+        local_midpoint, [surface.L, 0.0, -surface.blade_cut_depth], atol=1e-12
     )
 
 
@@ -246,7 +246,7 @@ def test_normal_run_deepens_with_q_but_stops_at_maximum_depth():
     surface._run()
 
     depths = surface.starting_grid_heights - surface._grid_heights()
-    assert depths.max() > surface.starting_vertical_cut_offset
+    assert depths.max() > surface.blade_cut_depth
     assert depths.max() <= surface.max_world_cut_depth + 2e-7
 
 
@@ -267,7 +267,7 @@ def test_unrolled_transition_and_cut_are_uniform_across_blade_width():
 def test_contact_pitch_uses_cut_floor_pitch_after_cutoff_depth():
     surface = Surface(is_uphill=False)
     cutoff_q_depth = (
-        surface.max_world_cut_depth - surface.starting_vertical_cut_offset
+        surface.max_world_cut_depth - surface.blade_cut_depth
     )
     surface.grid_pts = [
         [(x, y, z - cutoff_q_depth) for x, y, z in column]
@@ -283,7 +283,7 @@ def test_contact_pitch_uses_cut_floor_pitch_after_cutoff_depth():
 
     R = surface._rotation_lg(*orient)
     blade_midpoint = surface.q[:3] + R @ np.array(
-        [surface.L, 0.0, -surface.starting_vertical_cut_offset]
+        [surface.L, 0.0, -surface.blade_cut_depth]
     )
     assert surface._contact_pitch(orient) == pytest.approx(
         surface._starting_pitch(blade_midpoint)
@@ -299,40 +299,6 @@ def test_rolled_soil_is_never_cut_below_the_blade_plane():
 
     for i, j in ((4, 2), (5, 2)):
         assert surface.grid_pts[i][j][2] == pytest.approx(contact[2])
-
-
-@pytest.mark.parametrize(
-    "p0, p1",
-    [
-        ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
-        ([-1.0, -1.0, 0.0], [1.0, 1.0, 0.0]),
-    ],
-)
-def test_rolled_cut_floor_follows_blade_span_for_axis_and_diagonal_travel(p0, p1):
-    surface = Surface(is_uphill=False, is_surface_rolled=True)
-    surface.max_world_cut_depth = 0.4
-    surface._starting_height = lambda point: 2.0 * point[0] + 3.0 * point[1]
-
-    is_rolled, floor = surface._rolled_cut_floor((np.array(p0), np.array(p1)))
-
-    endpoint_heights = [
-        surface._starting_height(np.array(p0)),
-        surface._starting_height(np.array(p1)),
-    ]
-    assert is_rolled
-    assert floor == pytest.approx(max(endpoint_heights) - surface.max_world_cut_depth)
-
-
-def test_rolled_cut_floor_detects_flat_precut_surface():
-    surface = Surface(is_uphill=False, is_surface_rolled=True)
-    surface._starting_height = lambda point: 1.25
-
-    is_rolled, floor = surface._rolled_cut_floor(
-        (np.array([-1.0, -1.0, 0.0]), np.array([1.0, 1.0, 0.0]))
-    )
-
-    assert not is_rolled
-    assert floor == pytest.approx(1.25 - surface.max_world_cut_depth)
 
 
 def test_rolled_soil_keeps_local_depth_limits_across_the_blade():

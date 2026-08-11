@@ -31,7 +31,6 @@ class Surface:
         self.B1   = 2.921
         self.H    = 0.955
         self.L    = 1.2 
-        self.l    = 2.349
         self.blade_local_yaw = blade_local_yaw
         self.blade_local_roll = blade_local_roll
         self.blade_pitch = (
@@ -72,8 +71,6 @@ class Surface:
 
         # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
         # hot height lookups skip the networkx attribute dicts entirely.
-        # _neighbor_deformation writes new heights here (and through to the
-        # graph), so this - not surf_grid - is the live surface
         self.grid_pts = [[(self.surf_grid.nodes[(i, j)]['x'],
                            self.surf_grid.nodes[(i, j)]['y'],
                            self.surf_grid.nodes[(i, j)]['z'])
@@ -86,7 +83,6 @@ class Surface:
         initial_orient[1] = self._point_orientation(neighbor_points)[1]
         self.q[4] = self._contact_pitch(initial_orient)
         self.log.append([0, *self.q])
-        self.neighbor_log.append(np.array(neighbor_points))
         self.grid_log.append(self._grid_heights())
 
         # seed the blade points the same way, so blade_log stays aligned frame
@@ -105,11 +101,6 @@ class Surface:
     def blade_cut_depth(self):
         """Vertical cut depth commanded by blade pitch without tilting the blade."""
         return self.L * np.sin(self.blade_pitch)
-
-    @property
-    def starting_vertical_cut_offset(self):
-        """Backward-compatible name for the pitch-controlled blade cut depth."""
-        return self.blade_cut_depth
 
     def _surface_grid(self):
         R_surf     = self._rotation_lg(*self.surface_abg)
@@ -179,12 +170,8 @@ class Surface:
 
         # the velocity in the the local body frame
         fwd_xy  = vel[:2] / speed
-        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
-        
-        s_l = np.dot(grad_xy, left_xy)  # lateral slope
         s_f = np.dot(grad_xy, fwd_xy)   # forward slope
-         
-        # roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
+
         roll = 0
         pitch = np.arctan2(-s_f, 1.0)                 
         yaw   = np.arctan2(vel[1], vel[0])
@@ -257,7 +244,7 @@ class Surface:
         q_surface = self._point_height(self.q)[1]
         q_cut_depth = max(0.0, self._starting_height(self.q) - q_surface)
         cut_depth = min(
-            self.starting_vertical_cut_offset + q_cut_depth,
+            self.blade_cut_depth + q_cut_depth,
             self.max_world_cut_depth,
         )
         if cut_depth >= self.max_world_cut_depth - self.contact_tol:
@@ -266,7 +253,7 @@ class Surface:
             # zero residual and leave the solver's candidate pitch in place.
             fitted_R = self._blade_rotation_lg(orient)
             blade_midpoint = self.q[:3] + fitted_R @ np.array(
-                [self.L, 0.0, -self.starting_vertical_cut_offset]
+                [self.L, 0.0, -self.blade_cut_depth]
             )
             return self._starting_pitch(blade_midpoint)
 
@@ -274,7 +261,7 @@ class Surface:
             candidate_orient = np.array([orient[0], pitch, orient[2]])
             R = self._blade_rotation_lg(candidate_orient)
             blade_offset = R @ np.array(
-                [self.L, 0.0, -self.starting_vertical_cut_offset]
+                [self.L, 0.0, -self.blade_cut_depth]
             )
             blade_midpoint = self.q[:3] + blade_offset
 
@@ -748,8 +735,8 @@ class Surface:
     def _blade_update(self, deform=True):
         orient = self.q[3:6].copy()
         R      = self._blade_rotation_lg(orient)
-        p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.starting_vertical_cut_offset])
-        p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.starting_vertical_cut_offset])
+        p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.blade_cut_depth])
+        p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.blade_cut_depth])
 
         # TODO: when go back to optimize the code consider using the vector between p0 and p1 so not O(n) points
         length = np.linalg.norm(p1 - p0)
@@ -767,34 +754,13 @@ class Surface:
             contact_points.append(point)
 
         if deform:
-            self._deform_blade_tiles(contacts_by_tile, blade_span=(p0, p1))
+            self._deform_blade_tiles(contacts_by_tile)
 
         blade_points = [np.concatenate((point, orient)) for point in xyz]
         blade_neighbors = [self._get_neighbor_points(point) for point in contact_points]
         return blade_points, blade_neighbors
 
-    def _blade_span(self):
-        """Current blade endpoints, including body roll/yaw and local roll/yaw."""
-        R = self._blade_rotation_lg(self.q[3:6])
-        cut_depth = self.blade_cut_depth
-        p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -cut_depth])
-        p1 = self.q[:3] + R @ np.array([self.L, self.B1 / 2, -cut_depth])
-        return p0, p1
-
-    def _rolled_cut_floor(self, blade_span):
-        """Detect cross-blade roll and its cut floor from the undeformed surface."""
-        p0, p1 = blade_span
-        horizontal_length = np.linalg.norm(p1[:2] - p0[:2])
-        n_segments = max(1, int(np.ceil(horizontal_length / self.subdivision)))
-        starting_heights = np.array([
-            self._starting_height((1.0 - t) * p0 + t * p1)
-            for t in np.linspace(0.0, 1.0, n_segments + 1)
-        ])
-        is_rolled = np.ptp(starting_heights) > self.contact_tol
-        cut_floor = np.max(starting_heights) - self.max_world_cut_depth
-        return is_rolled, cut_floor
-
-    def _deform_blade_tiles(self, contacts_by_tile, blade_span=None):
+    def _deform_blade_tiles(self, contacts_by_tile):
         """Cut only the two vertices ahead of the blade in each contacted tile."""
         vel = np.array(self.q_dot[:3])
         if self.is_backwards:
@@ -822,9 +788,7 @@ class Surface:
 
         for (i, j), local_blade_z in direct_nodes.items():
             x, y, height = self.grid_pts[i][j]
-            # Every contacted vertex owns its depth limit.  In particular, do
-            # not copy the highest cross-blade floor to all vertices when the
-            # blade or the original surface is rolled.
+
             min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
             blade_z = max(local_blade_z, min_height)
             if blade_z < height :
@@ -834,6 +798,7 @@ class Surface:
     def _grid_heights(self):
         """Snapshot of every node height, indexed [i][j], for the GIF's surface."""
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
+
 
 if __name__ == "__main__":
     my_surface = Surface(is_uphill          = True, 
