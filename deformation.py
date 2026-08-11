@@ -771,15 +771,20 @@ class Surface:
             for t in np.linspace(0.0, 1.0, n_segments + 1)
         ]
 
-        # The horizontal and vertical q-to-blade offsets remain constant until
-        # the edge reaches the maximum cutting depth. At that point only its Z
-        # motion stops; q remains free to follow the live surface.
-        deepest_excess = max(
-            self._starting_height(point) - point[2] - self.max_world_cut_depth
+        # Limit each sampled section against the soil below that section.  A
+        # rolled blade can therefore keep cutting at its high end after its low
+        # end reaches the maximum depth; the low end no longer lifts the whole
+        # contact edge.
+        xyz = [
+            np.array([
+                point[0], point[1],
+                max(
+                    point[2],
+                    self._starting_height(point) - self.max_world_cut_depth,
+                ),
+            ])
             for point in xyz
-        )
-        if deepest_excess > 0.0:
-            xyz = [point + np.array([0.0, 0.0, deepest_excess]) for point in xyz]
+        ]
 
         contacts_by_tile = {}
         contact_points = []
@@ -841,16 +846,12 @@ class Surface:
         if not direct_nodes:
             return
 
-        detected_roll, rolled_min_height = self._rolled_cut_floor(
-            self._blade_span() if blade_span is None else blade_span
-        )
-
         for (i, j), local_blade_z in direct_nodes.items():
             x, y, height = self.grid_pts[i][j]
-            if detected_roll:
-                min_height = rolled_min_height
-            else:
-                min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
+            # Every contacted vertex owns its depth limit.  In particular, do
+            # not copy the highest cross-blade floor to all vertices when the
+            # blade or the original surface is rolled.
+            min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
             blade_z = max(local_blade_z, min_height)
             if blade_z < height :
                 self.grid_pts[i][j] = (x, y, blade_z)
@@ -862,10 +863,10 @@ class Surface:
 
 if __name__ == "__main__":
     my_surface = Surface(is_uphill          = True, 
-                         is_surface_pitched = True, 
+                         is_surface_pitched = False, 
                          is_surface_rolled  = True, 
                          is_backwards       = False,  
                          blade_local_yaw    = 0.0,
-                         blade_local_roll   = 0.0, 
-                         blade_pitch        = 0.3)
+                         blade_local_roll   = 0.3, 
+                         blade_pitch        = 0.0)
     my_surface.run_and_plot()

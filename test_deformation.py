@@ -137,6 +137,23 @@ def test_blade_stops_at_maximum_soil_deformation_depth():
         assert point[2] >= minimum_z - 1e-12
 
 
+def test_rolled_blade_depth_limit_is_applied_per_segment():
+    surface = Surface(is_uphill=False, blade_local_roll=0.25)
+    surface.max_world_cut_depth = 0.1
+    surface.q[2] = -1.0
+    surface._starting_height = lambda point: 0.2 * point[0] + 0.1 * point[1]
+
+    blade_points, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade_points)[:, :3]
+    local_floors = np.array([
+        surface._starting_height(point) - surface.max_world_cut_depth
+        for point in blade
+    ])
+
+    np.testing.assert_allclose(blade[:, 2], local_floors, atol=1e-12)
+    assert np.ptp(blade[:, 2]) > 0.0
+
+
 def test_body_contact_updates_only_pitch_on_forward_slope():
     surface = Surface(is_uphill=False)
     slope = 0.2
@@ -321,13 +338,15 @@ def test_rolled_cut_floor_detects_flat_precut_surface():
     assert floor == pytest.approx(1.25 - surface.max_world_cut_depth)
 
 
-def test_rolled_soil_is_graded_flat_across_the_blade():
+def test_rolled_soil_keeps_local_depth_limits_across_the_blade():
     surface = Surface(is_uphill=False, is_surface_rolled=True)
 
     surface._run()
 
     heights = surface._grid_heights()
     deformed = np.abs(heights - surface.starting_grid_heights) > 1e-9
-    columns = np.flatnonzero(deformed.any(axis=0))
-    for j in columns:
-        np.testing.assert_allclose(heights[:, j], heights[0, j], atol=2e-7)
+    for i, j in np.argwhere(deformed):
+        local_floor = (
+            surface.starting_grid_heights[i, j] - surface.max_world_cut_depth
+        )
+        assert heights[i, j] >= local_floor - 2e-7
