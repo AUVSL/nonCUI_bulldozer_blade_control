@@ -1,7 +1,8 @@
-"""Unit tests for BulldozerSimulation in main.py."""
+"""Unit tests for the bulldozer simulation and terrain helpers."""
 import numpy as np
 import pytest
 from main import BulldozerSimulation
+from util import Blade, Body, _SurfaceBase
 # to run: pytest test_main.py
 
 # ───────────────── Fixtures ─────────────────
@@ -540,3 +541,463 @@ class TestRun:
         log_arr = np.array(sim.log)
         # At least one position coordinate must have changed
         assert not np.allclose(log_arr[-1, 1:4], np.zeros(3))
+
+
+# Surface utility and deformation tests
+SHARED_METHODS = (
+    "subdivision",
+    "_surface_grid",
+    "_rotation_lg",
+    "_rotation_gl",
+    "_point_orientation",
+    "_bilinear_gradient",
+    "_point_height",
+    "_grid_cell",
+    "_get_neighbor_points",
+    "_bilinear_height",
+    "_contact_angle",
+)
+
+
+def _grid_heights(surface):
+    return np.array([[point[2] for point in column] for column in surface.grid_pts])
+
+
+def test_body_and_blade_inherit_the_shared_surface_implementation():
+    assert issubclass(Body, _SurfaceBase)
+    assert issubclass(Blade, _SurfaceBase)
+    for method_name in SHARED_METHODS:
+        assert method_name in _SurfaceBase.__dict__
+        assert method_name not in Body.__dict__
+        assert method_name not in Blade.__dict__
+        assert getattr(Body, method_name) is getattr(Blade, method_name)
+
+
+def test_subdivision_preserves_each_class_output():
+    body = Body()
+    blade = Blade()
+
+    assert body.subdivision == pytest.approx(1.75 / 2)
+    assert blade.subdivision == pytest.approx(1.75 / 8)
+
+    # Body's old property always used a fixed factor of two, while Blade's
+    # implementation used the mutable division_factor attribute.
+    body.division_factor = blade.division_factor = 4
+    assert body.subdivision == pytest.approx(1.75 / 2)
+    assert blade.subdivision == pytest.approx(1.75 / 4)
+
+
+def test_body_grid_and_initial_logs_keep_their_previous_shapes_and_values():
+    body = Body()
+    heights = _grid_heights(body)
+
+    assert heights.shape == (3, 11)
+    assert heights.max() == pytest.approx(2.625)
+    assert heights.sum() == pytest.approx(38.5)
+    assert body.q[3] == pytest.approx(-0.4636476080008061)
+    assert not body.is_initalization
+    assert np.asarray(body.log).shape == (1, 7)
+    assert np.asarray(body.point_log).shape == (1, 6, 6)
+    assert np.asarray(body.neighbor_log).shape == (1, 28, 3)
+    assert all(
+        node["visited_last"] is False
+        for _, node in body.surf_grid.nodes(data=True)
+    )
+
+
+def test_body_grid_keeps_two_axis_ramp_and_sigmoid_node_metadata():
+    unrolled = Body(is_surface_rolled=False)
+    rolled = Body(is_surface_rolled=True)
+    np.testing.assert_allclose(_grid_heights(unrolled), _grid_heights(rolled))
+
+    unrolled.is_surface_sigmoid = True
+    sigmoid_grid = unrolled._surface_grid()
+    for _, node in sigmoid_grid.nodes(data=True):
+        assert node["z"] == pytest.approx(
+            np.sin(node["x"] / 3) * np.cos(node["y"] * 4)
+        )
+        assert node["visited_last"] is False
+
+
+def test_shared_orientation_uses_blade_default_and_body_roll_hook():
+    body = Body(is_uphill=False)
+    blade = Blade(is_uphill=False)
+    corners = [
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.2),
+        (0.0, 1.0, 0.0),
+        (1.0, 1.0, 0.2),
+    ]
+    body.q[:2] = blade.q[:2] = [0.5, 0.5]
+
+    body_orientation = body._point_orientation(corners)
+    blade_orientation = blade._point_orientation(corners)
+
+    assert body_orientation[0] == pytest.approx(np.arctan2(-0.2, 1.0))
+    assert blade_orientation[0] == pytest.approx(0.0)
+    np.testing.assert_allclose(body_orientation[1:], blade_orientation[1:])
+
+
+def test_body_update_keeps_return_contract_and_advances_position():
+    body = Body()
+    previous_xy = body.q[:2].copy()
+
+    points, neighbor_groups = body._body_update()
+
+    np.testing.assert_allclose(
+        body.q[:2], previous_xy + body.dt * body.q_dot[:2]
+    )
+    assert len(points) == 7
+    assert len(neighbor_groups) == 7
+    assert all(np.asarray(point).shape == (6,) for point in points)
+    assert all(np.asarray(group).shape == (4, 3) for group in neighbor_groups)
+
+    rotation = body._rotation_lg(*body.q[3:6])
+    half_width = rotation @ np.array([0.0, body.b / 2, 0.0])
+    half_track = rotation @ np.array([body.l / 2, 0.0, 0.0])
+    right_center = body.q[:3] - half_width
+    left_center = body.q[:3] + half_width
+    expected_xyz = [
+        right_center + half_track,
+        right_center,
+        right_center - half_track,
+        left_center + half_track,
+        left_center,
+        left_center - half_track,
+    ]
+    np.testing.assert_allclose(points[0], body.q)
+    np.testing.assert_allclose(neighbor_groups[0], body._get_neighbor_points(body.q))
+    for point, xyz, neighbors in zip(points[1:], expected_xyz, neighbor_groups[1:]):
+        np.testing.assert_allclose(point[:3], xyz)
+        np.testing.assert_allclose(point[3:], body.q[3:6])
+        np.testing.assert_allclose(neighbors, body._get_neighbor_points(xyz))
+
+    orient = body.q[3:6].copy()
+    contact_pitch = body._contact_pitch(orient)
+    contact_rotation = body._rotation_lg(orient[0], contact_pitch, orient[2])
+    front_height, back_height = body._half_resting_heights(contact_rotation)
+    assert front_height - back_height == pytest.approx(0.0, abs=body.contact_tol)
+    assert Body._contact_pitch is not Blade._contact_pitch
+
+
+def test_body_short_run_keeps_logs_aligned():
+    body = Body()
+    body.stop_time = 3 * body.dt + 1e-12
+
+    body._run()
+
+    assert len(body.log) == len(body.point_log) == len(body.neighbor_log) == 4
+    assert np.asarray(body.log).shape == (4, 7)
+    assert np.asarray(body.point_log).shape == (4, 6, 6)
+    assert np.asarray(body.neighbor_log).shape == (4, 28, 3)
+
+
+def _reached_contact(surface, tile=(1, 1), depth=-10.0):
+    """A contact near the tile's leading edge for the default +Y motion."""
+    i, j = tile
+    x0, y0, _ = surface.grid_pts[i][j]
+    x1, y1, _ = surface.grid_pts[i + 1][j + 1]
+    return np.array([(x0 + x1) / 2, y1 - surface.subdivision * 0.01, depth])
+
+
+def test_duplicate_blade_contacts_cut_a_tile_once_per_frame():
+    surface = Blade(is_uphill=False)
+    surface.max_dig_depth_per_meter = 2.0
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]  # 0.1 m per step
+    contact = _reached_contact(surface)
+    before = surface.grid_pts[1][2][2]
+
+    surface._deform_blade_tiles({(1, 1): [contact, contact.copy()]})
+
+    assert surface.grid_pts[1][2][2] < before
+
+
+def test_dig_depth_depends_on_distance_not_step_count():
+    one_step = Blade(is_uphill=False)
+    split_steps = Blade(is_uphill=False)
+    for surface in (one_step, split_steps):
+        surface.max_dig_depth_per_meter = 2.0
+        surface.q_dot[:3] = [0.0, 10.0, 0.0]
+
+    one_contact = _reached_contact(one_step)
+    split_contact = _reached_contact(split_steps)
+    one_step._deform_blade_tiles({(1, 1): [one_contact]})
+    split_steps.dt = 0.005
+    split_steps._deform_blade_tiles({(1, 1): [split_contact]})
+    split_steps._deform_blade_tiles({(1, 1): [split_contact]})
+
+    assert split_steps.grid_pts[1][1][2] == pytest.approx(one_step.grid_pts[1][1][2])
+
+
+def test_initial_blade_geometry_does_not_deform_the_surface():
+    surface = Blade(is_uphill=False)
+
+    np.testing.assert_allclose(surface._grid_heights(), surface.grid_log[0])
+
+
+def test_blade_local_yaw_and_roll_are_composed_after_body_rotation():
+    local_yaw = 0.31
+    local_roll = -0.22
+    surface = Blade(
+        is_uphill=False,
+        blade_local_yaw=local_yaw,
+        blade_local_roll=local_roll,
+    )
+    surface.q[3:6] = [0.17, -0.13, 0.41]
+
+    blade_points, _ = surface._blade_update(deform=False)
+    body_R = surface._rotation_lg(*surface.q[3:6])
+    local_R = surface._rotation_lg(local_roll, 0.0, local_yaw)
+    expected_p0 = surface.q[:3] + body_R @ local_R @ np.array(
+        [surface.L, -surface.B1 / 2, -surface.blade_cut_depth]
+    )
+    expected_p1 = surface.q[:3] + body_R @ local_R @ np.array(
+        [surface.L, surface.B1 / 2, -surface.blade_cut_depth]
+    )
+
+    np.testing.assert_allclose(blade_points[0][:3], expected_p0, atol=1e-12)
+    np.testing.assert_allclose(blade_points[-1][:3], expected_p1, atol=1e-12)
+
+
+def test_blade_pitch_sets_cut_depth_without_tilting_local_rotation():
+    blade_pitch = 0.27
+    surface = Blade(is_uphill=False, blade_pitch=blade_pitch)
+    surface.q[3:6] = [0.0, 0.0, 0.0]
+
+    blade_points, _ = surface._blade_update(deform=False)
+    p0, p1 = np.asarray(blade_points)[[0, -1], :3]
+    expected_depth = surface.L * np.sin(blade_pitch)
+
+    assert surface.blade_cut_depth == pytest.approx(expected_depth)
+    np.testing.assert_allclose(p0 - surface.q[:3], [surface.L, -surface.B1 / 2, -expected_depth])
+    np.testing.assert_allclose(p1 - surface.q[:3], [surface.L, surface.B1 / 2, -expected_depth])
+    assert p0[2] == pytest.approx(p1[2])
+
+
+def test_only_forward_vertices_of_a_contacted_tile_deform():
+    surface = Blade(is_uphill=False)
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface)
+    before = surface._grid_heights()
+
+    surface._deform_blade_tiles({(1, 1): [contact]})
+
+    # +Y motion: j=2 is directly cut; j=1 remains untouched.
+    assert surface.grid_pts[1][1][2] == pytest.approx(before[1, 1])
+    assert surface.grid_pts[2][1][2] == pytest.approx(before[2, 1])
+    assert surface.grid_pts[1][2][2] < before[1, 2]
+    assert surface.grid_pts[2][2][2] < before[2, 2]
+
+
+def test_repeated_cuts_stop_at_each_vertex_starting_height_limit():
+    surface = Blade(is_uphill=False)
+    surface.max_dig_depth_per_meter = 100.0
+    surface.max_world_cut_depth = 0.25
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface)
+    starting_heights = surface.starting_grid_heights.copy()
+
+    for _ in range(3):
+        surface._deform_blade_tiles({(1, 1): [contact]})
+
+    for i, j in ((1, 2), (2, 2)):
+        assert surface.grid_pts[i][j][2] == pytest.approx(
+            starting_heights[i, j] - surface.max_world_cut_depth
+        )
+
+
+def test_blade_points_remain_interpolated_between_rigid_endpoints():
+    surface = Blade(is_uphill=False)
+    surface.max_world_cut_depth = 0.1
+    surface.q[2] = -10.0
+
+    blade_points, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade_points)[:, :3]
+    expected = np.array([
+        (1.0 - t) * blade[0] + t * blade[-1]
+        for t in np.linspace(0.0, 1.0, len(blade))
+    ])
+
+    np.testing.assert_allclose(blade, expected, atol=1e-12)
+
+
+def test_rolled_blade_points_interpolate_between_rolled_endpoints():
+    surface = Blade(is_uphill=False, blade_local_roll=0.25)
+    surface.max_world_cut_depth = 0.1
+    surface.q[2] = -1.0
+
+    blade_points, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade_points)[:, :3]
+    expected = np.array([
+        (1.0 - t) * blade[0] + t * blade[-1]
+        for t in np.linspace(0.0, 1.0, len(blade))
+    ])
+
+    np.testing.assert_allclose(blade, expected, atol=1e-12)
+    assert np.ptp(blade[:, 2]) > 0.0
+
+
+def test_body_contact_updates_only_pitch_on_forward_slope():
+    surface = Blade(is_uphill=False)
+    slope = 0.2
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            z = slope * y
+            surface.grid_pts[i][j] = (x, y, z)
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.starting_grid_heights = surface._grid_heights().copy()
+    surface.is_initalization = True
+    surface.q[3] = 0.17
+    surface.q[5] = np.pi / 2
+
+    surface._body_update()
+
+    assert surface.q[2] == pytest.approx(slope * surface.q[1])
+    assert surface.q[4] != pytest.approx(0.0)
+    assert surface.q[3] == pytest.approx(0.17)
+    assert surface.q[5] == pytest.approx(np.pi / 2)
+
+
+def test_blade_keeps_local_offset_on_forward_slope():
+    surface = Blade(is_uphill=False)
+    slope = 0.2
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            z = slope * y
+            surface.grid_pts[i][j] = (x, y, z)
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.starting_grid_heights = surface._grid_heights().copy()
+    surface._body_update()
+
+    blade_points, _ = surface._blade_update(deform=False)
+
+    blade = np.asarray(blade_points)
+    midpoint = (blade[0, :3] + blade[-1, :3]) / 2
+    local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
+    np.testing.assert_allclose(
+        local_midpoint, [surface.L, 0.0, -surface.blade_cut_depth], atol=1e-12
+    )
+    assert midpoint[2] == pytest.approx(
+        surface._point_height(midpoint)[1] - surface.blade_cut_depth,
+        abs=1e-6,
+    )
+
+
+def test_blade_descends_with_q_after_surface_is_cut():
+    surface = Blade(is_uphill=False)
+    surface.max_world_cut_depth = 1.0
+    before, _ = surface._blade_update(deform=False)
+
+    surface.q[2] -= 0.1
+    after, _ = surface._blade_update(deform=False)
+
+    np.testing.assert_allclose(
+        np.asarray(after)[:, 2], np.asarray(before)[:, 2] - 0.1
+    )
+
+
+def test_blade_midpoint_keeps_local_offsets_from_q_until_depth_limit():
+    surface = Blade(is_uphill=False)
+    surface.max_world_cut_depth = 10.0
+    surface.q[2] = -0.3
+    surface.q[4] = 0.4
+
+    blade, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade)
+    midpoint = (blade[0, :3] + blade[-1, :3]) / 2
+
+    local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
+    np.testing.assert_allclose(
+        local_midpoint, [surface.L, 0.0, -surface.blade_cut_depth], atol=1e-12
+    )
+
+
+def test_rigid_blade_vertical_motion_continues_below_soil_cut_limit():
+    surface = Blade(is_uphill=False)
+    surface.max_world_cut_depth = 0.25
+    surface.q[2] = -1.0
+
+    before, _ = surface._blade_update(deform=False)
+    surface.q[2] -= 0.2
+    after, _ = surface._blade_update(deform=False)
+
+    np.testing.assert_allclose(
+        np.asarray(after)[:, 2], np.asarray(before)[:, 2] - 0.2
+    )
+
+
+def test_normal_run_deepens_with_q_but_stops_at_maximum_depth():
+    surface = Blade(is_uphill=False)
+
+    surface._run()
+
+    depths = surface.starting_grid_heights - surface._grid_heights()
+    assert depths.max() > surface.blade_cut_depth
+    assert depths.max() <= surface.max_world_cut_depth + 2e-7
+
+
+def test_unrolled_transition_and_cut_are_uniform_across_blade_width():
+    surface = Blade(is_uphill=False, is_surface_rolled=False)
+    np.testing.assert_allclose(
+        np.ptp(surface.starting_grid_heights, axis=0), 0.0, atol=1e-12
+    )
+
+    surface._run()
+
+    depths = surface.starting_grid_heights - surface._grid_heights()
+    cut_columns = np.flatnonzero(depths.max(axis=0) > 1e-9)
+    for j in cut_columns:
+        np.testing.assert_allclose(depths[:, j], depths[0, j], atol=2e-7)
+
+
+def test_contact_pitch_uses_cut_floor_pitch_after_cutoff_depth():
+    surface = Blade(is_uphill=False)
+    cutoff_q_depth = (
+        surface.max_world_cut_depth - surface.blade_cut_depth
+    )
+    surface.grid_pts = [
+        [(x, y, z - cutoff_q_depth) for x, y, z in column]
+        for column in surface.grid_pts
+    ]
+    for i, column in enumerate(surface.grid_pts):
+        for j, (_, _, z) in enumerate(column):
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.q[2] = surface._point_height(surface.q)[1]
+    surface_pitch = surface._point_orientation(surface._get_neighbor_points(surface.q))[1]
+    orient = surface.q[3:6].copy()
+    orient[1] = surface_pitch
+
+    R = surface._rotation_lg(*orient)
+    blade_midpoint = surface.q[:3] + R @ np.array(
+        [surface.L, 0.0, -surface.blade_cut_depth]
+    )
+    assert surface._contact_pitch(orient) == pytest.approx(
+        surface._starting_pitch(blade_midpoint)
+    )
+
+
+def test_rolled_soil_is_never_cut_below_the_blade_plane():
+    surface = Blade(is_uphill=False, is_surface_rolled=True)
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface, tile=(4, 1), depth=-0.3)
+
+    surface._deform_blade_tiles({(4, 1): [contact]})
+
+    for i, j in ((4, 2), (5, 2)):
+        assert surface.grid_pts[i][j][2] == pytest.approx(contact[2])
+
+
+def test_rolled_soil_keeps_local_depth_limits_across_the_blade():
+    surface = Blade(is_uphill=False, is_surface_rolled=True)
+
+    surface._run()
+
+    heights = surface._grid_heights()
+    deformed = np.abs(heights - surface.starting_grid_heights) > 1e-9
+    for i, j in np.argwhere(deformed):
+        local_floor = (
+            surface.starting_grid_heights[i, j] - surface.max_world_cut_depth
+        )
+        assert heights[i, j] >= local_floor - 2e-7
