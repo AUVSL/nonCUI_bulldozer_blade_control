@@ -17,7 +17,7 @@ class Surface:
         self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
         self.u_split            = 0  # u-value where the grid switches to surface_abg2
-        self.v_split            = 2  # u-value where the grid switches to surface_abg2
+        self.v_split            = 0  # u-value where the grid switches to surface_abg2
         self.transition_tiles   = 1/2 *self.b * self.division_factor # tiles over which the offset ramps down past u_split
         self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
         self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
@@ -50,7 +50,6 @@ class Surface:
             self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
         self.is_backwards       = is_backwards
         self.is_surface_pitched = is_surface_pitched
-        self.is_surface_sigmoid = False
         self.is_surface_rolled = is_surface_rolled
         self.log                = []
         self.blade_log          = []
@@ -121,28 +120,18 @@ class Surface:
         ramp_width = max(1, round(self.transition_tiles)) * self.subdivision
         for i, u in enumerate(self.us):
             for j, v in enumerate(self.vs):
-                if self.is_surface_sigmoid:
-                    x = u
-                    y = v
-                    z = np.sin(u/3) * np.cos(y*4)
-                else:
-                    # full offset for * <= *_start, then a linear ramp to zero over ramp_width
-                    u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
-                    v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
+                # full offset for * <= *_start, then a linear ramp to zero over ramp_width
+                u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
+                v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
+
+                w = u_clip if self.is_surface_pitched else v_clip
+                if self.is_surface_rolled:
+                    w += v_clip if self.is_surface_pitched else u_clip
                     
-                    # The transition changes only along the direction of
-                    # travel unless a cross-slope was explicitly requested.
-                    # Adding both clips unconditionally creates an unintended
-                    # diagonal slope across the blade and a V-shaped cut.
-                    w = u_clip if self.is_surface_pitched else v_clip
-                    if self.is_surface_rolled:
-                        w += v_clip if self.is_surface_pitched else u_clip
-                        
-                    x, y, z = u * e1 + v * e2 + w * self.offset * e3
+                x, y, z = u * e1 + v * e2 + w * self.offset * e3
 
                 node = G.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-                node["visited_last"] = False
         return G
     
     def _rotation_lg(self, a, B, g):
@@ -771,21 +760,6 @@ class Surface:
             for t in np.linspace(0.0, 1.0, n_segments + 1)
         ]
 
-        # Limit each sampled section against the soil below that section.  A
-        # rolled blade can therefore keep cutting at its high end after its low
-        # end reaches the maximum depth; the low end no longer lifts the whole
-        # contact edge.
-        xyz = [
-            np.array([
-                point[0], point[1],
-                max(
-                    point[2],
-                    self._starting_height(point) - self.max_world_cut_depth,
-                ),
-            ])
-            for point in xyz
-        ]
-
         contacts_by_tile = {}
         contact_points = []
         for point in xyz:
@@ -867,6 +841,6 @@ if __name__ == "__main__":
                          is_surface_rolled  = True, 
                          is_backwards       = False,  
                          blade_local_yaw    = 0.0,
-                         blade_local_roll   = 0.3, 
+                         blade_local_roll   = -0.3, 
                          blade_pitch        = 0.0)
     my_surface.run_and_plot()

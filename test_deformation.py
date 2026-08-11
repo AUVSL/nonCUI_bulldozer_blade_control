@@ -118,39 +118,34 @@ def test_repeated_cuts_stop_at_each_vertex_starting_height_limit():
         )
 
 
-def test_blade_stops_at_maximum_soil_deformation_depth():
+def test_blade_points_remain_interpolated_between_rigid_endpoints():
     surface = Surface(is_uphill=False)
     surface.max_world_cut_depth = 0.1
     surface.q[2] = -10.0
 
     blade_points, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade_points)[:, :3]
+    expected = np.array([
+        (1.0 - t) * blade[0] + t * blade[-1]
+        for t in np.linspace(0.0, 1.0, len(blade))
+    ])
 
-    for point in blade_points:
-        i, j = surface._grid_cell(point)
-        starting_corners = (
-            (*surface.grid_pts[i][j][:2], surface.starting_grid_heights[i, j]),
-            (*surface.grid_pts[i + 1][j][:2], surface.starting_grid_heights[i + 1, j]),
-            (*surface.grid_pts[i][j + 1][:2], surface.starting_grid_heights[i, j + 1]),
-            (*surface.grid_pts[i + 1][j + 1][:2], surface.starting_grid_heights[i + 1, j + 1]),
-        )
-        minimum_z = surface._bilinear_height(point, starting_corners) - surface.max_world_cut_depth
-        assert point[2] >= minimum_z - 1e-12
+    np.testing.assert_allclose(blade, expected, atol=1e-12)
 
 
-def test_rolled_blade_depth_limit_is_applied_per_segment():
+def test_rolled_blade_points_interpolate_between_rolled_endpoints():
     surface = Surface(is_uphill=False, blade_local_roll=0.25)
     surface.max_world_cut_depth = 0.1
     surface.q[2] = -1.0
-    surface._starting_height = lambda point: 0.2 * point[0] + 0.1 * point[1]
 
     blade_points, _ = surface._blade_update(deform=False)
     blade = np.asarray(blade_points)[:, :3]
-    local_floors = np.array([
-        surface._starting_height(point) - surface.max_world_cut_depth
-        for point in blade
+    expected = np.array([
+        (1.0 - t) * blade[0] + t * blade[-1]
+        for t in np.linspace(0.0, 1.0, len(blade))
     ])
 
-    np.testing.assert_allclose(blade[:, 2], local_floors, atol=1e-12)
+    np.testing.assert_allclose(blade, expected, atol=1e-12)
     assert np.ptp(blade[:, 2]) > 0.0
 
 
@@ -231,7 +226,7 @@ def test_blade_midpoint_keeps_local_offsets_from_q_until_depth_limit():
     )
 
 
-def test_blade_vertical_motion_stops_at_maximum_cut_depth():
+def test_rigid_blade_vertical_motion_continues_below_soil_cut_limit():
     surface = Surface(is_uphill=False)
     surface.max_world_cut_depth = 0.25
     surface.q[2] = -1.0
@@ -240,7 +235,9 @@ def test_blade_vertical_motion_stops_at_maximum_cut_depth():
     surface.q[2] -= 0.2
     after, _ = surface._blade_update(deform=False)
 
-    np.testing.assert_allclose(np.asarray(after)[:, 2], np.asarray(before)[:, 2])
+    np.testing.assert_allclose(
+        np.asarray(after)[:, 2], np.asarray(before)[:, 2] - 0.2
+    )
 
 
 def test_normal_run_deepens_with_q_but_stops_at_maximum_depth():
