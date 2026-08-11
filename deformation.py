@@ -8,7 +8,9 @@ from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 class Surface:
-    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
+    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
+                 is_backwards: bool = False, blade_local_yaw: float = 0.0,
+                 blade_local_roll: float = 0.0, blade_pitch: float = None):
         # simulation parameters
         self.division_factor    = 4*2
         self.b                  = 1.75
@@ -30,7 +32,12 @@ class Surface:
         self.H    = 0.955
         self.L    = 1.2 
         self.l    = 2.349
-        self.starting_vertical_cut_offset = self.H / 4
+        self.blade_local_yaw = blade_local_yaw
+        self.blade_local_roll = blade_local_roll
+        self.blade_pitch = (
+            np.arcsin((self.H / 4) / self.L)
+            if blade_pitch is None else blade_pitch
+        )
         self.contact_tol = 1e-7
 
         # No vertex may be cut farther than this below its own starting height.
@@ -95,6 +102,16 @@ class Surface:
         """Grid spacing, sized relative to the dozer width self.b."""
         return self.b / self.division_factor
 
+    @property
+    def blade_cut_depth(self):
+        """Vertical cut depth commanded by blade pitch without tilting the blade."""
+        return self.L * np.sin(self.blade_pitch)
+
+    @property
+    def starting_vertical_cut_offset(self):
+        """Backward-compatible name for the pitch-controlled blade cut depth."""
+        return self.blade_cut_depth
+
     def _surface_grid(self):
         R_surf     = self._rotation_lg(*self.surface_abg)
         e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
@@ -144,6 +161,14 @@ class Surface:
             [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
             [-sB,                      sa * cB,                  ca * cB]
         ]).T
+
+    def _blade_rotation_lg(self, orient):
+        """Blade-local roll/yaw composed on top of the body orientation."""
+        body_R = self._rotation_lg(*orient)
+        local_R = self._rotation_lg(
+            self.blade_local_roll, 0.0, self.blade_local_yaw
+        )
+        return body_R @ local_R
           
     def _point_orientation(self, corners):
         """
@@ -250,14 +275,15 @@ class Surface:
             # Bypass the root solver entirely once the blade target reaches the
             # floor. Returning this value from imbalance() would only report a
             # zero residual and leave the solver's candidate pitch in place.
-            fitted_R = self._rotation_lg(*orient)
+            fitted_R = self._blade_rotation_lg(orient)
             blade_midpoint = self.q[:3] + fitted_R @ np.array(
                 [self.L, 0.0, -self.starting_vertical_cut_offset]
             )
             return self._starting_pitch(blade_midpoint)
 
         def imbalance(pitch):
-            R = self._rotation_lg(orient[0], pitch, orient[2])
+            candidate_orient = np.array([orient[0], pitch, orient[2]])
+            R = self._blade_rotation_lg(candidate_orient)
             blade_offset = R @ np.array(
                 [self.L, 0.0, -self.starting_vertical_cut_offset]
             )
@@ -732,7 +758,7 @@ class Surface:
 
     def _blade_update(self, deform=True):
         orient = self.q[3:6].copy()
-        R      = self._rotation_lg(*self.q[3:6])
+        R      = self._blade_rotation_lg(orient)
         p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.starting_vertical_cut_offset])
         p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.starting_vertical_cut_offset])
 
@@ -796,7 +822,13 @@ class Surface:
 
         for (i, j), local_blade_z in direct_nodes.items():
             x, y, height = self.grid_pts[i][j]
-            min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
+            if self.is_surface_rolled:
+                min_height = (
+                    np.max(self.starting_grid_heights[:, j])
+                    - self.max_world_cut_depth
+                )
+            else:
+                min_height = self.starting_grid_heights[i, j] - self.max_world_cut_depth
             blade_z = max(local_blade_z, min_height)
             if blade_z < height :
                 self.grid_pts[i][j] = (x, y, blade_z)
@@ -807,5 +839,11 @@ class Surface:
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_surface = Surface(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_surface = Surface(is_uphill          = True, 
+                         is_surface_pitched = False, 
+                         is_surface_rolled  = True, 
+                         is_backwards       = False,  
+                         blade_local_yaw    = 0.3,
+                         blade_local_roll   = 0.3, 
+                         blade_pitch        = -0.3)
     my_surface.run_and_plot()

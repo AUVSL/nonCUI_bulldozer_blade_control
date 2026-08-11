@@ -47,6 +47,45 @@ def test_initial_blade_geometry_does_not_deform_the_surface():
     np.testing.assert_allclose(surface._grid_heights(), surface.grid_log[0])
 
 
+def test_blade_local_yaw_and_roll_are_composed_after_body_rotation():
+    local_yaw = 0.31
+    local_roll = -0.22
+    surface = Surface(
+        is_uphill=False,
+        blade_local_yaw=local_yaw,
+        blade_local_roll=local_roll,
+    )
+    surface.q[3:6] = [0.17, -0.13, 0.41]
+
+    blade_points, _ = surface._blade_update(deform=False)
+    body_R = surface._rotation_lg(*surface.q[3:6])
+    local_R = surface._rotation_lg(local_roll, 0.0, local_yaw)
+    expected_p0 = surface.q[:3] + body_R @ local_R @ np.array(
+        [surface.L, -surface.B1 / 2, -surface.starting_vertical_cut_offset]
+    )
+    expected_p1 = surface.q[:3] + body_R @ local_R @ np.array(
+        [surface.L, surface.B1 / 2, -surface.starting_vertical_cut_offset]
+    )
+
+    np.testing.assert_allclose(blade_points[0][:3], expected_p0, atol=1e-12)
+    np.testing.assert_allclose(blade_points[-1][:3], expected_p1, atol=1e-12)
+
+
+def test_blade_pitch_sets_cut_depth_without_tilting_local_rotation():
+    blade_pitch = 0.27
+    surface = Surface(is_uphill=False, blade_pitch=blade_pitch)
+    surface.q[3:6] = [0.0, 0.0, 0.0]
+
+    blade_points, _ = surface._blade_update(deform=False)
+    p0, p1 = np.asarray(blade_points)[[0, -1], :3]
+    expected_depth = surface.L * np.sin(blade_pitch)
+
+    assert surface.blade_cut_depth == pytest.approx(expected_depth)
+    np.testing.assert_allclose(p0 - surface.q[:3], [surface.L, -surface.B1 / 2, -expected_depth])
+    np.testing.assert_allclose(p1 - surface.q[:3], [surface.L, surface.B1 / 2, -expected_depth])
+    assert p0[2] == pytest.approx(p1[2])
+
+
 def test_only_forward_vertices_of_a_contacted_tile_deform():
     surface = Surface(is_uphill=False)
     surface.q_dot[:3] = [0.0, 10.0, 0.0]
