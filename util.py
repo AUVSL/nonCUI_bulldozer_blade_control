@@ -9,8 +9,190 @@ from PIL import Image
 from matplotlib.patches import Polygon
 
 
+class _SurfaceBase:
+    """Terrain geometry shared by the body and blade simulations.
 
-class Body:
+    The default implementations follow :class:`Blade`.  ``Body`` customizes
+    the few places where its historical terrain/contact behavior differs via
+    narrow hooks instead of carrying a second copy of each whole method.
+    """
+
+    @property
+    def subdivision(self):
+        """Grid spacing, sized relative to the dozer width ``self.b``."""
+        return self.b / self._subdivision_factor()
+
+    def _subdivision_factor(self):
+        """Blade-default number of grid divisions across the dozer width."""
+        return self.division_factor
+
+    def _surface_grid(self):
+        R_surf = self._rotation_lg(*self.surface_abg)
+        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
+        grid = nx.grid_2d_graph(len(self.us), len(self.vs))
+        u_start = self.us[self.us <= self.u_split][-1]
+        v_start = self.vs[self.vs <= self.v_split][-1]
+        ramp_width = max(1, round(self.transition_tiles)) * self.subdivision
+
+        for i, u in enumerate(self.us):
+            for j, v in enumerate(self.vs):
+                if self._uses_sigmoid_surface():
+                    x, y = u, v
+                    z = np.sin(u / 3) * np.cos(y * 4)
+                else:
+                    # Full offset before each split, followed by a linear ramp.
+                    u_clip = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
+                    v_clip = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
+                    weight = self._surface_weight(u_clip, v_clip)
+                    x, y, z = u * e1 + v * e2 + weight * self.offset * e3
+
+                node = grid.nodes[(i, j)]
+                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
+                self._initialize_surface_node(node)
+        return grid
+
+    def _uses_sigmoid_surface(self):
+        """Whether to use Body's optional sinusoidal surface."""
+        return False
+
+    def _surface_weight(self, u_clip, v_clip):
+        """Blade-default blend for the transition in the travel direction."""
+        weight = u_clip if self.is_surface_pitched else v_clip
+        if self.is_surface_rolled:
+            weight += v_clip if self.is_surface_pitched else u_clip
+        return weight
+
+    def _initialize_surface_node(self, node):
+        """Add subclass-specific metadata to a newly created grid node."""
+        return None
+
+    def _rotation_lg(self, a, B, g):
+        """Rotation matrix: local to global frame."""
+        return self._rotation_gl(a, B, g).T
+
+    def _rotation_gl(self, a, B, g):
+        """Rotation matrix: global to local frame."""
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB = np.sin(B), np.cos(B)
+        sg, cg = np.sin(g), np.cos(g)
+
+        return np.array([
+            [cB * cg, sa * sB * cg - ca * sg, ca * sB * cg + sa * sg],
+            [cB * sg, sa * sB * sg + ca * cg, ca * sB * sg - sa * cg],
+            [-sB, sa * cB, ca * cB],
+        ]).T
+
+    def _point_orientation(self, corners):
+        """Return terrain-fitted roll, pitch, and yaw at ``self.q``.
+
+        Blade's historical behavior (zero terrain-induced roll) is the base
+        default.  Body supplies its prior roll formula through
+        :meth:`_surface_roll`.
+        """
+        grad_xy = self._bilinear_gradient(self.q, corners)
+
+        vel = np.array(self.q_dot[:3])
+        if self.is_backwards:
+            vel *= -1
+        speed = np.linalg.norm(vel[:2])
+        if speed < 1e-9:
+            return self.q[3:6].copy()
+
+        fwd_xy = vel[:2] / speed
+        s_f = np.dot(grad_xy, fwd_xy)
+        roll = self._surface_roll(grad_xy, fwd_xy, s_f)
+        pitch = np.arctan2(-s_f, 1.0)
+        yaw = np.arctan2(vel[1], vel[0])
+        return np.array([roll, pitch, yaw])
+
+    def _surface_roll(self, grad_xy, fwd_xy, forward_slope):
+        """Blade-default terrain-induced roll."""
+        return 0.0
+
+    def _bilinear_gradient(self, point, corners):
+        """Gradient of the bilinear height patch in the global xy-plane."""
+        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
+
+        dx, dy = point[0] - x1, point[1] - y1
+        e_s = np.array([x2 - x1, y2 - y1])
+        e_t = np.array([x3 - x1, y3 - y1])
+        es2, et2 = e_s @ e_s, e_t @ e_t
+
+        s = min(max((dx * e_s[0] + dy * e_s[1]) / es2, 0.0), 1.0)
+        t = min(max((dx * e_t[0] + dy * e_t[1]) / et2, 0.0), 1.0)
+
+        dh_ds = (h2 - h1) * (1 - t) + (h4 - h3) * t
+        dh_dt = (h3 - h1) * (1 - s) + (h4 - h2) * s
+        return dh_ds * e_s / es2 + dh_dt * e_t / et2
+
+    def _point_height(self, point):
+        neighbor_points = self._get_neighbor_points(point)
+        height_to_surface = self._bilinear_height(point, neighbor_points)
+        return neighbor_points, height_to_surface
+
+    def _grid_cell(self, point):
+        """Index of the grid tile containing point's xy position, clipped."""
+        i = int((point[0] - self.us[0]) // self.subdivision)
+        j = int((point[1] - self.vs[0]) // self.subdivision)
+        i_max, j_max = len(self.us) - 2, len(self.vs) - 2
+        i = 0 if i < 0 else i_max if i > i_max else i
+        j = 0 if j < 0 else j_max if j > j_max else j
+        return i, j
+
+    def _get_neighbor_points(self, point):
+        i, j = self._grid_cell(point)
+        col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
+        return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
+
+    def _bilinear_height(self, point, corners):
+        """Bilinearly interpolate height from a tile's four corner vertices."""
+        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
+
+        dx, dy = point[0] - x1, point[1] - y1
+        esx, esy = x2 - x1, y2 - y1
+        etx, ety = x3 - x1, y3 - y1
+        s = (dx * esx + dy * esy) / (esx * esx + esy * esy)
+        t = (dx * etx + dy * ety) / (etx * etx + ety * ety)
+        s = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
+        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+
+        return (
+            h1 * (1 - s) * (1 - t)
+            + h2 * s * (1 - t)
+            + h3 * (1 - s) * t
+            + h4 * s * t
+        )
+
+    def _contact_angle(self, imbalance, fitted):
+        """Solve for a balanced contact angle using Blade's root solver."""
+        limit, span = np.pi / 2 - 1e-3, 0.25
+        while True:
+            lo, hi = max(fitted - span, -limit), min(fitted + span, limit)
+            f_lo, f_hi = imbalance(lo), imbalance(hi)
+            if f_lo * f_hi <= 0:
+                break
+            if lo <= -limit and hi >= limit:
+                return fitted
+            span *= 2
+
+        angle = fitted
+        for _ in range(60):
+            if f_hi == f_lo:
+                break
+            angle = (lo * f_hi - hi * f_lo) / (f_hi - f_lo)
+            value = imbalance(angle)
+            if abs(value) < self.contact_tol or hi - lo < self.contact_tol:
+                break
+            if value * f_lo > 0:
+                lo, f_lo = angle, value
+                f_hi *= 0.5
+            else:
+                hi, f_hi = angle, value
+                f_lo *= 0.5
+        return angle
+
+
+class Body(_SurfaceBase):
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
         # simulation parameters
         self.b                  = 1.75
@@ -72,59 +254,25 @@ class Body:
         self.point_log.append(np.array(points[1:])) 
         self.neighbor_log.append(np.vstack(neighbor_points)) 
 
-    @property
-    def subdivision(self, division_factor: float = 2.0):
-        """Grid spacing, sized relative to the dozer width self.b."""
-        return self.b / division_factor
+    def _subdivision_factor(self):
+        return 2.0
 
-    def _surface_grid(self):
-        R_surf     = self._rotation_lg(*self.surface_abg)
-        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
-        G          = nx.grid_2d_graph(len(self.us), len(self.vs))
-        u_start    = self.us[self.us <= self.u_split][-1]
-        v_start    = self.vs[self.vs <= self.v_split][-1]
-        ramp_width = max(1, round(self.transition_tiles)) * self.subdivision
-        for i, u in enumerate(self.us):
-            for j, v in enumerate(self.vs):
-                if self.is_surface_sigmoid:
-                    x = u
-                    y = v
-                    z = np.sin(u/3) * np.cos(y*4)
-                else:
-                    # full offset for * <= *_start, then a linear ramp to zero over ramp_width
-                    u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
-                    v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
-                    
-                    # w = u_clip if self.is_surface_pitched else v_clip
-                    # if self.is_surface_rolled and self.is_surface_pitched:
-                    w = u_clip + v_clip
-                    # elif self.is_surface_rolled:
-                        # w = v_clip if self.is_surface_pitched else u_clip
-                        
-                    x, y, z = u * e1 + v * e2 + w * self.offset * e3
+    def _surface_weight(self, u_clip, v_clip):
+        """Preserve Body's historical two-axis transition ramp."""
+        return u_clip + v_clip
 
-                node = G.nodes[(i, j)]
-                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-                node["visited_last"] = False
-        return G
-    
-    def _rotation_lg(self, a, B, g):
-        """Rotation matrix: local → global frame"""
-        return self._rotation_gl(a, B, g).T
+    def _uses_sigmoid_surface(self):
+        return self.is_surface_sigmoid
 
-    def _rotation_gl(self, a, B, g):
-        """Rotation matrix: global → local frame"""
-        # change to accept input array
-        sa, ca = np.sin(a), np.cos(a)
-        sB, cB = np.sin(B), np.cos(B)
-        sg, cg = np.sin(g), np.cos(g)
+    def _initialize_surface_node(self, node):
+        node["visited_last"] = False
 
-        return np.array([
-            [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
-            [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
-            [-sB,                      sa * cB,                  ca * cB]
-        ]).T
- 
+    def _surface_roll(self, grad_xy, fwd_xy, forward_slope):
+        """Preserve Body's terrain-induced lateral roll."""
+        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
+        lateral_slope = np.dot(grad_xy, left_xy)
+        return np.arctan2(lateral_slope, np.sqrt(1.0 + forward_slope**2))
+
     def run_and_plot(self, show_neighbors: bool = False):
         self._run()
 
@@ -677,60 +825,6 @@ class Body:
                     support[i, 1] = max(support[i, 1], needed)
         return support
 
-    def _contact_angle(self, imbalance, fitted):
-        """
-        The angle at which two opposed quarters of the contact patch call for
-        the same body height, starting from the fitted one.
-
-        _point_orientation fits a plane through the four dropped corners, which
-        is exact only where the surface really is a plane. Where the body
-        bridges a kink that fit is an average of the terrain underneath, while
-        _resting_height rests on the highest support, so the body pivots up onto
-        its high quarter and the opposite one hangs. Solving instead for the
-        angle that balances the pair plants both by construction, and reproduces
-        the fitted angle wherever that fit was already right (on a plane,
-        balanced is flush).
-
-        Turning toward a quarter lowers it and lifts the one opposite, so the
-        imbalance is monotonic in the angle and a bracketed root find is safe.
-        The Illinois weighting keeps false position from stalling against the
-        kinks, where the binding contact jumps from one end of a track to the
-        other.
-        """
-        # the fit only misses by the amount the terrain departs from a plane, so
-        # bracket around it and widen only if the bracket does not include angles 
-        # that get one track above and below the surface contact plane so a value in 
-        # the middle gets both tracks on the same surface contacting plane
-        # # (+-90 deg is the whole range before the contact patch stands vertical)
-        limit, span = np.pi / 2 - 1e-3, 0.25
-        while True:
-            lo,   hi   = max(fitted - span, -limit), min(fitted + span, limit)
-            f_lo, f_hi = imbalance(lo), imbalance(hi)
-            if f_lo * f_hi <= 0:
-                break
-            if lo <= -limit and hi >= limit:   # no balanced angle exists here,
-                return fitted                  # so keep the fitted one
-            span *= 2
-
-        angle = fitted
-        for _ in range(60):
-            if f_hi == f_lo:      # already balanced across the whole bracket
-                break
-            # regula falsi (false position) method used pick angle between high and low
-            # to get both tracks near the surface contact plane with unknown roll/pitch
-            angle = (lo * f_hi - hi * f_lo) / (f_hi - f_lo)
-
-            f = imbalance(angle)
-            if abs(f) < self.contact_tol or hi - lo < self.contact_tol:
-                break
-            if f * f_lo > 0:
-                lo, f_lo = angle, f
-                f_hi    *= 0.5   # Illinois: relax the retained end so it can move next pass
-            else:
-                hi, f_hi = angle, f
-                f_lo    *= 0.5
-        return angle
-
     def _contact_pitch(self, orient):
         """Pitch (at orient's roll and yaw) that leaves both ends on the ground."""
         def imbalance(pitch):
@@ -755,95 +849,7 @@ class Body:
         """
         return float(self._support_heights(R).max())
 
-    def _point_height(self, point):
-        neighbor_points   = self._get_neighbor_points(point)
-        height_to_surface = self._bilinear_height(point, neighbor_points)
-        return neighbor_points, height_to_surface
-
-    def _grid_cell(self, point):
-        """(i, j) index of the grid tile containing point's (x, y), clipped to the grid."""
-        i = int((point[0] - self.us[0]) // self.subdivision)
-        j = int((point[1] - self.vs[0]) // self.subdivision)
-        i_max, j_max = len(self.us) - 2, len(self.vs) - 2
-        i = 0 if i < 0 else i_max if i > i_max else i
-        j = 0 if j < 0 else j_max if j > j_max else j
-        return i, j
-
-    def _get_neighbor_points(self, point):
-        i, j = self._grid_cell(point)
-        col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
-        return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
-
-    def _bilinear_height(self, point, corners):
-        """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
-        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
-
-        # same bilinear as before, but on plain floats so numpy's array-function
-        # dispatch (np.dot / np.clip on scalars) never runs on the hot path
-        dx,   dy   = point[0] - x1, point[1] - y1
-        esx,  esy  = x2 - x1, y2 - y1
-        etx,  ety  = x3 - x1, y3 - y1
-        s = (dx * esx + dy * esy) / (esx * esx + esy * esy)
-        t = (dx * etx + dy * ety) / (etx * etx + ety * ety)
-        s = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
-        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
-
-        return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
-            
-    def _point_orientation(self, corners):
-        """
-        Roll/pitch/yaw of the center of mass crossing the current tile: pitch and
-        roll come from the tile's height-field gradient (the edges' angles,
-        blended the same s,t weights as _bilinear_height) read off along and
-        across the direction of travel; yaw is the global-frame heading of
-        q_dot, arctan2(vel_y, vel_x), so (roll, pitch, yaw) form a consistent
-        ZYX Euler triple for _rotation_lg.
-        """
-        grad_xy = self._bilinear_gradient(self.q, corners)
-
-        vel   = np.array(self.q_dot[:3])
-        if self.is_backwards:
-            vel *= -1
-        speed = np.linalg.norm(vel[:2])
-        if speed < 1e-9:
-            return self.q[3:6].copy()
-
-        # the velocity in the the local body frame
-        fwd_xy  = vel[:2] / speed
-        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
-        
-        s_l = np.dot(grad_xy, left_xy)  # lateral slope
-        s_f = np.dot(grad_xy, fwd_xy)   # forward slope
-         
-        roll  = np.arctan2(s_l, np.sqrt(1.0 + s_f**2))
-        pitch = np.arctan2(-s_f, 1.0)                 
-        yaw   = np.arctan2(vel[1], vel[0])
-
-        return np.array([roll, pitch, yaw])
-    
-    def _bilinear_gradient(self, point, corners):
-        """(dh/dx, dh/dy) of the same bilinear patch _bilinear_height blends,
-        found by differentiating it w.r.t. the tile's (s,t) edge parameters
-        and mapping back to the xy-plane via the edge vectors."""
-        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
-
-        dx,  dy  = point[0] - x1, point[1] - y1
-        e_s = np.array([x2 - x1, y2 - y1])
-        e_t = np.array([x3 - x1, y3 - y1])
-        es2, et2 = e_s @ e_s, e_t @ e_t
-
-        s = min(max((dx * e_s[0] + dy * e_s[1]) / es2, 0.0), 1.0)
-        t = min(max((dx * e_t[0] + dy * e_t[1]) / et2, 0.0), 1.0)
-
-        dh_ds = (h2 - h1) * (1 - t) + (h4 - h3) * t
-        dh_dt = (h3 - h1) * (1 - s) + (h4 - h2) * s
-
-        # [dh/dx, dh/dy]^T = dh_ds*[ds/dx, ds/dy]^T + dh_dt*[dt/dx, dt/dy]^T,
-        # [ds/dx, ds/dy]^T = e_s / (e_s . e_s),
-        # [dt/dx, dt/dy]^T = e_t / (e_t . e_t).
-        return dh_ds * e_s / es2 + dh_dt * e_t / et2
-
-class Blade:
+class Blade(_SurfaceBase):
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
                  is_backwards: bool = False, blade_local_yaw: float = 0.0,
                  blade_local_roll: float = 0.0, blade_pitch: float = None):
@@ -929,54 +935,9 @@ class Blade:
         self.blade_log.append(blade_points)
 
     @property
-    def subdivision(self):
-        """Grid spacing, sized relative to the dozer width self.b."""
-        return self.b / self.division_factor
-
-    @property
     def blade_cut_depth(self):
         """Vertical cut depth commanded by blade pitch without tilting the blade."""
         return self.L * np.sin(self.blade_pitch)
-
-    def _surface_grid(self):
-        R_surf     = self._rotation_lg(*self.surface_abg)
-        e1, e2, e3 = R_surf[:, 0], R_surf[:, 1], R_surf[:, 2]
-        G          = nx.grid_2d_graph(len(self.us), len(self.vs))
-        u_start    = self.us[self.us <= self.u_split][-1]
-        v_start    = self.vs[self.vs <= self.v_split][-1]
-        ramp_width = max(1, round(self.transition_tiles)) * self.subdivision
-        for i, u in enumerate(self.us):
-            for j, v in enumerate(self.vs):
-                # full offset for * <= *_start, then a linear ramp to zero over ramp_width
-                u_clip  = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
-                v_clip  = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
-
-                w = u_clip if self.is_surface_pitched else v_clip
-                if self.is_surface_rolled:
-                    w += v_clip if self.is_surface_pitched else u_clip
-                    
-                x, y, z = u * e1 + v * e2 + w * self.offset * e3
-
-                node = G.nodes[(i, j)]
-                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-        return G
-    
-    def _rotation_lg(self, a, B, g):
-        """Rotation matrix: local → global frame"""
-        return self._rotation_gl(a, B, g).T
-
-    def _rotation_gl(self, a, B, g):
-        """Rotation matrix: global → local frame"""
-        # change to accept input array
-        sa, ca = np.sin(a), np.cos(a)
-        sB, cB = np.sin(B), np.cos(B)
-        sg, cg = np.sin(g), np.cos(g)
-
-        return np.array([
-            [cB * cg,   sa * sB * cg - ca * sg,   ca * sB * cg + sa * sg],
-            [cB * sg,   sa * sB * sg + ca * cg,   ca * sB * sg - sa * cg],
-            [-sB,                      sa * cB,                  ca * cB]
-        ]).T
 
     def _blade_rotation_lg(self, orient):
         """Blade-local roll/yaw composed on top of the body orientation."""
@@ -986,61 +947,6 @@ class Blade:
         )
         return body_R @ local_R
           
-    def _point_orientation(self, corners):
-        """
-        Roll/pitch/yaw of the center of mass crossing the current tile: pitch and
-        roll come from the tile's height-field gradient (the edges' angles,
-        blended the same s,t weights as _bilinear_height) read off along and
-        across the direction of travel; yaw is the global-frame heading of
-        q_dot, arctan2(vel_y, vel_x), so (roll, pitch, yaw) form a consistent
-        ZYX Euler triple for _rotation_lg.
-        """
-        grad_xy = self._bilinear_gradient(self.q, corners)
-
-        vel   = np.array(self.q_dot[:3])
-        if self.is_backwards:
-            vel *= -1
-        speed = np.linalg.norm(vel[:2])
-        if speed < 1e-9:
-            return self.q[3:6].copy()
-
-        # the velocity in the the local body frame
-        fwd_xy  = vel[:2] / speed
-        s_f = np.dot(grad_xy, fwd_xy)   # forward slope
-
-        roll = 0
-        pitch = np.arctan2(-s_f, 1.0)                 
-        yaw   = np.arctan2(vel[1], vel[0])
-
-        return np.array([roll, pitch, yaw])
-    
-    def _bilinear_gradient(self, point, corners):
-        """(dh/dx, dh/dy) of the same bilinear patch _bilinear_height blends,
-        found by differentiating it w.r.t. the tile's (s,t) edge parameters
-        and mapping back to the xy-plane via the edge vectors."""
-        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
-
-        dx,  dy  = point[0] - x1, point[1] - y1
-        e_s = np.array([x2 - x1, y2 - y1])
-        e_t = np.array([x3 - x1, y3 - y1])
-        es2, et2 = e_s @ e_s, e_t @ e_t
-
-        s = min(max((dx * e_s[0] + dy * e_s[1]) / es2, 0.0), 1.0)
-        t = min(max((dx * e_t[0] + dy * e_t[1]) / et2, 0.0), 1.0)
-
-        dh_ds = (h2 - h1) * (1 - t) + (h4 - h3) * t
-        dh_dt = (h3 - h1) * (1 - s) + (h4 - h2) * s
-
-        # [dh/dx, dh/dy]^T = dh_ds*[ds/dx, ds/dy]^T + dh_dt*[dt/dx, dt/dy]^T,
-        # [ds/dx, ds/dy]^T = e_s / (e_s . e_s),
-        # [dt/dx, dt/dy]^T = e_t / (e_t . e_t).
-        return dh_ds * e_s / es2 + dh_dt * e_t / et2
-
-    def _point_height(self, point):
-        neighbor_points   = self._get_neighbor_points(point)
-        height_to_surface = self._bilinear_height(point, neighbor_points)
-        return neighbor_points, height_to_surface
-
     def _starting_height(self, point):
         """Undeformed surface height at point's horizontal position."""
         i, j = self._grid_cell(point)
@@ -1115,64 +1021,6 @@ class Blade:
 
         return self._contact_angle(imbalance, orient[1])
 
-    def _contact_angle(self, imbalance, fitted):
-        """Bracketed contact-angle solve shared with util.Surface."""
-        limit, span = np.pi / 2 - 1e-3, 0.25
-        while True:
-            lo, hi = max(fitted - span, -limit), min(fitted + span, limit)
-            f_lo, f_hi = imbalance(lo), imbalance(hi)
-            if f_lo * f_hi <= 0:
-                break
-            if lo <= -limit and hi >= limit:
-                return fitted
-            span *= 2
-
-        angle = fitted
-        for _ in range(60):
-            if f_hi == f_lo:
-                break
-            angle = (lo * f_hi - hi * f_lo) / (f_hi - f_lo)
-            value = imbalance(angle)
-            if abs(value) < self.contact_tol or hi - lo < self.contact_tol:
-                break
-            if value * f_lo > 0:
-                lo, f_lo = angle, value
-                f_hi *= 0.5
-            else:
-                hi, f_hi = angle, value
-                f_lo *= 0.5
-        return angle
-
-    def _get_neighbor_points(self, point):
-        i, j = self._grid_cell(point)
-        col_i, col_i1 = self.grid_pts[i], self.grid_pts[i + 1]
-        return [col_i[j], col_i1[j], col_i[j + 1], col_i1[j + 1]]
-    
-    def _grid_cell(self, point):
-        """(i, j) index of the grid tile containing point's (x, y), clipped to the grid."""
-        i = int((point[0] - self.us[0]) // self.subdivision)
-        j = int((point[1] - self.vs[0]) // self.subdivision)
-        i_max, j_max = len(self.us) - 2, len(self.vs) - 2
-        i = 0 if i < 0 else i_max if i > i_max else i
-        j = 0 if j < 0 else j_max if j > j_max else j
-        return i, j
-
-    def _bilinear_height(self, point, corners):
-        """Bilinear height at point's (x,y) from 4 corner vertices [h1,h2,h3,h4] = [(i,j),(i+1,j),(i,j+1),(i+1,j+1)]."""
-        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
-
-        # same bilinear as before, but on plain floats so numpy's array-function
-        # dispatch (np.dot / np.clip on scalars) never runs on the hot path
-        dx,   dy   = point[0] - x1, point[1] - y1
-        esx,  esy  = x2 - x1, y2 - y1
-        etx,  ety  = x3 - x1, y3 - y1
-        s = (dx * esx + dy * esy) / (esx * esx + esy * esy)
-        t = (dx * etx + dy * ety) / (etx * etx + ety * ety)
-        s = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
-        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
-
-        return h1 * (1 - s) * (1 - t) + h2 * s * (1 - t) + h3 * (1 - s) * t + h4 * s * t
-            
     def run_and_plot(self, show_neighbors: bool = False):
         self._run()
 

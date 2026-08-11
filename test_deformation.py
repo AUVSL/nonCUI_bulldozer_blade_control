@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from deformation import Surface
+from util import Blade as Surface
 
 
 def _reached_contact(surface, tile=(1, 1), depth=-10.0):
