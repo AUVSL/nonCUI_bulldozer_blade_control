@@ -36,24 +36,16 @@ class _SurfaceBase:
 
         for i, u in enumerate(self.us):
             for j, v in enumerate(self.vs):
-                if self._uses_sigmoid_surface():
-                    x, y = u, v
-                    z = np.sin(u / 3) * np.cos(y * 4)
-                else:
-                    # Full offset before each split, followed by a linear ramp.
-                    u_clip = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
-                    v_clip = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
-                    weight = self._surface_weight(u_clip, v_clip)
-                    x, y, z = u * e1 + v * e2 + weight * self.offset * e3
+                # Full offset before each split, followed by a linear ramp.
+                u_clip = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
+                v_clip = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
+                weight = self._surface_weight(u_clip, v_clip)
+                x, y, z = u * e1 + v * e2 + weight * self.offset * e3
 
                 node = grid.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
                 self._initialize_surface_node(node)
         return grid
-
-    def _uses_sigmoid_surface(self):
-        """Whether to use Body's optional sinusoidal surface."""
-        return False
 
     def _surface_weight(self, u_clip, v_clip):
         """Blade-default blend for the transition in the travel direction."""
@@ -215,7 +207,6 @@ class Body(_SurfaceBase):
             self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
         self.is_backwards       = is_backwards
         self.is_surface_pitched = is_surface_pitched
-        self.is_surface_sigmoid = False
         self.is_surface_rolled = is_surface_rolled
         # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
         # tighter than the settle loop's 1e-6 convergence check, or the pose it
@@ -260,9 +251,6 @@ class Body(_SurfaceBase):
     def _surface_weight(self, u_clip, v_clip):
         """Preserve Body's historical two-axis transition ramp."""
         return u_clip + v_clip
-
-    def _uses_sigmoid_surface(self):
-        return self.is_surface_sigmoid
 
     def _initialize_surface_node(self, node):
         node["visited_last"] = False
@@ -1484,14 +1472,14 @@ class Blade(_SurfaceBase):
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    # my_body = Body(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
-    # my_body.run_and_plot()
+    my_body = Body(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
+    my_body.run_and_plot()
 
-    my_blade = Blade(is_uphill          = True, 
-                     is_surface_pitched = False, 
-                     is_surface_rolled  = True, 
-                     is_backwards       = False,  
-                     blade_local_yaw    = 0.0,
-                     blade_local_roll   = -0.3, 
-                     blade_pitch        = 0.0)
-    my_blade.run_and_plot()
+    # my_blade = Blade(is_uphill          = True, 
+    #                  is_surface_pitched = False, 
+    #                  is_surface_rolled  = True, 
+    #                  is_backwards       = False,  
+    #                  blade_local_yaw    = 0.0,
+    #                  blade_local_roll   = -0.3, 
+    #                  blade_pitch        = 0.0)
+    # my_blade.run_and_plot()
