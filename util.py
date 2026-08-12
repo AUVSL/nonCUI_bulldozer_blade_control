@@ -10,11 +10,10 @@ from matplotlib.patches import Polygon
 
 
 class _SurfaceBase:
-    """Terrain geometry shared by the body and blade simulations.
+    """Terrain geometry shared by both modes of :class:`Surface`.
 
-    The default implementations follow :class:`Blade`.  ``Body`` customizes
-    the few places where its historical terrain/contact behavior differs via
-    narrow hooks instead of carrying a second copy of each whole method.
+    The defaults follow blade-enabled behavior. ``_BodyMode`` customizes the
+    few places where tracked-body terrain/contact behavior differs.
     """
 
     @property
@@ -184,8 +183,10 @@ class _SurfaceBase:
         return angle
 
 
-class Body(_SurfaceBase):
-    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False, is_backwards: bool = False):
+class _BodyMode(_SurfaceBase):
+    def _initialize_body_mode(self, is_uphill=True, is_surface_pitched: bool = False,
+                              is_surface_rolled: bool = False, is_backwards: bool = False):
+        self.enable_blade = False
         # simulation parameters
         self.b                  = 1.75
         self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
@@ -246,24 +247,30 @@ class Body(_SurfaceBase):
         self.neighbor_log.append(np.vstack(neighbor_points)) 
 
     def _subdivision_factor(self):
+        if self.enable_blade:
+            return super()._subdivision_factor()
         return 2.0
 
     def _surface_weight(self, u_clip, v_clip):
         """Preserve Body's historical two-axis transition ramp."""
+        if self.enable_blade:
+            return super()._surface_weight(u_clip, v_clip)
         return u_clip + v_clip
 
     def _initialize_surface_node(self, node):
+        if self.enable_blade:
+            return super()._initialize_surface_node(node)
         node["visited_last"] = False
 
     def _surface_roll(self, grad_xy, fwd_xy, forward_slope):
         """Preserve Body's terrain-induced lateral roll."""
+        if self.enable_blade:
+            return super()._surface_roll(grad_xy, fwd_xy, forward_slope)
         left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
         lateral_slope = np.dot(grad_xy, left_xy)
         return np.arctan2(lateral_slope, np.sqrt(1.0 + forward_slope**2))
 
-    def run_and_plot(self, show_neighbors: bool = False):
-        self._run()
-
+    def _render_body_run(self, show_neighbors: bool = False):
         print("Rendering GIF...")
         
         # set axis limits based on the logged data (and neighbor points, if any)
@@ -648,25 +655,7 @@ class Body(_SurfaceBase):
         plt.close(fig)
         print(f"Saved {fname}")
 
-    def _run(self):
-        t = 0.0
-        for _ in range(int(self.stop_time / self.dt)):
-            # update variables
-            t += self.dt
-
-            points, neighbor_points = self._body_update()
-            self.total_distance  += np.linalg.norm(self.dt * self.q_dot[0:3])
-            
-            # loop termination check
-            if self.total_distance >= self.stop_distance:
-                break
-
-            # log variables for plotting
-            self.log.append([t, *self.q])
-            self.point_log.append(np.array(points[1:]))  # (3, 6): rows front, center, back
-            self.neighbor_log.append(np.vstack(neighbor_points))  # (16, 3): 4 points each for q, front, center, back
-    
-    def _body_update(self):
+    def _tracked_body_update(self):
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
         else:
@@ -813,7 +802,7 @@ class Body(_SurfaceBase):
                     support[i, 1] = max(support[i, 1], needed)
         return support
 
-    def _contact_pitch(self, orient):
+    def _body_contact_pitch(self, orient):
         """Pitch (at orient's roll and yaw) that leaves both ends on the ground."""
         def imbalance(pitch):
             z_front, z_back = self._half_resting_heights(
@@ -837,10 +826,23 @@ class Body(_SurfaceBase):
         """
         return float(self._support_heights(R).max())
 
-class Blade(_SurfaceBase):
+class Surface(_BodyMode):
+    """Surface-aware bulldozer with an optional deforming blade."""
+
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
                  is_backwards: bool = False, blade_local_yaw: float = 0.0,
-                 blade_local_roll: float = 0.0, blade_pitch: float = None):
+                 blade_local_roll: float = 0.0, blade_pitch: float = None,
+                 enable_blade: bool = True):
+        self.enable_blade = enable_blade
+        if not enable_blade:
+            self._initialize_body_mode(
+                is_uphill=is_uphill,
+                is_surface_pitched=is_surface_pitched,
+                is_surface_rolled=is_surface_rolled,
+                is_backwards=is_backwards,
+            )
+            return
+
         # simulation parameters
         self.division_factor    = 4*2
         self.b                  = 1.75
@@ -970,6 +972,12 @@ class Blade(_SurfaceBase):
         return np.arctan2(-np.dot(gradient, forward), 1.0)
 
     def _contact_pitch(self, orient):
+        """Return the mode-appropriate pitch that balances terrain contact."""
+        if self.enable_blade:
+            return self._blade_contact_pitch(orient)
+        return self._body_contact_pitch(orient)
+
+    def _blade_contact_pitch(self, orient):
         """Pitch that balances surface contact at q and the blade midpoint."""
         q_surface = self._point_height(self.q)[1]
         q_cut_depth = max(0.0, self._starting_height(self.q) - q_surface)
@@ -1010,8 +1018,13 @@ class Blade(_SurfaceBase):
         return self._contact_angle(imbalance, orient[1])
 
     def run_and_plot(self, show_neighbors: bool = False):
-        self._run()
+        """Run the simulation and render the active body/blade view."""
+        self.run()
+        if self.enable_blade:
+            return self._render_blade_run(show_neighbors)
+        return self._render_body_run(show_neighbors)
 
+    def _render_blade_run(self, show_neighbors: bool = False):
         print("Rendering GIF...")
         
         # set axis limits based on the logged data (and neighbor points, if any)
@@ -1362,34 +1375,39 @@ class Blade(_SurfaceBase):
         plt.close(fig)
         print(f"Saved {fname}")
 
-    def _run(self):
+    def run(self):
+        """Advance either the blade-enabled or tracked-body simulation."""
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
-            # update variables
             t += self.dt
 
-            # Cut with the blade at its current pose, then settle the body on
-            # the newly deformed terrain.
-            self._blade_update()
-            neighbor_points = self._body_update()
-
-            # Store the blade at the same updated pose as q and the grid log.
-            # This is geometry-only: cutting again here would double the cut.
-            blade_points, _ = self._blade_update(deform=False)
+            if self.enable_blade:
+                # Cut at the current pose, settle on the new terrain, then log
+                # blade geometry without cutting the same frame twice.
+                self._blade_update()
+                neighbor_points = self._body_update()
+                blade_points, _ = self._blade_update(deform=False)
+            else:
+                points, neighbor_points = self._body_update()
 
             self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
 
-            # loop termination check
             if self.total_distance >= self.stop_distance:
                 break
 
-            # log variables for plotting
             self.log.append([t, *self.q])
-            self.neighbor_log.append(np.array(neighbor_points))
-            self.blade_log.append(blade_points)
-            self.grid_log.append(self._grid_heights())
+            if self.enable_blade:
+                self.neighbor_log.append(np.array(neighbor_points))
+                self.blade_log.append(blade_points)
+                self.grid_log.append(self._grid_heights())
+            else:
+                self.point_log.append(np.array(points[1:]))
+                self.neighbor_log.append(np.vstack(neighbor_points))
 
     def _body_update(self):
+        if not self.enable_blade:
+            return self._tracked_body_update()
+
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
         else:
@@ -1472,14 +1490,14 @@ class Blade(_SurfaceBase):
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
 if __name__ == "__main__":
-    my_body = Body(is_uphill=True, is_surface_pitched=False, is_surface_rolled = True, is_backwards=False)
-    my_body.run_and_plot()
-
-    # my_blade = Blade(is_uphill          = True, 
-    #                  is_surface_pitched = False, 
-    #                  is_surface_rolled  = True, 
-    #                  is_backwards       = False,  
-    #                  blade_local_yaw    = 0.0,
-    #                  blade_local_roll   = -0.3, 
-    #                  blade_pitch        = 0.0)
-    # my_blade.run_and_plot()
+    simulation = Surface(
+        enable_blade       = True,
+        is_backwards       = False,
+        is_uphill          = True,
+        is_surface_pitched = False,
+        is_surface_rolled  = True,
+        blade_local_roll   = -0.3, 
+        blade_local_yaw    = 0.0, 
+        blade_pitch        = 0.0
+    )
+    simulation.run_and_plot()

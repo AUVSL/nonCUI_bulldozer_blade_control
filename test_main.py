@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 from main import BulldozerSimulation
-from util import Blade, Body, _SurfaceBase
+from util import Blade, Body, Surface, _SurfaceBase
 # to run: pytest test_main.py
 
 # ───────────────── Fixtures ─────────────────
@@ -563,9 +563,36 @@ def _grid_heights(surface):
     return np.array([[point[2] for point in column] for column in surface.grid_pts])
 
 
-def test_body_and_blade_inherit_the_shared_surface_implementation():
+def _body_surface(**kwargs):
+    return Surface(enable_blade=False, **kwargs)
+
+
+def test_surface_combines_body_and_blade_modes():
+    enabled = Surface()
+    disabled = _body_surface()
+
+    assert enabled.enable_blade is True
+    assert disabled.enable_blade is False
+    assert hasattr(enabled, "blade_log")
+    assert not hasattr(disabled, "blade_log")
+    assert Blade().enable_blade is True
+    assert Body().enable_blade is False
+    assert "run" in Surface.__dict__
+    assert "run_and_plot" in Surface.__dict__
+    assert "run" not in Body.__dict__ and "run" not in Blade.__dict__
+    assert "run_and_plot" not in Body.__dict__
+    assert "run_and_plot" not in Blade.__dict__
+    assert Body.run is Blade.run is Surface.run
+    assert Body.run_and_plot is Blade.run_and_plot is Surface.run_and_plot
+    assert Body._contact_pitch is Blade._contact_pitch is Surface._contact_pitch
+    assert Surface._run is Surface.run
+
+
+def test_body_and_blade_wrappers_inherit_the_shared_surface_implementation():
     assert issubclass(Body, _SurfaceBase)
     assert issubclass(Blade, _SurfaceBase)
+    assert issubclass(Body, Surface)
+    assert issubclass(Blade, Surface)
     for method_name in SHARED_METHODS:
         assert method_name in _SurfaceBase.__dict__
         assert method_name not in Body.__dict__
@@ -573,9 +600,9 @@ def test_body_and_blade_inherit_the_shared_surface_implementation():
         assert getattr(Body, method_name) is getattr(Blade, method_name)
 
 
-def test_subdivision_preserves_each_class_output():
-    body = Body()
-    blade = Blade()
+def test_subdivision_preserves_each_mode_output():
+    body = _body_surface()
+    blade = Surface()
 
     assert body.subdivision == pytest.approx(1.75 / 2)
     assert blade.subdivision == pytest.approx(1.75 / 8)
@@ -588,7 +615,7 @@ def test_subdivision_preserves_each_class_output():
 
 
 def test_body_grid_and_initial_logs_keep_their_previous_shapes_and_values():
-    body = Body()
+    body = _body_surface()
     heights = _grid_heights(body)
 
     assert heights.shape == (3, 11)
@@ -605,23 +632,18 @@ def test_body_grid_and_initial_logs_keep_their_previous_shapes_and_values():
     )
 
 
-def test_body_grid_keeps_two_axis_ramp_and_sigmoid_node_metadata():
-    unrolled = Body(is_surface_rolled=False)
-    rolled = Body(is_surface_rolled=True)
+def test_body_grid_keeps_two_axis_ramp_and_node_metadata():
+    unrolled = _body_surface(is_surface_rolled=False)
+    rolled = _body_surface(is_surface_rolled=True)
     np.testing.assert_allclose(_grid_heights(unrolled), _grid_heights(rolled))
 
-    unrolled.is_surface_sigmoid = True
-    sigmoid_grid = unrolled._surface_grid()
-    for _, node in sigmoid_grid.nodes(data=True):
-        assert node["z"] == pytest.approx(
-            np.sin(node["x"] / 3) * np.cos(node["y"] * 4)
-        )
+    for _, node in unrolled.surf_grid.nodes(data=True):
         assert node["visited_last"] is False
 
 
 def test_shared_orientation_uses_blade_default_and_body_roll_hook():
-    body = Body(is_uphill=False)
-    blade = Blade(is_uphill=False)
+    body = _body_surface(is_uphill=False)
+    blade = Surface(is_uphill=False)
     corners = [
         (0.0, 0.0, 0.0),
         (1.0, 0.0, 0.2),
@@ -639,7 +661,7 @@ def test_shared_orientation_uses_blade_default_and_body_roll_hook():
 
 
 def test_body_update_keeps_return_contract_and_advances_position():
-    body = Body()
+    body = _body_surface()
     previous_xy = body.q[:2].copy()
 
     points, neighbor_groups = body._body_update()
@@ -677,19 +699,67 @@ def test_body_update_keeps_return_contract_and_advances_position():
     contact_rotation = body._rotation_lg(orient[0], contact_pitch, orient[2])
     front_height, back_height = body._half_resting_heights(contact_rotation)
     assert front_height - back_height == pytest.approx(0.0, abs=body.contact_tol)
-    assert Body._contact_pitch is not Blade._contact_pitch
+    assert body._contact_pitch(orient) == pytest.approx(body._body_contact_pitch(orient))
 
 
-def test_body_short_run_keeps_logs_aligned():
-    body = Body()
+@pytest.mark.parametrize(
+    "body_kwargs",
+    ({}, {"is_surface_pitched": True}, {"is_backwards": True}),
+)
+def test_body_short_run_keeps_logs_aligned_without_deformation(body_kwargs):
+    body = _body_surface(**body_kwargs)
+    starting_heights = body._grid_heights().copy()
     body.stop_time = 3 * body.dt + 1e-12
 
-    body._run()
+    body.run()
 
     assert len(body.log) == len(body.point_log) == len(body.neighbor_log) == 4
     assert np.asarray(body.log).shape == (4, 7)
     assert np.asarray(body.point_log).shape == (4, 6, 6)
     assert np.asarray(body.neighbor_log).shape == (4, 28, 3)
+    np.testing.assert_allclose(body._grid_heights(), starting_heights)
+
+
+def test_blade_enabled_short_run_keeps_logs_aligned_and_deforms():
+    surface = Surface(is_uphill=False)
+    starting_heights = surface._grid_heights().copy()
+    surface.stop_time = 3 * surface.dt + 1e-12
+
+    surface.run()
+
+    assert len(surface.log) == len(surface.blade_log) == 4
+    assert len(surface.grid_log) == len(surface.neighbor_log) == 4
+    assert np.asarray(surface.log).shape == (4, 7)
+    assert np.asarray(surface.blade_log).shape == (4, 15, 6)
+    assert np.asarray(surface.grid_log).shape == (4, 9, 41)
+    np.testing.assert_allclose(surface.grid_log[-1], surface._grid_heights())
+    assert np.max(starting_heights - surface._grid_heights()) > 0.0
+
+
+@pytest.mark.parametrize(
+    ("enable_blade", "expected_renderer"),
+    ((True, "blade"), (False, "body")),
+)
+def test_run_and_plot_uses_one_mode_aware_dispatcher(
+    monkeypatch, enable_blade, expected_renderer
+):
+    surface = Surface(enable_blade=enable_blade)
+    calls = []
+    monkeypatch.setattr(surface, "run", lambda: calls.append("run"))
+    monkeypatch.setattr(
+        surface,
+        "_render_blade_run",
+        lambda show_neighbors: calls.append(("blade", show_neighbors)),
+    )
+    monkeypatch.setattr(
+        surface,
+        "_render_body_run",
+        lambda show_neighbors: calls.append(("body", show_neighbors)),
+    )
+
+    surface.run_and_plot(show_neighbors=True)
+
+    assert calls == ["run", (expected_renderer, True)]
 
 
 def _reached_contact(surface, tile=(1, 1), depth=-10.0):
@@ -931,7 +1001,7 @@ def test_rigid_blade_vertical_motion_continues_below_soil_cut_limit():
 def test_normal_run_deepens_with_q_but_stops_at_maximum_depth():
     surface = Blade(is_uphill=False)
 
-    surface._run()
+    surface.run()
 
     depths = surface.starting_grid_heights - surface._grid_heights()
     assert depths.max() > surface.blade_cut_depth
@@ -944,7 +1014,7 @@ def test_unrolled_transition_and_cut_are_uniform_across_blade_width():
         np.ptp(surface.starting_grid_heights, axis=0), 0.0, atol=1e-12
     )
 
-    surface._run()
+    surface.run()
 
     depths = surface.starting_grid_heights - surface._grid_heights()
     cut_columns = np.flatnonzero(depths.max(axis=0) > 1e-9)
@@ -992,7 +1062,7 @@ def test_rolled_soil_is_never_cut_below_the_blade_plane():
 def test_rolled_soil_keeps_local_depth_limits_across_the_blade():
     surface = Blade(is_uphill=False, is_surface_rolled=True)
 
-    surface._run()
+    surface.run()
 
     heights = surface._grid_heights()
     deformed = np.abs(heights - surface.starting_grid_heights) > 1e-9

@@ -77,8 +77,17 @@ back) of the track-contact points conforming to the terrain:
 python util.py          # → figures/simulation.gif
 ```
 
-The scenario is chosen via the `Surface(is_uphill=..., is_surface_pitched=...,
-is_backwards=...)` flags at the bottom of the file.
+The scenario is chosen via `Surface(is_uphill=...,
+is_surface_pitched=..., is_backwards=..., enable_blade=...)`. The blade is
+enabled by default; pass `enable_blade=False` to run and render the tracked body
+without blade geometry or soil deformation.
+
+```python
+from util import Surface
+
+simulation = Surface(enable_blade=False)
+simulation.run()
+```
 
 **Fit the controller lookup** — sweeps track forces, finds the straight-line
 threshold, and compares single-term / piecewise / Bezier fits for the
