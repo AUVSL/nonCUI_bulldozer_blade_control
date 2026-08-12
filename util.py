@@ -1496,5 +1496,8 @@ if __name__ == "__main__":
         is_uphill          = True,
         is_surface_pitched = False,
         is_surface_rolled  = True,
+        blade_local_roll   = -0.3, 
+        blade_local_yaw    = 0.0, 
+        blade_pitch        = 0.0
     )
     simulation.run_and_plot()
