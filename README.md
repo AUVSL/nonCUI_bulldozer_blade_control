@@ -26,9 +26,12 @@ read side-by-side with the derivations.
   track-force fraction. The lookup is fitted offline in `calibration.py`.
 - **Surface-transition awareness** (`util.py`, work in progress on the
   `track-surface-transitions` branch) — the surface is a NetworkX height-field
-  grid; the dozer's front and back track-contact points are projected onto the
-  surface via bilinear interpolation so the body pitches and rolls to conform to
-  slopes, ramps, and up/down-hill transitions.
+  grid; both complete track centerlines are sampled at their ends, midpoints,
+  and grid crossings so the body pitches and rolls to conform to slopes, ramps,
+  and up/down-hill transitions. In blade mode, `q` remains the rigid-body pose
+  origin but is not treated as an additional terrain-contact point; commanded
+  blade pitch controls cut depth without replacing the track-supported body
+  pitch.
 
 ## Repository layout
 

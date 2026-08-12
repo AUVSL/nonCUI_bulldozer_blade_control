@@ -692,41 +692,45 @@ class _BodyMode(_SurfaceBase):
         # deepest penetration of the snapped pose; 1e-15 absorbs floating point error
         is_under_ground = (self._resting_height(self._rotation_lg(*self.q[3:6])) - self.q[2]) > 1e-15
         if is_under_ground:
-            for _ in range(20):
-                # roll and pitch settle onto the ground so no quarter of the body
-                # hangs (yaw is the heading, which the settling cannot change).
-                # Each starts from the pose the body already holds, so on
-                # convergence the two are balanced against one another's settled
-                # value rather than against a guess at it.
-                new_orient    = self.q[3:6].copy()
-                new_orient[0] = self._contact_roll(new_orient)
-                new_orient[1] = self._contact_pitch(new_orient)
+            self._settle_tracks(self.q[3:6])
 
-                # rest the rigid body on its highest support: the lowest height that
-                # keeps every point of both tracks on or above the surface, so no
-                # track segment is ever submerged
-                new_z = self._resting_height(self._rotation_lg(*new_orient))
-
-                converged = (abs(new_z - self.q[2]) < 1e-6 and
-                             np.all(np.abs(new_orient - self.q[3:6]) < 1e-6))
-                self.q[2], self.q[3:6] = new_z, new_orient
-                if converged:
-                    break
-
-        # rebuild both tracks rigidly from the converged pose so they stay parallel
-        R          = self._rotation_lg(*self.q[3:6])
-        half_width = R @ np.array([         0, self.b / 2, 0])
-        half_track = R @ np.array([self.l / 2,          0, 0])
-        orient     = self.q[3:6].copy()
-
-        right_center = self.q[:3] - half_width
-        left_center  = self.q[:3] + half_width
-        track_xyz    = [right_center + half_track, right_center, right_center - half_track,
-                        left_center  + half_track, left_center,  left_center  - half_track]
+        # Rebuild both tracks rigidly from the converged pose.
+        orient = self.q[3:6].copy()
+        track_xyz = self._track_xyz(self.q).reshape(-1, 3)
 
         track_points    = [np.concatenate((xyz, orient))           for xyz in track_xyz]
         track_neighbors = [np.array(self._get_neighbor_points(xyz)) for xyz in track_xyz]
         return track_points, track_neighbors
+
+    def _track_xyz(self, pose):
+        """Return [right, left] x [front, center, back] track points."""
+        pose = np.asarray(pose)
+        R = self._rotation_lg(*pose[3:6])
+        half_width = R @ np.array([0.0, self.b / 2, 0.0])
+        half_track = R @ np.array([self.l / 2, 0.0, 0.0])
+        centers = np.array([pose[:3] - half_width, pose[:3] + half_width])
+        return np.stack(
+            [centers + half_track, centers, centers - half_track], axis=1
+        )
+
+    def _settle_tracks(self, orient):
+        """Set q's supported pose from both complete track contact lines."""
+        self.q[3:6] = orient
+        for _ in range(20):
+            # Roll and pitch settle onto the ground so no quarter of the body
+            # hangs. Yaw is the heading and cannot change during settling.
+            new_orient = self.q[3:6].copy()
+            new_orient[0] = self._contact_roll(new_orient)
+            new_orient[1] = self._body_contact_pitch(new_orient)
+            new_z = self._resting_height(self._rotation_lg(*new_orient))
+
+            converged = (
+                abs(new_z - self.q[2]) < 1e-6
+                and np.all(np.abs(new_orient - self.q[3:6]) < 1e-6)
+            )
+            self.q[2], self.q[3:6] = new_z, new_orient
+            if converged:
+                break
 
     def _contact_roll(self, orient):
         """Roll (at orient's pitch and yaw) that leaves both tracks on the ground."""
@@ -863,6 +867,7 @@ class Surface(_BodyMode):
         self.B1   = 2.921
         self.H    = 0.955
         self.L    = 1.2 
+        self.l    = 2.349
         self.blade_local_yaw = blade_local_yaw
         self.blade_local_roll = blade_local_roll
         self.blade_pitch = (
@@ -909,11 +914,10 @@ class Surface(_BodyMode):
                           for j in range(len(self.vs))] for i in range(len(self.us))]
         self.starting_grid_heights = self._grid_heights().copy()
 
-        # put the body on the surface at the start of the simulation
-        neighbor_points, self.q[2] = self._point_height(self.q)
-        initial_orient = self.q[3:6].copy()
-        initial_orient[1] = self._point_orientation(neighbor_points)[1]
-        self.q[4] = self._contact_pitch(initial_orient)
+        # q is retained for visualization and as the rigid-body pose origin;
+        # only the complete track model determines the supported pose.
+        neighbor_points = self._get_neighbor_points(self.q)
+        self._settle_tracks(self.q[3:6].copy())
         self.log.append([0, *self.q])
         self.grid_log.append(self._grid_heights())
 
@@ -936,7 +940,7 @@ class Surface(_BodyMode):
             self.blade_local_roll, 0.0, self.blade_local_yaw
         )
         return body_R @ local_R
-          
+
     def _starting_height(self, point):
         """Undeformed surface height at point's horizontal position."""
         i, j = self._grid_cell(point)
@@ -948,74 +952,9 @@ class Surface(_BodyMode):
         )
         return self._bilinear_height(point, corners)
 
-    def _starting_pitch(self, point):
-        """Pitch of the maximum-depth cut floor at point.
-
-        The cut floor is the starting surface translated downward by a constant
-        maximum depth, so it has the same gradient as the starting surface.
-        """
-        i, j = self._grid_cell(point)
-        corners = (
-            (*self.grid_pts[i][j][:2], self.starting_grid_heights[i, j]),
-            (*self.grid_pts[i + 1][j][:2], self.starting_grid_heights[i + 1, j]),
-            (*self.grid_pts[i][j + 1][:2], self.starting_grid_heights[i, j + 1]),
-            (*self.grid_pts[i + 1][j + 1][:2], self.starting_grid_heights[i + 1, j + 1]),
-        )
-        gradient = self._bilinear_gradient(point, corners)
-        velocity = np.array(self.q_dot[:2])
-        if self.is_backwards:
-            velocity *= -1
-        speed = np.linalg.norm(velocity)
-        if speed < 1e-9:
-            return self.q[4]
-        forward = velocity / speed
-        return np.arctan2(-np.dot(gradient, forward), 1.0)
-
     def _contact_pitch(self, orient):
-        """Return the mode-appropriate pitch that balances terrain contact."""
-        if self.enable_blade:
-            return self._blade_contact_pitch(orient)
+        """Pitch that balances the front and rear halves of both tracks."""
         return self._body_contact_pitch(orient)
-
-    def _blade_contact_pitch(self, orient):
-        """Pitch that balances surface contact at q and the blade midpoint."""
-        q_surface = self._point_height(self.q)[1]
-        q_cut_depth = max(0.0, self._starting_height(self.q) - q_surface)
-        cut_depth = min(
-            self.blade_cut_depth + q_cut_depth,
-            self.max_world_cut_depth,
-        )
-        if cut_depth >= self.max_world_cut_depth - self.contact_tol:
-            # Bypass the root solver entirely once the blade target reaches the
-            # floor. Returning this value from imbalance() would only report a
-            # zero residual and leave the solver's candidate pitch in place.
-            fitted_R = self._blade_rotation_lg(orient)
-            blade_midpoint = self.q[:3] + fitted_R @ np.array(
-                [self.L, 0.0, -self.blade_cut_depth]
-            )
-            return self._starting_pitch(blade_midpoint)
-
-        def imbalance(pitch):
-            candidate_orient = np.array([orient[0], pitch, orient[2]])
-            R = self._blade_rotation_lg(candidate_orient)
-            blade_offset = R @ np.array(
-                [self.L, 0.0, -self.blade_cut_depth]
-            )
-            blade_midpoint = self.q[:3] + blade_offset
-
-            starting_blade_surface = self._starting_height(blade_midpoint)
-            # q remains on the live surface. As it descends into the previous
-            # cut, carry that accumulated descent forward to the blade, plus
-            # the blade's initial offset, until the maximum depth is reached.
-            blade_target = starting_blade_surface - cut_depth
-
-            # Required q height for each contact. Their difference is zero when
-            # q is on the surface and the rigid blade midpoint is at its target.
-            q_required = q_surface
-            blade_required = blade_target - blade_offset[2]
-            return blade_required - q_required
-
-        return self._contact_angle(imbalance, orient[1])
 
     def run_and_plot(self, show_neighbors: bool = False):
         """Run the simulation and render the active body/blade view."""
@@ -1029,7 +968,10 @@ class Surface(_BodyMode):
         
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 0.5
-        data          = np.array(self.log)[::2]  # every 2nd frame represented to speed up rendering
+        log_data      = np.asarray(self.log)
+        data          = log_data[::2]  # every 2nd frame represented to speed up rendering
+        track_path    = np.array([self._track_xyz(row[1:7]) for row in log_data])
+        track_data    = track_path[::2]
         # (frames, blade_points, 6), ordered from the right blade end to the left.
         # The point count follows the blade/grid resolution rather than being
         # fixed at the two blade endpoints.
@@ -1052,10 +994,12 @@ class Surface(_BodyMode):
         # neither the q path, the blade paths, nor a fresh cut is clipped flush
         # at a panel edge), plus the grid-neighbor points only when they will
         # actually be drawn
-        bound_x = [grid_x.ravel(), blade_data[:, :, 0].ravel(), blade_top_data[:, :, 0].ravel()]
-        bound_y = [grid_y.ravel(), blade_path[:, :, 1].ravel(), blade_top_data[:, :, 1].ravel()]
+        bound_x = [grid_x.ravel(), blade_data[:, :, 0].ravel(),
+                   blade_top_data[:, :, 0].ravel(), track_path[:, :, :, 0].ravel()]
+        bound_y = [grid_y.ravel(), blade_path[:, :, 1].ravel(),
+                   blade_top_data[:, :, 1].ravel(), track_path[:, :, :, 1].ravel()]
         bound_z = [np.asarray(self.grid_log).ravel(), blade_path[:, :, 2].ravel(),
-                   blade_top_data[:, :, 2].ravel()]
+                   blade_top_data[:, :, 2].ravel(), track_path[:, :, :, 2].ravel()]
         if show_neighbors:
             neighbor_pts = np.array([pt for frame in self.neighbor_log for pt in frame])
             bound_x.append(neighbor_pts[:, 0])
@@ -1158,6 +1102,37 @@ class Surface(_BodyMode):
         ax_side.set_xlabel("X (m)")
         ax_side.set_ylabel("Z (m)")
 
+        # Both rigid track centerlines, reconstructed from each logged body pose.
+        # Collections update in place and participate in the renderer's manual
+        # background/blit lifecycle alongside the deforming grid and blade.
+        track0 = track_data[0]
+        track_3d = Line3DCollection(
+            track0, colors="darkorange", linewidths=3.0, zorder=5, label="tracks"
+        )
+        track_top = LineCollection(
+            track0[:, :, [0, 1]], colors="darkorange", linewidths=3.0,
+            zorder=5, label="tracks"
+        )
+        track_back = LineCollection(
+            track0[:, :, [1, 2]], colors="darkorange", linewidths=3.0,
+            zorder=5, label="tracks"
+        )
+        track_side = LineCollection(
+            track0[:, :, [0, 2]], colors="darkorange", linewidths=3.0,
+            zorder=5, label="tracks"
+        )
+        ax.add_collection3d(track_3d)
+        ax_top.add_collection(track_top)
+        ax_back.add_collection(track_back)
+        ax_side.add_collection(track_side)
+
+        def set_tracks(i):
+            tracks = track_data[i]
+            track_3d.set_segments(tracks)
+            track_top.set_segments(tracks[:, :, [0, 1]])
+            track_back.set_segments(tracks[:, :, [1, 2]])
+            track_side.set_segments(tracks[:, :, [0, 2]])
+
         # green scatter artists for grid vertices within one tile length of the
         # point, updated each frame (only created when show_neighbors is set)
         green_3d = green_top = green_back = green_side = None
@@ -1182,10 +1157,9 @@ class Surface(_BodyMode):
         # fully-deformed grid
         blade0 = blade_data[0]
 
-        # blue arrow marking the center of mass q, showing q's own orientation;
-        # q sticks to the surface because q[2] already comes from _point_height
-        # each frame. mplot3d quiver has no in-place update, so the 3D twin of
-        # each artist is held in a 1-element list and removed/recreated each frame
+        # Blue arrow marking the center of mass q at the track-supported body
+        # pose. mplot3d quiver has no in-place update, so the 3D twin of each
+        # artist is held in a 1-element list and removed/recreated each frame.
         q_arrow_top  = ax_top.quiver(data[0, 1], data[0, 2], fwd0[0], fwd0[1],
                                       color='blue', scale=1 / arrow_len, scale_units='xy',
                                       angles='xy', zorder=7)
@@ -1276,10 +1250,11 @@ class Surface(_BodyMode):
 
         if show_neighbors:
             set_neighbors(0)
+        set_tracks(0)
         set_q_point(0)
 
-        legend_handles = [q_arrow_side, blade_arrow_side, blade_face_side]
-        legend_labels  = ["q (center of mass)", "blade contact points", "blade face"]
+        legend_handles = [track_side, q_arrow_side, blade_arrow_side, blade_face_side]
+        legend_labels  = ["tracks", "q (center of mass)", "blade contact points", "blade face"]
         if show_neighbors:
             legend_handles.append(green_side)
             legend_labels.append("grid neighbors")
@@ -1307,6 +1282,7 @@ class Surface(_BodyMode):
         # animation update function
         def update(i):
             set_grid(i)
+            set_tracks(i)
             if show_neighbors:
                 set_neighbors(i)
             set_q_point(i)
@@ -1319,13 +1295,13 @@ class Surface(_BodyMode):
         # because matplotlib re-measures every tick and axis label on each draw.
         # the artists listed per axes are ordered by zorder, since drawing them
         # by hand skips the sort a full draw would do
-        flat_artists = [grid_back, grid_side]
+        flat_artists = [grid_back, grid_side, track_top, track_back, track_side]
         if show_neighbors:
             flat_artists += [green_back, green_side, green_top]
         flat_artists += [q_arrow_top, q_arrow_back, q_arrow_side,
                          blade_arrow_top, blade_arrow_back, blade_arrow_side,
                          blade_face_top, blade_face_back, blade_face_side]
-        three_d       = [grid_3d, blade_face_3d] + ([green_3d] if show_neighbors else [])
+        three_d       = [grid_3d, track_3d, blade_face_3d] + ([green_3d] if show_neighbors else [])
 
         # the background has to hold no frame-specific state, or frame 0's
         # arrows and grid ghost behind the whole animation. the 3D quivers are
@@ -1405,6 +1381,7 @@ class Surface(_BodyMode):
                 self.neighbor_log.append(np.vstack(neighbor_points))
 
     def _body_update(self):
+        #TODO: see if this if should go after the q update
         if not self.enable_blade:
             return self._tracked_body_update()
 
@@ -1413,12 +1390,10 @@ class Surface(_BodyMode):
         else:
             self.is_initalization = False
 
-        # seed the body height + orientation from the tile under the center of mass
-        neighbor_points, self.q[2] = self._point_height(self.q)
-        fitted_pitch = self._point_orientation(neighbor_points)[1]
-        orient = self.q[3:6].copy()
-        orient[1] = fitted_pitch
-        self.q[4] = self._contact_pitch(orient)
+        # q remains the pose origin and a logged visualization point; both
+        # entire track lines alone determine height, roll, and pitch.
+        neighbor_points = self._get_neighbor_points(self.q)
+        self._settle_tracks(self.q[3:6].copy())
        
         return neighbor_points
 
@@ -1488,6 +1463,26 @@ class Surface(_BodyMode):
     def _grid_heights(self):
         """Snapshot of every node height, indexed [i][j], for the GIF's surface."""
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
+
+
+class Body(Surface):
+    """Backward-compatible tracked-body wrapper."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs["enable_blade"] = False
+        super().__init__(*args, **kwargs)
+
+
+class Blade(Surface):
+    """Backward-compatible blade-enabled wrapper."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs["enable_blade"] = True
+        super().__init__(*args, **kwargs)
+
+
+# Compatibility with the pre-unification private entry point.
+Surface._run = Surface.run
 
 if __name__ == "__main__":
     simulation = Surface(

@@ -1,6 +1,7 @@
 """Unit tests for the bulldozer simulation and terrain helpers."""
 import numpy as np
 import pytest
+import util as surface_util
 from main import BulldozerSimulation
 from util import Blade, Body, Surface, _SurfaceBase
 # to run: pytest test_main.py
@@ -702,6 +703,88 @@ def test_body_update_keeps_return_contract_and_advances_position():
     assert body._contact_pitch(orient) == pytest.approx(body._body_contact_pitch(orient))
 
 
+def test_track_geometry_helper_uses_the_logged_rigid_body_pose():
+    surface = Blade(is_uphill=False)
+    pose = np.array([1.2, -0.7, 0.4, 0.17, -0.23, 0.41])
+
+    tracks = surface._track_xyz(pose)
+    local = np.einsum(
+        "ij,skj->ski",
+        surface._rotation_gl(*pose[3:6]),
+        tracks - pose[:3],
+    )
+    expected = np.array([
+        [
+            [surface.l / 2, -surface.b / 2, 0.0],
+            [0.0, -surface.b / 2, 0.0],
+            [-surface.l / 2, -surface.b / 2, 0.0],
+        ],
+        [
+            [surface.l / 2, surface.b / 2, 0.0],
+            [0.0, surface.b / 2, 0.0],
+            [-surface.l / 2, surface.b / 2, 0.0],
+        ],
+    ])
+
+    assert tracks.shape == (2, 3, 3)
+    np.testing.assert_allclose(local, expected, atol=1e-12)
+
+
+def test_blade_renderer_draws_and_updates_tracks_in_every_view(monkeypatch):
+    surface = Blade(is_uphill=False)
+    surface.stop_time = 3 * surface.dt + 1e-12
+    surface.run()
+    captured = {}
+
+    monkeypatch.setattr(surface_util.Image.Image, "save", lambda *args, **kwargs: None)
+    real_close = surface_util.plt.close
+    monkeypatch.setattr(
+        surface_util.plt,
+        "close",
+        lambda fig: captured.setdefault("figure", fig),
+    )
+
+    surface._render_blade_run()
+    figure = captured["figure"]
+    expected = surface._track_xyz(np.asarray(surface.log)[::2][-1, 1:7])
+    projections = {
+        ("X (m)", "Y (m)"): (0, 1),
+        ("Y (m)", "Z (m)"): (1, 2),
+        ("X (m)", "Z (m)"): (0, 2),
+    }
+
+    try:
+        for axis in figure.axes:
+            track_collections = [
+                collection
+                for collection in axis.collections
+                if collection.get_label() == "tracks"
+            ]
+            assert len(track_collections) == 1
+
+            projection = (
+                None
+                if axis.name == "3d"
+                else projections.get((axis.get_xlabel(), axis.get_ylabel()))
+            )
+            if projection is not None:
+                np.testing.assert_allclose(
+                    np.asarray(track_collections[0].get_segments()),
+                    expected[:, :, projection],
+                )
+
+        side_axis = next(
+            axis
+            for axis in figure.axes
+            if (axis.get_xlabel(), axis.get_ylabel()) == ("X (m)", "Z (m)")
+        )
+        assert "tracks" in [
+            text.get_text() for text in side_axis.get_legend().get_texts()
+        ]
+    finally:
+        real_close(figure)
+
+
 @pytest.mark.parametrize(
     "body_kwargs",
     ({}, {"is_surface_pitched": True}, {"is_backwards": True}),
@@ -907,7 +990,7 @@ def test_rolled_blade_points_interpolate_between_rolled_endpoints():
     assert np.ptp(blade[:, 2]) > 0.0
 
 
-def test_body_contact_updates_only_pitch_on_forward_slope():
+def test_whole_track_contact_updates_pose_on_forward_slope():
     surface = Blade(is_uphill=False)
     slope = 0.2
     for i in range(len(surface.us)):
@@ -923,9 +1006,10 @@ def test_body_contact_updates_only_pitch_on_forward_slope():
 
     surface._body_update()
 
-    assert surface.q[2] == pytest.approx(slope * surface.q[1])
+    R = surface._rotation_lg(*surface.q[3:6])
+    assert surface.q[2] == pytest.approx(surface._resting_height(R), abs=1e-8)
     assert surface.q[4] != pytest.approx(0.0)
-    assert surface.q[3] == pytest.approx(0.17)
+    assert surface.q[3] == pytest.approx(0.0, abs=1e-9)
     assert surface.q[5] == pytest.approx(np.pi / 2)
 
 
@@ -949,10 +1033,53 @@ def test_blade_keeps_local_offset_on_forward_slope():
     np.testing.assert_allclose(
         local_midpoint, [surface.L, 0.0, -surface.blade_cut_depth], atol=1e-12
     )
-    assert midpoint[2] == pytest.approx(
-        surface._point_height(midpoint)[1] - surface.blade_cut_depth,
-        abs=1e-6,
-    )
+    R = surface._rotation_lg(*surface.q[3:6])
+    assert surface.q[2] == pytest.approx(surface._resting_height(R), abs=1e-8)
+
+
+def test_blade_enabled_pose_uses_complete_tracks_instead_of_q_contact():
+    surface = Blade(is_uphill=False)
+
+    # Flatten the terrain, then raise only the small patch beneath q. Both
+    # track centerlines are laterally clear of it, so q must not act as a
+    # third, artificial support point.
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            surface.grid_pts[i][j] = (x, y, 0.0)
+            surface.surf_grid.nodes[(i, j)]["z"] = 0.0
+
+    i, j = surface._grid_cell(surface.q)
+    for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)):
+        x, y, _ = surface.grid_pts[ci][cj]
+        surface.grid_pts[ci][cj] = (x, y, 1.0)
+        surface.surf_grid.nodes[(ci, cj)]["z"] = 1.0
+
+    surface.is_initalization = True
+    surface._body_update()
+
+    assert surface._point_height(surface.q)[1] == pytest.approx(1.0)
+    assert surface.q[2] == pytest.approx(0.0, abs=surface.contact_tol)
+    R = surface._rotation_lg(*surface.q[3:6])
+    assert surface.q[2] == pytest.approx(surface._resting_height(R))
+
+
+def test_blade_enabled_pose_balances_and_clears_entire_tracks():
+    surface = Blade(is_uphill=True)
+    R = surface._rotation_lg(*surface.q[3:6])
+    support = surface._support_heights(R)
+
+    assert surface.l == pytest.approx(2.349)
+    assert support.max() <= surface.q[2] + surface.contact_tol
+    assert surface.q[2] == pytest.approx(surface._resting_height(R))
+
+
+def test_commanded_blade_pitch_does_not_replace_whole_track_balance():
+    shallow = Blade(is_uphill=True, blade_pitch=0.0)
+    deep = Blade(is_uphill=True, blade_pitch=0.3)
+
+    np.testing.assert_allclose(shallow.q, deep.q, atol=1e-12)
+    assert shallow.blade_cut_depth != pytest.approx(deep.blade_cut_depth)
 
 
 def test_blade_descends_with_q_after_surface_is_cut():
@@ -1022,7 +1149,7 @@ def test_unrolled_transition_and_cut_are_uniform_across_blade_width():
         np.testing.assert_allclose(depths[:, j], depths[0, j], atol=2e-7)
 
 
-def test_contact_pitch_uses_cut_floor_pitch_after_cutoff_depth():
+def test_contact_pitch_still_balances_tracks_after_cutoff_depth():
     surface = Blade(is_uphill=False)
     cutoff_q_depth = (
         surface.max_world_cut_depth - surface.blade_cut_depth
@@ -1039,13 +1166,10 @@ def test_contact_pitch_uses_cut_floor_pitch_after_cutoff_depth():
     orient = surface.q[3:6].copy()
     orient[1] = surface_pitch
 
-    R = surface._rotation_lg(*orient)
-    blade_midpoint = surface.q[:3] + R @ np.array(
-        [surface.L, 0.0, -surface.blade_cut_depth]
-    )
-    assert surface._contact_pitch(orient) == pytest.approx(
-        surface._starting_pitch(blade_midpoint)
-    )
+    pitch = surface._contact_pitch(orient)
+    R = surface._rotation_lg(orient[0], pitch, orient[2])
+    front, back = surface._half_resting_heights(R)
+    assert front == pytest.approx(back, abs=surface.contact_tol)
 
 
 def test_rolled_soil_is_never_cut_below_the_blade_plane():
