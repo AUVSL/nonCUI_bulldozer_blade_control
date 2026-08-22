@@ -4,18 +4,45 @@ addpath(genpath(fullfile(project_dir, 'controllers')));
 addpath(genpath(fullfile(project_dir, 'sim_helper_functions')));
 addpath(genpath(fullfile(project_dir, 'paper_preperation')));
 
-% load in params
-soil               = 1;   % (0 compact, 1 loose)
-noise_power        = 2e-7;
-controllerIndex1234 = 4;
+% Select one of the proposed-fuzzy cases reported in Table 8 of the paper.
+%   1: compact soil with observer noise
+%   2: loose soil with observer noise
+%   3: compact soil without observer noise
+case_id = 1;
+controllerIndex1234 = 4; % 4 selects the proposed fuzzy controller
+
+switch case_id
+    case 1
+        soil               = 0.1;
+        noise_power        = 2e-7;
+        desired_depth_m    = -0.03;
+        desired_angle_rad  = -0.005;
+        surface_angle_rad  =  0.005;
+    case 2
+        soil               = 0.9;
+        noise_power        = 2e-7;
+        desired_depth_m    = -0.04;
+        desired_angle_rad  = -0.003;
+        surface_angle_rad  =  0.003;
+    case 3
+        soil               = 0.1;
+        noise_power        = 0;
+        desired_depth_m    = -0.03;
+        desired_angle_rad  = -0.005;
+        surface_angle_rad  =  0.005;
+    otherwise
+        error('case_id must be 1, 2, or 3.');
+end
+
 run("parameters.m") % run file with params
 
 padding = 0; % padding since simulink drops the first value of input matrices
 
-% control varaibles
-desired_depth = [padding, -0.03];
-desired_abg   = [-0.05, 1, -0.05]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
-surface_abg   = [ 0.05, 0,  0.05];   % the roll, pitch, yaw of the surface (radians)
+% Control variables. The model currently obtains the depth command from
+% blade_height.fis using soil; desired_depth is retained for reference.
+desired_depth = [padding, desired_depth_m];
+desired_abg   = [desired_angle_rad, 1, desired_angle_rad]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
+surface_abg   = [surface_angle_rad, 0, surface_angle_rad]; % the roll, pitch, yaw of the surface (radians)
 bld_ang       = [0.0; 0.0; 0.0];     % angle of blade about it local x, y, and z-axis
 F_track       = [60000; 60000];      % drive wheel torques for the left and right tracks
 
@@ -47,6 +74,6 @@ initial_q      = q; % needed for the global body velocity integrator
 % run the simulation
 out12 = sim('simulation_3d').output.data;
 
-% plots and errorserrors
+% plots and errors
 [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out12);
 [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y]*1000

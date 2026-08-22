@@ -2,9 +2,9 @@
 Name='blade_ang'
 Type='mamdani'
 Version=2.0
-NumInputs=3
-NumOutputs=3
-NumRules=9
+NumInputs=1
+NumOutputs=1
+NumRules=2
 AndMethod='min'
 OrMethod='max'
 ImpMethod='min'
