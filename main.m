@@ -4,6 +4,9 @@ addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_fu
 addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
 
 % load in params
+soil               = 1;   % (0 compact, 1 loose)
+noise_power        = 2e-7;
+controllerIndex1234 = 4;
 run("parameters.m") % run file with params
 
 padding = 0; % padding since simulink drops the first value of input matrices

@@ -27,8 +27,28 @@ gamma_g                   = 1640 * 9.81; % weight per cubic meter (N/m^3)
 dt                        = 0.001; % time step (s)
 stop_time                 = 2; %simulation stop time (s)
 
+derivative_filter_samples = 1;
+
 % controller gains
 KpP = -3.0;
+
+KpPD = -3.0;
+KdPD = -0.2;
+
+KpPI = -3.1;
+KiPI = -4.0;
+
+KpPID = -3.0;
+KiPID = -4.1;
+KdPID = -0.1;
+
+KpCong = 325;
+KiCong = 6;
+KdCong = 6;
+
+KpProp = -15;
+KiProp = 0;
+KdProp = 0;
 
 turn_vel_limit = 2*velocity_limit / b;
 
@@ -37,3 +57,5 @@ beta0 = pi/180 * beta0_deg;
 
 % determine max torque commanded based on what the soil can support
 max_torque = c + m*grav / (w*l) * tan(beta0);
+
+

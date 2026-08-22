@@ -1,0 +1,69 @@
+[System]
+Name='comparision_Kp'
+Type='mamdani'
+Version=2.0
+NumInputs=2
+NumOutputs=1
+NumRules=25
+AndMethod='prod'
+OrMethod='probor'
+ImpMethod='min'
+AggMethod='max'
+DefuzzMethod='centroid'
+
+[Input1]
+Name='E'
+Range=[-3.14159265358979 3.14159265358979]
+NumMFs=5
+MF1='NB':'trapmf',[-3.142 -3.142 -2e1 -1e1]
+MF2='NS':'trimf',[-2e1 -1e1 0]
+MF3='Z':'trimf',[-1e1 0 1e1]
+MF4='PS':'trimf',[0 1e1 2e1]
+MF5='PB':'trapmf',[1e1 2e1 3.142 3.142]
+
+[Input2]
+Name='EC'
+Range=[-3.14159265358979 3.14159265358979]
+NumMFs=5
+MF1='NB':'trapmf',[-3.14159265358979 3.14159265358979 -2e1 -1e1]
+MF2='NS':'trimf',[-2e1 -1e1 0]
+MF3='Z':'trimf',[-1e1 0 1e1]
+MF4='PS':'trimf',[0 1e1 2e1]
+MF5='PB':'trapmf',[1e1 2e1 3.14159265358979 3.14159265358979]
+
+[Output1]
+Name='Kp'
+Range=[-1 1]
+NumMFs=5
+MF1='PB':'gauss2mf',[0.1698 0.96 0.1698 1.04]
+MF2='PS':'gauss2mf',[0.1698 0.46 0.1698 0.54]
+MF3='Z':'gauss2mf',[0.1698 -0.04 0.1698 0.04]
+MF4='NS':'gauss2mf',[0.1698 -0.54 0.1698 -0.46]
+MF5='NB':'gauss2mf',[0.1698 -1.04 0.1698 -0.96]
+
+[Rules]
+1 1, 1 (1) : 1
+1 2, 2 (1) : 1
+1 3, 2 (1) : 1
+1 4, 2 (1) : 1
+1 5, 3 (1) : 1
+2 1, 2 (1) : 1
+2 2, 2 (1) : 1
+2 3, 2 (1) : 1
+2 4, 3 (1) : 1
+2 5, 4 (1) : 1
+3 1, 2 (1) : 1
+3 2, 2 (1) : 1
+3 3, 3 (1) : 1
+3 4, 4 (1) : 1
+3 5, 4 (1) : 1
+4 1, 2 (1) : 1
+4 2, 3 (1) : 1
+4 3, 4 (1) : 1
+4 4, 4 (1) : 1
+4 5, 4 (1) : 1
+5 1, 3 (1) : 1
+5 2, 4 (1) : 1
+5 3, 4 (1) : 1
+5 4, 4 (1) : 1
+5 5, 5 (1) : 1
