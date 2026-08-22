@@ -1,7 +1,8 @@
 close all; format longG; clc; clear
-addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\controllers'));
-addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\sim_helper_functions'));
-addpath(genpath('C:\Users\srd2\Code\nonCUI_bulldozer_blade_control\paper_prep'));
+project_dir = fileparts(mfilename('fullpath'));
+addpath(genpath(fullfile(project_dir, 'controllers')));
+addpath(genpath(fullfile(project_dir, 'sim_helper_functions')));
+addpath(genpath(fullfile(project_dir, 'paper_preperation')));
 
 % load in params
 soil               = 1;   % (0 compact, 1 loose)
