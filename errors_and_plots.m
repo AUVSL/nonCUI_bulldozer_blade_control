@@ -1,4 +1,12 @@
-function [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(sim_out)
+function [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y, ss_depth_bound] = errors_and_plots(sim_out, ss_window_fraction)
+    % Treat the final 20% of samples as steady state unless specified.
+    if nargin < 2
+        ss_window_fraction = 0.70;
+    end
+    validateattributes(ss_window_fraction, {'numeric'}, ...
+        {'scalar', 'real', 'finite', '>', 0, '<=', 1}, ...
+        mfilename, 'ss_window_fraction');
+
     % unpack the data from the simulation
     time        = reshape(sim_out(:, 1, :),  length(sim_out(:, 1, :)),  1);
     body_x      = reshape(sim_out(:, 2, :),  length(sim_out(:, 2, :)),  1);
@@ -15,6 +23,15 @@ function [rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(sim_out)
     [rmse_r, me_r] = errors( roll_error);
     [rmse_d, me_d] = errors(depth_error);
     [rmse_y, me_y] = errors(  yaw_error);
+
+    % Empirical steady-state depth-error bound over the requested tail window.
+    sample_count = numel(depth_error);
+    ss_start_idx = max(1, floor((1 - ss_window_fraction) * sample_count) + 1);
+    ss_depth_bound = max(abs(depth_error(ss_start_idx:end)));
+    fprintf(['Depth steady-state error bound over the final %.0f%% ' ...
+             '(t >= %.3f s): |e_depth| <= %.6g m (%.3f mm)\n'], ...
+            100 * ss_window_fraction, time(ss_start_idx), ...
+            ss_depth_bound, 1000 * ss_depth_bound);
     
     % plot run information in a 3 by 2 tiles array
     tiledlayout(3,2)

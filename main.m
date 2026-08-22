@@ -75,5 +75,5 @@ initial_q      = q; % needed for the global body velocity integrator
 out12 = sim('simulation_3d').output.data;
 
 % plots and errors
-[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y] = errors_and_plots(out12);
-[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y]*1000
+[rmse_r, me_r, rmse_d, me_d, rmse_y, me_y, ss_depth_bound] = errors_and_plots(out12);
+[rmse_r, rmse_d, rmse_y, ss_depth_bound, abs(ss_depth_bound/ desired_depth_m)/10]*1000
