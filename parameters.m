@@ -44,10 +44,12 @@ KiPI  = -8.92;
 KpCong = 85.24;
 KiCong = 7.732;
 KdCong = 7.732;
+KinputCong = 1;
 
 KpProp = -18.028;
 KiProp = 0;
 KdProp = 0;
+KinputProp = 1;
 
 turn_vel_limit = 2*velocity_limit / b;
 
