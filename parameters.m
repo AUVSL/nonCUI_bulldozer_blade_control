@@ -34,23 +34,18 @@ stop_time                 = 2; %simulation stop time (s)
 derivative_filter_samples = 1;
 
 % controller gains
-KpP = -3.0;
+KpP = -3.772;
 
-KpPD = -3.0;
-KdPD = -0.2;
 
-KpPI = -3.1;
-KiPI = -4.0;
-
-KpPID = -3.0;
-KiPID = -4.1;
-KdPID = -0.1;
+%KiPI = -4.0; % 1st round 
+KpPI = -3.772; % 2nd round
+KiPI  = -8.92
 
 KpCong = 325;
 KiCong = 6;
 KdCong = 6;
 
-KpProp = -15;
+KpProp = -18.028;
 KiProp = 0;
 KdProp = 0;
 
