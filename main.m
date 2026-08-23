@@ -35,6 +35,7 @@ switch case_id
 end
 
 run("parameters.m") % run file with params
+desired_depth_override_m = desired_depth_m;
 
 padding = 0; % padding since simulink drops the first value of input matrices
 

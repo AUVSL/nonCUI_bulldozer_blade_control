@@ -31,6 +31,11 @@ end
 dt                        = 0.001; % time step (s)
 stop_time                 = 2; %simulation stop time (s)
 
+% Depth-reference override. Paper cases leave this disabled so
+% blade_height.fis selects depth from soil compactness.
+use_direct_depth          = false;
+desired_depth_override_m  = -0.03;
+
 derivative_filter_samples = 1;
 
 % controller gains
