@@ -39,11 +39,11 @@ KpP = -3.772;
 
 %KiPI = -4.0; % 1st round 
 KpPI = -3.772; % 2nd round
-KiPI  = -8.92
+KiPI  = -8.92;
 
-KpCong = 325;
-KiCong = 6;
-KdCong = 6;
+KpCong = 85.24;
+KiCong = 7.732;
+KdCong = 7.732;
 
 KpProp = -18.028;
 KiProp = 0;
