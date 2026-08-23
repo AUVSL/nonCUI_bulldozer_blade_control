@@ -42,14 +42,14 @@ KpPI = -3.772; % 2nd round
 KiPI  = -8.92;
 
 KpCong = 85.24;
-KiCong = 7.732;
-KdCong = 7.732;
-KinputCong = 1;
+KiCong = 6.544;
+KdCong = 6.544;
+KinputCong = 0.4132;
 
-KpProp = -18.028;
-KiProp = 0;
+KpProp = -37;
+KiProp = -47.8;
 KdProp = 0;
-KinputProp = 1;
+KinputProp = 0.4132;
 
 turn_vel_limit = 2*velocity_limit / b;
 
