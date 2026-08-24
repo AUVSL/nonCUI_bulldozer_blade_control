@@ -1,8 +1,8 @@
 [System]
-Name='blade_ang'
+Name='paper_blade_ang'
 Type='mamdani'
 Version=2.0
-NumInputs=3
+NumInputs=1
 NumOutputs=1
 NumRules=2
 AndMethod='min'
@@ -13,18 +13,18 @@ DefuzzMethod='centroid'
 
 [Input1]
 Name='yaw_error'
-Range=[0 0.5]
+Range=[0 3.14159265358979]
 NumMFs=2
 MF1='zero':'trimf',[0 0 2e-1]
-MF2='nonZero':'trapmf',[0 2e-1  0.5]
+MF2='nonZero':'trapmf',[0 2e-1 3.142 3.142]
 
 [Output1]
 Name='yaw_vel'
-Range=[-15.5 0.5]
+Range=[-37.5 0.5]
 NumMFs=2
-MF1='nonZero':'trimf',[-15.5 -15 -14.5]
-MF2='zero':'trimf',[-0.5 0 0.5]
+MF1='zero':'trimf',[-0.5 0 0.5]
+MF2='nonZero':'trimf',[-37.5 -37 -36.5]
 
 [Rules]
 1, 1 (1) : 1
-2, 1 (1) : 1
+2, 2 (1) : 1

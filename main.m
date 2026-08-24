@@ -4,10 +4,12 @@ addpath(genpath(fullfile(project_dir, 'controllers')));
 addpath(genpath(fullfile(project_dir, 'sim_helper_functions')));
 addpath(genpath(fullfile(project_dir, 'paper_preperation')));
 
-% Select one of the proposed-fuzzy cases reported in Table 8 of the paper.
+% Select one of the proposed-fuzzy comparison cases. Cases 1-3 reproduce
+% Table 8 of the paper; Case 4 uses the added mixed-soil depth FIS rule.
 %   1: compact soil with observer noise
 %   2: loose soil with observer noise
 %   3: compact soil without observer noise
+%   4: mixed soil with observer noise
 case_id = 1;
 controllerIndex1234 = 4; % 4 selects the proposed fuzzy controller
 
@@ -30,17 +32,22 @@ switch case_id
         desired_depth_m    = -0.03;
         desired_angle_rad  = -0.005;
         surface_angle_rad  =  0.005;
+    case 4
+        soil               = 0.5;
+        noise_power        = 2e-7;
+        desired_depth_m    = -0.035;
+        desired_angle_rad  = -0.004;
+        surface_angle_rad  =  0.004;
     otherwise
-        error('case_id must be 1, 2, or 3.');
+        error('case_id must be 1, 2, 3, or 4.');
 end
 
 run("parameters.m") % run file with params
-desired_depth_override_m = desired_depth_m;
 
 padding = 0; % padding since simulink drops the first value of input matrices
 
-% Control variables. The model currently obtains the depth command from
-% blade_height.fis using soil; desired_depth is retained for reference.
+% The model obtains the depth command from blade_height.fis using soil;
+% desired_depth is retained for reporting and reference.
 desired_depth = [padding, desired_depth_m];
 desired_abg   = [desired_angle_rad, 1, desired_angle_rad]; % [roll (rad.), control pitch (1) or not (0), yaw (rad.)]
 surface_abg   = [surface_angle_rad, 0, surface_angle_rad]; % the roll, pitch, yaw of the surface (radians)

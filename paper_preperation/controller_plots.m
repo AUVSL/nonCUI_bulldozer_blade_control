@@ -2,15 +2,19 @@ close all; clc;
 script_dir = fileparts(mfilename('fullpath'));
 controllers_dir = fullfile(fileparts(script_dir), 'controllers');
 addpath(genpath(controllers_dir));
-fis1 = readfis('blade_ang.fis');
+fis1 = readfis('paper_blade_ang.fis');
 fis2 = readfis('blade_height.fis');
 % plotfis(fis)
 
-plotter2(fis1,  'input', 1, [0 2e-2 0 1], {'zero', 'non-zero'}, 3, {'--', '-'})
-plotter2(fis1, 'output', 1, [-0.2 1.2 0 1], {'zero', 'non-zero'}, 3, {'--', '-'})
+plotter2(fis1, 'input', 1, [0 0.4 0 1], ...
+    {'zero', 'non-zero'}, 3, {'--', '-'})
+plotter2(fis1, 'output', 1, [-38 1 0 1], ...
+    {'zero', 'non-zero'}, 3, {'--', '-'})
 
-plotter2(fis2,  'input', 1, [0 1. 0 1], {'compact', 'loose'}, 3, {'--', '-'})
-plotter2(fis2, 'output', 1, [-2e-3 -5e-4 0 1], {'low', 'lower'}, 3, {'--', '-'})
+plotter2(fis2, 'input', 1, [0 1 0 1], ...
+    {'compact', 'mixed', 'loose'}, 3, {'--', '-', '-.'})
+plotter2(fis2, 'output', 1, [-0.041 -0.029 0 1], ...
+    {'low', 'middle', 'lower'}, 3, {'--', '-', '-.'})
 
 function[] = plotter2(fis, io, x1, x2, x3, x4, x5)
     f = figure;
