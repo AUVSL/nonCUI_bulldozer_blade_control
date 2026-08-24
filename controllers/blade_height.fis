@@ -24,8 +24,8 @@ Name='blade_height'
 Range=[-0.041 -0.029]
 NumMFs=3
 MF1='low':'trimf',[-0.031 -0.03 -0.029]
-MF2='middle':'trimf',[-0.036 -0.035 -0.034]
-MF3='lower':'trimf',[-0.041 -0.04 -0.039]
+MF2='lower':'trimf',[-0.036 -0.035 -0.034]
+MF3='lowest':'trimf',[-0.041 -0.04 -0.039]
 
 [Rules]
 1, 1 (1) : 1
