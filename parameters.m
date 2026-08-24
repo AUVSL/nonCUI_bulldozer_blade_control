@@ -49,7 +49,7 @@ KiPI  = -8.92;
 KpCong = 85.24;
 KiCong = 6.544;
 KdCong = 6.544;
-KinputCong = 0.4132;
+KinputCong = 0.388;
 
 KpProp = -37;
 KiProp = -47.8;
