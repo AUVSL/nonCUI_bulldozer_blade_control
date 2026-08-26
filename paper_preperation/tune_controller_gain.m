@@ -490,14 +490,14 @@ function fig = plot_error_vs_gain(result)
         'Padding', 'compact', 'TileSpacing', 'compact');
 
     first_axes = nexttile(layout);
-    plot_metric_curves(first_axes, log_data, true);
+    first_legend = plot_metric_curves(first_axes, log_data, true);
     title(first_axes, 'Base-10 logarithmic grid', ...
-        'FontSize', 15, 'FontWeight', 'normal');
+        'FontSize', 17, 'FontWeight', 'normal');
 
     second_axes = nexttile(layout);
     plot_metric_curves(second_axes, linear_data, false);
     title(second_axes, linear_title, ...
-        'FontSize', 15, 'FontWeight', 'normal');
+        'FontSize', 17, 'FontWeight', 'normal');
 
     axes_handles = [first_axes, second_axes];
     for axes_handle = axes_handles
@@ -505,15 +505,22 @@ function fig = plot_error_vs_gain(result)
         xlabel(axes_handle, sprintf('%s magnitude', result.Spec.GainLabel));
         ylabel(axes_handle, 'RMSE');
         grid(axes_handle, 'on');
-        set(axes_handle, 'FontSize', 14, 'Box', 'off');
+        set(axes_handle, 'FontSize', 16, 'Box', 'off');
     end
 
     title(layout, sprintf('%s - %s error versus gain', ...
         result.Spec.ControllerName, result.Spec.GainLabel), ...
-        'FontSize', 16, 'FontWeight', 'normal');
+        'FontSize', 18, 'FontWeight', 'normal');
+
+    if string(result.Spec.ID) == "fuzzy_pid_kp"
+        center_legend(first_axes, first_legend, 0.74);
+    elseif any(string(result.Spec.ID) == ...
+            ["fuzzy_pid_id_pair", "proposed_kp", "proposed_ki"])
+        center_legend(first_axes, first_legend, 0.50);
+    end
 end
 
-function plot_metric_curves(axes_handle, table_data, logarithmic_x)
+function legend_handle = plot_metric_curves(axes_handle, table_data, logarithmic_x)
     hold(axes_handle, 'on');
     x = table_data.GainMagnitude;
     if logarithmic_x
@@ -527,14 +534,31 @@ function plot_metric_curves(axes_handle, table_data, logarithmic_x)
         '-s', 'LineWidth', 1.5, 'DisplayName', 'Depth RMSE (mm)');
     plot_function(axes_handle, x, table_data.YawRMSE_mrad, ...
         '--^', 'LineWidth', 1.5, 'DisplayName', 'Yaw RMSE (mrad)');
-    legend(axes_handle, 'Location', 'best', 'FontSize', 12);
+    legend_handle = legend(axes_handle, 'Location', 'best', 'FontSize', 14);
+end
+
+function center_legend(axes_handle, legend_handle, vertical_center)
+    legend_handle.Location = 'none';
+    legend_handle.Units = 'normalized';
+    original_axes_units = axes_handle.Units;
+    axes_handle.Units = 'normalized';
+    drawnow;
+
+    axes_position = axes_handle.Position;
+    legend_position = legend_handle.Position;
+    legend_position(1) = axes_position(1) + ...
+        (axes_position(3) - legend_position(3)) / 2;
+    legend_position(2) = axes_position(2) + ...
+        vertical_center * axes_position(4) - legend_position(4) / 2;
+    legend_handle.Position = legend_position;
+    axes_handle.Units = original_axes_units;
 end
 
 function add_selected_gain_line(axes_handle, selected_gain)
     limits = xlim(axes_handle);
     if selected_gain >= limits(1) && selected_gain <= limits(2)
         xline(axes_handle, selected_gain, '--', 'Selected', ...
-            'Color', [0.75, 0.1, 0.1], 'FontSize', 12, ...
+            'Color', [0.75, 0.1, 0.1], 'FontSize', 14, ...
             'HandleVisibility', 'off');
     end
 end

@@ -20,24 +20,28 @@ switch case_id
         desired_depth_m    = -0.03;
         desired_angle_rad  = -0.005;
         surface_angle_rad  =  0.005;
+        gamma_g = 1640 * grav; % compact-soil weight per cubic meter (N/m^3)
     case 2
         soil               = 0.9;
         noise_power        = 2e-7;
         desired_depth_m    = -0.04;
         desired_angle_rad  = -0.003;
         surface_angle_rad  =  0.003;
+        gamma_g = 1480 * grav; % loose-soil weight per cubic meter (N/m^3)
     case 3
         soil               = 0.1;
         noise_power        = 0;
         desired_depth_m    = -0.03;
         desired_angle_rad  = -0.005;
         surface_angle_rad  =  0.005;
+        gamma_g = 1640 * grav; % compact-soil weight per cubic meter (N/m^3)
     case 4
         soil               = 0.5;
         noise_power        = 2e-7;
         desired_depth_m    = -0.035;
         desired_angle_rad  = -0.004;
         surface_angle_rad  =  0.004;
+        gamma_g = 1560 * grav; % compact-soil weight per cubic meter (N/m^3)
     otherwise
         error('case_id must be 1, 2, 3, or 4.');
 end

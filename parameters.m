@@ -23,10 +23,12 @@ stop_distance             = 0.3;   % a length used to trigger the stop condition
 gain                      = 1/40;  % gain on the pid reprsenting the hydrolics    
 velocity_limit            = 2.222; % the maximum speed the dozer can hit (m/s)
 fill_distance             = 8;     % the distance traveled required to fill the pile (m)
-if soil < 0.5
+if soil < 0.2
     gamma_g = 1640 * grav; % compact-soil weight per cubic meter (N/m^3)
-else
+elseif soil > 0.8
     gamma_g = 1480 * grav; % loose-soil weight per cubic meter (N/m^3)
+else
+    gamma_g = 1560 * grav; % loose-soil weight per cubic meter (N/m^3)
 end
 dt                        = 0.001; % time step (s)
 stop_time                 = 2; %simulation stop time (s)
