@@ -491,11 +491,13 @@ function fig = plot_error_vs_gain(result)
 
     first_axes = nexttile(layout);
     plot_metric_curves(first_axes, log_data, true);
-    title(first_axes, 'Base-10 logarithmic grid', 'FontWeight', 'normal');
+    title(first_axes, 'Base-10 logarithmic grid', ...
+        'FontSize', 15, 'FontWeight', 'normal');
 
     second_axes = nexttile(layout);
     plot_metric_curves(second_axes, linear_data, false);
-    title(second_axes, linear_title, 'FontWeight', 'normal');
+    title(second_axes, linear_title, ...
+        'FontSize', 15, 'FontWeight', 'normal');
 
     axes_handles = [first_axes, second_axes];
     for axes_handle = axes_handles
@@ -503,12 +505,12 @@ function fig = plot_error_vs_gain(result)
         xlabel(axes_handle, sprintf('%s magnitude', result.Spec.GainLabel));
         ylabel(axes_handle, 'RMSE');
         grid(axes_handle, 'on');
-        set(axes_handle, 'FontSize', 11, 'Box', 'off');
+        set(axes_handle, 'FontSize', 14, 'Box', 'off');
     end
 
     title(layout, sprintf('%s - %s error versus gain', ...
         result.Spec.ControllerName, result.Spec.GainLabel), ...
-        'FontWeight', 'normal');
+        'FontSize', 16, 'FontWeight', 'normal');
 end
 
 function plot_metric_curves(axes_handle, table_data, logarithmic_x)
@@ -525,14 +527,15 @@ function plot_metric_curves(axes_handle, table_data, logarithmic_x)
         '-s', 'LineWidth', 1.5, 'DisplayName', 'Depth RMSE (mm)');
     plot_function(axes_handle, x, table_data.YawRMSE_mrad, ...
         '--^', 'LineWidth', 1.5, 'DisplayName', 'Yaw RMSE (mrad)');
-    legend(axes_handle, 'Location', 'best', 'FontSize', 9);
+    legend(axes_handle, 'Location', 'best', 'FontSize', 12);
 end
 
 function add_selected_gain_line(axes_handle, selected_gain)
     limits = xlim(axes_handle);
     if selected_gain >= limits(1) && selected_gain <= limits(2)
         xline(axes_handle, selected_gain, '--', 'Selected', ...
-            'Color', [0.75, 0.1, 0.1], 'HandleVisibility', 'off');
+            'Color', [0.75, 0.1, 0.1], 'FontSize', 12, ...
+            'HandleVisibility', 'off');
     end
 end
 
