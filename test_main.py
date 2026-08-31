@@ -642,7 +642,7 @@ def test_body_grid_keeps_two_axis_ramp_and_node_metadata():
         assert node["visited_last"] is False
 
 
-def test_shared_orientation_uses_blade_default_and_body_roll_hook():
+def test_shared_orientation_uses_terrain_roll_for_both_modes():
     body = _body_surface(is_uphill=False)
     blade = Surface(is_uphill=False)
     corners = [
@@ -656,9 +656,10 @@ def test_shared_orientation_uses_blade_default_and_body_roll_hook():
     body_orientation = body._point_orientation(corners)
     blade_orientation = blade._point_orientation(corners)
 
-    assert body_orientation[0] == pytest.approx(np.arctan2(-0.2, 1.0))
-    assert blade_orientation[0] == pytest.approx(0.0)
-    np.testing.assert_allclose(body_orientation[1:], blade_orientation[1:])
+    expected_roll = np.arctan2(-0.2, 1.0)
+    assert body_orientation[0] == pytest.approx(expected_roll)
+    assert blade_orientation[0] == pytest.approx(expected_roll)
+    np.testing.assert_allclose(body_orientation, blade_orientation)
 
 
 def test_body_update_keeps_return_contract_and_advances_position():

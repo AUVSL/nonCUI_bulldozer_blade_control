@@ -76,9 +76,8 @@ class _SurfaceBase:
     def _point_orientation(self, corners):
         """Return terrain-fitted roll, pitch, and yaw at ``self.q``.
 
-        Blade's historical behavior (zero terrain-induced roll) is the base
-        default.  Body supplies its prior roll formula through
-        :meth:`_surface_roll`.
+        Roll and pitch follow the terrain gradient relative to the direction
+        of travel; yaw follows that direction of travel.
         """
         grad_xy = self._bilinear_gradient(self.q, corners)
 
@@ -97,8 +96,10 @@ class _SurfaceBase:
         return np.array([roll, pitch, yaw])
 
     def _surface_roll(self, grad_xy, fwd_xy, forward_slope):
-        """Blade-default terrain-induced roll."""
-        return 0.0
+        """Return terrain-induced roll about the direction of travel."""
+        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
+        lateral_slope = np.dot(grad_xy, left_xy)
+        return np.arctan2(lateral_slope, np.sqrt(1.0 + forward_slope**2))
 
     def _bilinear_gradient(self, point, corners):
         """Gradient of the bilinear height patch in the global xy-plane."""
@@ -155,7 +156,7 @@ class _SurfaceBase:
         )
 
     def _contact_angle(self, imbalance, fitted):
-        """Solve for a balanced contact angle using Blade's root solver."""
+        """Solve for a balanced contact angle using Blade's root solver (the Illinois method of Regula Falsi)."""
         limit, span = np.pi / 2 - 1e-3, 0.25
         while True:
             lo, hi = max(fitted - span, -limit), min(fitted + span, limit)
@@ -261,14 +262,6 @@ class _BodyMode(_SurfaceBase):
         if self.enable_blade:
             return super()._initialize_surface_node(node)
         node["visited_last"] = False
-
-    def _surface_roll(self, grad_xy, fwd_xy, forward_slope):
-        """Preserve Body's terrain-induced lateral roll."""
-        if self.enable_blade:
-            return super()._surface_roll(grad_xy, fwd_xy, forward_slope)
-        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
-        lateral_slope = np.dot(grad_xy, left_xy)
-        return np.arctan2(lateral_slope, np.sqrt(1.0 + forward_slope**2))
 
     def _render_body_run(self, show_neighbors: bool = False):
         print("Rendering GIF...")
@@ -663,7 +656,7 @@ class _BodyMode(_SurfaceBase):
 
         # seed the body height + orientation from the tile under the center of mass
         neighbors_q, self.q[2] = self._point_height(self.q)
-        self.q[3:6]            = self._point_orientation(self._get_neighbor_points(self.q))
+        self.q[3:6]            = self._point_orientation(neighbors_q)
 
         # rigid contact-averaged solve, then build both tracks as parallel offsets
         track_points, track_neighbors = self._body_update_iteration()
@@ -685,7 +678,7 @@ class _BodyMode(_SurfaceBase):
         or above the surface: crossing a crest or a uniform slope the body
         really does lie flush on the tile it is on. Only when the snap would
         submerge part of a track does the loop below solve, alternating
-        _contact_roll and _contact_pitch to settle the pose onto the ground so
+        _body_contact_roll and _contact_pitch to settle the pose onto the ground so
         no quarter of the body hangs, with the height resting on the highest
         support.
         """
@@ -704,11 +697,11 @@ class _BodyMode(_SurfaceBase):
 
     def _track_xyz(self, pose):
         """Return [right, left] x [front, center, back] track points."""
-        pose = np.asarray(pose)
-        R = self._rotation_lg(*pose[3:6])
+        pose       = np.asarray(pose)
+        R          = self._rotation_lg(*pose[3:6])
         half_width = R @ np.array([0.0, self.b / 2, 0.0])
         half_track = R @ np.array([self.l / 2, 0.0, 0.0])
-        centers = np.array([pose[:3] - half_width, pose[:3] + half_width])
+        centers    = np.array([pose[:3] - half_width, pose[:3] + half_width])
         return np.stack(
             [centers + half_track, centers, centers - half_track], axis=1
         )
@@ -720,7 +713,7 @@ class _BodyMode(_SurfaceBase):
             # Roll and pitch settle onto the ground so no quarter of the body
             # hangs. Yaw is the heading and cannot change during settling.
             new_orient = self.q[3:6].copy()
-            new_orient[0] = self._contact_roll(new_orient)
+            new_orient[0] = self._body_contact_roll(new_orient)
             new_orient[1] = self._body_contact_pitch(new_orient)
             new_z = self._resting_height(self._rotation_lg(*new_orient))
 
@@ -732,7 +725,7 @@ class _BodyMode(_SurfaceBase):
             if converged:
                 break
 
-    def _contact_roll(self, orient):
+    def _body_contact_roll(self, orient):
         """Roll (at orient's pitch and yaw) that leaves both tracks on the ground."""
         def imbalance(roll):
             z_left, z_right = self._track_resting_heights(
@@ -743,7 +736,7 @@ class _BodyMode(_SurfaceBase):
     def _track_resting_heights(self, R):
         """
         The lowest-height question asked of each track on its own, as
-        (left, right). _contact_roll balances the pair.
+        (left, right). _body_contact_roll balances the pair.
         """
         support = self._support_heights(R)
         return float(support[1].max()), float(support[0].max())
@@ -753,7 +746,7 @@ class _BodyMode(_SurfaceBase):
         Lowest body height each quarter of the contact patch calls for, as a
         [right, left] x [back, front] array. The rigid body can only rest at the
         highest of the four, so any quarter asking for less hangs clear of the
-        ground unless the pose balances them: _contact_roll balances left
+        ground unless the pose balances them: _body_contact_roll balances left
         against right, _contact_pitch front against back.
 
         The halves overlap at the track midpoint, so a body pivoting on a peak
