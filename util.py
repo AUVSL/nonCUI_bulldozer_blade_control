@@ -9,7 +9,7 @@ from PIL import Image
 from matplotlib.patches import Polygon
 
 
-class _SurfaceBase:
+class _Surface:
     """Terrain geometry shared by both modes of :class:`Surface`.
 
     The defaults follow blade-enabled behavior. ``_BodyMode`` customizes the
@@ -184,7 +184,7 @@ class _SurfaceBase:
         return angle
 
 
-class _BodyMode(_SurfaceBase):
+class _DozerTrackSimulation(_Surface):
     def _initialize_body_mode(self, is_uphill=True, is_surface_pitched: bool = False,
                               is_surface_rolled: bool = False, is_backwards: bool = False):
         self.enable_blade = False
@@ -218,7 +218,6 @@ class _BodyMode(_SurfaceBase):
         self.log                = []
         self.neighbor_points    = []
         self.neighbor_log       = []
-        self.point_log          = []  # per frame: (3, 6) rows front, center, back
         
         # set up the surface grid
         self.u_range       = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
@@ -242,10 +241,9 @@ class _BodyMode(_SurfaceBase):
                           for j in range(len(self.vs))] for i in range(len(self.us))]
 
         # put track on the surface at the start of the simulation
-        points, neighbor_points = self._body_update()
+        neighbor_points = self._body_update()
         self.log.append([0, *self.q])
-        self.point_log.append(np.array(points[1:])) 
-        self.neighbor_log.append(np.vstack(neighbor_points)) 
+        self.neighbor_log.append(np.array(neighbor_points))
 
     def _subdivision_factor(self):
         if self.enable_blade:
@@ -269,7 +267,9 @@ class _BodyMode(_SurfaceBase):
         # set axis limits based on the logged data (and neighbor points, if any)
         margin = 0.5
         data          = np.array(self.log)[::2] # every 2nd frame represented to speed up rendering
-        point_data    = np.array(self.point_log)[::2]  # (frames, 6, 6): right front/center/back then left front/center/back
+        track_xyz     = np.array([self._track_xyz(row[1:7]).reshape(-1, 3) for row in data])
+        track_orient  = np.broadcast_to(data[:, None, 4:7], track_xyz.shape)
+        point_data    = np.concatenate((track_xyz, track_orient), axis=2)
         front_data,  center_data,  back_data  = point_data[:, 0], point_data[:, 1], point_data[:, 2]  # right track
         lfront_data, lcenter_data, lback_data = point_data[:, 3], point_data[:, 4], point_data[:, 5]  # left track
         track_pts     = point_data.reshape(-1, point_data.shape[-1])  # (frames*6, 6): every logged track point
@@ -648,53 +648,6 @@ class _BodyMode(_SurfaceBase):
         plt.close(fig)
         print(f"Saved {fname}")
 
-    def _tracked_body_update(self):
-        if not self.is_initalization:
-            self.q += self.dt * self.q_dot
-        else:
-            self.is_initalization = False
-
-        # seed the body height + orientation from the tile under the center of mass
-        neighbors_q, self.q[2] = self._point_height(self.q)
-        self.q[3:6]            = self._point_orientation(neighbors_q)
-
-        # rigid contact-averaged solve, then build both tracks as parallel offsets
-        track_points, track_neighbors = self._body_update_iteration()
-
-        points          = [self.q, *track_points]
-        neighbor_points = [neighbors_q, *track_neighbors]
-        return points, neighbor_points
-
-    def _body_update_iteration(self):
-        """
-        Settle one rigid-body pose (height + roll/pitch/yaw) and return the six
-        track points as [right, left] x [front, center, back]. The body is
-        rigid, so both tracks share a single half_track vector and stay parallel
-        by construction.
-
-        _body_update has already snapped the body flush to the tile under the
-        center of mass (height from _bilinear_height, roll/pitch from that
-        tile's gradient). Keep that snap whenever it leaves every track point on
-        or above the surface: crossing a crest or a uniform slope the body
-        really does lie flush on the tile it is on. Only when the snap would
-        submerge part of a track does the loop below solve, alternating
-        _body_contact_roll and _contact_pitch to settle the pose onto the ground so
-        no quarter of the body hangs, with the height resting on the highest
-        support.
-        """
-        # deepest penetration of the snapped pose; 1e-15 absorbs floating point error
-        is_under_ground = (self._resting_height(self._rotation_lg(*self.q[3:6])) - self.q[2]) > 1e-15
-        if is_under_ground:
-            self._settle_tracks(self.q[3:6])
-
-        # Rebuild both tracks rigidly from the converged pose.
-        orient = self.q[3:6].copy()
-        track_xyz = self._track_xyz(self.q).reshape(-1, 3)
-
-        track_points    = [np.concatenate((xyz, orient))           for xyz in track_xyz]
-        track_neighbors = [np.array(self._get_neighbor_points(xyz)) for xyz in track_xyz]
-        return track_points, track_neighbors
-
     def _track_xyz(self, pose):
         """Return [right, left] x [front, center, back] track points."""
         pose       = np.asarray(pose)
@@ -823,7 +776,7 @@ class _BodyMode(_SurfaceBase):
         """
         return float(self._support_heights(R).max())
 
-class Surface(_BodyMode):
+class DozerSimulation(_DozerTrackSimulation):
     """Surface-aware bulldozer with an optional deforming blade."""
 
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
@@ -944,10 +897,6 @@ class Surface(_BodyMode):
             (*self.grid_pts[i + 1][j + 1][:2], self.starting_grid_heights[i + 1, j + 1]),
         )
         return self._bilinear_height(point, corners)
-
-    def _contact_pitch(self, orient):
-        """Pitch that balances the front and rear halves of both tracks."""
-        return self._body_contact_pitch(orient)
 
     def run_and_plot(self, show_neighbors: bool = False):
         """Run the simulation and render the active body/blade view."""
@@ -1357,7 +1306,7 @@ class Surface(_BodyMode):
                 neighbor_points = self._body_update()
                 blade_points, _ = self._blade_update(deform=False)
             else:
-                points, neighbor_points = self._body_update()
+                neighbor_points = self._body_update()
 
             self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
 
@@ -1370,24 +1319,17 @@ class Surface(_BodyMode):
                 self.blade_log.append(blade_points)
                 self.grid_log.append(self._grid_heights())
             else:
-                self.point_log.append(np.array(points[1:]))
-                self.neighbor_log.append(np.vstack(neighbor_points))
+                self.neighbor_log.append(np.array(neighbor_points))
 
     def _body_update(self):
-        #TODO: see if this if should go after the q update
-        if not self.enable_blade:
-            return self._tracked_body_update()
-
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
         else:
             self.is_initalization = False
 
-        # q remains the pose origin and a logged visualization point; both
-        # entire track lines alone determine height, roll, and pitch.
+        #TODO: when optimizing run time for machine learning remove neighbor point tracking
         neighbor_points = self._get_neighbor_points(self.q)
         self._settle_tracks(self.q[3:6].copy())
-       
         return neighbor_points
 
     def _blade_update(self, deform=True):
@@ -1457,28 +1399,11 @@ class Surface(_BodyMode):
         """Snapshot of every node height, indexed [i][j], for the GIF's surface."""
         return np.array([[pt[2] for pt in col] for col in self.grid_pts])
 
-
-class Body(Surface):
-    """Backward-compatible tracked-body wrapper."""
-
-    def __init__(self, *args, **kwargs):
-        kwargs["enable_blade"] = False
-        super().__init__(*args, **kwargs)
-
-
-class Blade(Surface):
-    """Backward-compatible blade-enabled wrapper."""
-
-    def __init__(self, *args, **kwargs):
-        kwargs["enable_blade"] = True
-        super().__init__(*args, **kwargs)
-
-
 # Compatibility with the pre-unification private entry point.
-Surface._run = Surface.run
+DozerSimulation._run = DozerSimulation.run
 
 if __name__ == "__main__":
-    simulation = Surface(
+    simulation = DozerSimulation(
         enable_blade       = True,
         is_backwards       = False,
         is_uphill          = True,
