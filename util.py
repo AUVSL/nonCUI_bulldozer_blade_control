@@ -8,8 +8,30 @@ from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 from PIL import Image
 from matplotlib.patches import Polygon
 
+class _Rotation():
+    """
+    Rotation matrices for transforming between local and global frames.
+    """
+    
+    def _rotation_lg(self, a, B, g):
+        """Rotation matrix: local to global frame."""
+        # TODO: change to accept input array
+        return self._rotation_gl(a, B, g).T
 
-class _Surface:
+    def _rotation_gl(self, a, B, g):
+        """Rotation matrix: global to local frame."""
+        # TODO: change to accept input array
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB = np.sin(B), np.cos(B)
+        sg, cg = np.sin(g), np.cos(g)
+
+        return np.array([
+            [cB * cg, sa * sB * cg - ca * sg, ca * sB * cg + sa * sg],
+            [cB * sg, sa * sB * sg + ca * cg, ca * sB * sg - sa * cg],
+            [-sB, sa * cB, ca * cB],
+        ]).T
+
+class _Surface(_Rotation):
     """Terrain geometry shared by both modes of :class:`Surface`.
 
     The defaults follow blade-enabled behavior. ``_BodyMode`` customizes the
@@ -56,22 +78,6 @@ class _Surface:
     def _initialize_surface_node(self, node):
         """Add subclass-specific metadata to a newly created grid node."""
         return None
-
-    def _rotation_lg(self, a, B, g):
-        """Rotation matrix: local to global frame."""
-        return self._rotation_gl(a, B, g).T
-
-    def _rotation_gl(self, a, B, g):
-        """Rotation matrix: global to local frame."""
-        sa, ca = np.sin(a), np.cos(a)
-        sB, cB = np.sin(B), np.cos(B)
-        sg, cg = np.sin(g), np.cos(g)
-
-        return np.array([
-            [cB * cg, sa * sB * cg - ca * sg, ca * sB * cg + sa * sg],
-            [cB * sg, sa * sB * sg + ca * cg, ca * sB * sg - sa * cg],
-            [-sB, sa * cB, ca * cB],
-        ]).T
 
     def _point_orientation(self, corners):
         """Return terrain-fitted roll, pitch, and yaw at ``self.q``.
@@ -244,11 +250,6 @@ class _DozerTrackSimulation(_Surface):
         neighbor_points = self._body_update()
         self.log.append([0, *self.q])
         self.neighbor_log.append(np.array(neighbor_points))
-
-    def _subdivision_factor(self):
-        if self.enable_blade:
-            return super()._subdivision_factor()
-        return 2.0
 
     def _surface_weight(self, u_clip, v_clip):
         """Preserve Body's historical two-axis transition ramp."""
@@ -1298,7 +1299,7 @@ class DozerSimulation(_DozerTrackSimulation):
         t = 0.0
         for _ in range(int(self.stop_time / self.dt)):
             t += self.dt
-
+            
             if self.enable_blade:
                 # Cut at the current pose, settle on the new terrain, then log
                 # blade geometry without cutting the same frame twice.
@@ -1310,9 +1311,12 @@ class DozerSimulation(_DozerTrackSimulation):
 
             self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
 
+
+            # stop condition check
             if self.total_distance >= self.stop_distance:
                 break
 
+            # log data for visualization and analysis
             self.log.append([t, *self.q])
             if self.enable_blade:
                 self.neighbor_log.append(np.array(neighbor_points))
@@ -1320,10 +1324,11 @@ class DozerSimulation(_DozerTrackSimulation):
                 self.grid_log.append(self._grid_heights())
             else:
                 self.neighbor_log.append(np.array(neighbor_points))
-
+                
     def _body_update(self):
         if not self.is_initalization:
             self.q += self.dt * self.q_dot
+            self.q[3:6] = (self.q[3:6] + np.pi) % (2 * np.pi) - np.pi
         else:
             self.is_initalization = False
 

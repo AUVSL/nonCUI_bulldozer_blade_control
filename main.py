@@ -490,6 +490,7 @@ class BulldozerSimulation:
 
             self.q   += self.dt * self.q_dot
             self.total_distance += np.linalg.norm(self.dt * self.q_dot[0:3])
+            
             self.q[3:6] = self.wrap_angles(self.q[3:6])
             a, B, g         = self.q[3:6]
             self.R_lg       = self.rotation_lg(a, B, g)
