@@ -251,17 +251,6 @@ class _DozerTrackSimulation(_Surface):
         self.log.append([0, *self.q])
         self.neighbor_log.append(np.array(neighbor_points))
 
-    def _surface_weight(self, u_clip, v_clip):
-        """Preserve Body's historical two-axis transition ramp."""
-        if self.enable_blade:
-            return super()._surface_weight(u_clip, v_clip)
-        return u_clip + v_clip
-
-    def _initialize_surface_node(self, node):
-        if self.enable_blade:
-            return super()._initialize_surface_node(node)
-        node["visited_last"] = False
-
     def _render_body_run(self, show_neighbors: bool = False):
         print("Rendering GIF...")
         
