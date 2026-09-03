@@ -31,6 +31,7 @@ class _Rotation():
             [-sB, sa * cB, ca * cB],
         ]).T
 
+
 class _Surface(_Rotation):
     """Terrain geometry shared by both modes of :class:`Surface`.
 
@@ -41,11 +42,7 @@ class _Surface(_Rotation):
     @property
     def subdivision(self):
         """Grid spacing, sized relative to the dozer width ``self.b``."""
-        return self.b / self._subdivision_factor()
-
-    def _subdivision_factor(self):
-        """Blade-default number of grid divisions across the dozer width."""
-        return self.division_factor
+        return self.b / self.division_factor
 
     def _surface_grid(self):
         R_surf = self._rotation_lg(*self.surface_abg)
@@ -60,73 +57,16 @@ class _Surface(_Rotation):
                 # Full offset before each split, followed by a linear ramp.
                 u_clip = np.clip((u - u_start) / ramp_width, 0.0, 1.0)
                 v_clip = np.clip((v - v_start) / ramp_width, 0.0, 1.0)
-                weight = self._surface_weight(u_clip, v_clip)
+                
+                weight = u_clip if self.is_surface_pitched else v_clip
+                if self.is_surface_rolled:
+                    weight += v_clip if self.is_surface_pitched else u_clip
+                
                 x, y, z = u * e1 + v * e2 + weight * self.offset * e3
 
                 node = grid.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
-                self._initialize_surface_node(node)
         return grid
-
-    def _surface_weight(self, u_clip, v_clip):
-        """Blade-default blend for the transition in the travel direction."""
-        weight = u_clip if self.is_surface_pitched else v_clip
-        if self.is_surface_rolled:
-            weight += v_clip if self.is_surface_pitched else u_clip
-        return weight
-
-    def _initialize_surface_node(self, node):
-        """Add subclass-specific metadata to a newly created grid node."""
-        return None
-
-    def _point_orientation(self, corners):
-        """Return terrain-fitted roll, pitch, and yaw at ``self.q``.
-
-        Roll and pitch follow the terrain gradient relative to the direction
-        of travel; yaw follows that direction of travel.
-        """
-        grad_xy = self._bilinear_gradient(self.q, corners)
-
-        vel = np.array(self.q_dot[:3])
-        if self.is_backwards:
-            vel *= -1
-        speed = np.linalg.norm(vel[:2])
-        if speed < 1e-9:
-            return self.q[3:6].copy()
-
-        fwd_xy = vel[:2] / speed
-        s_f = np.dot(grad_xy, fwd_xy)
-        roll = self._surface_roll(grad_xy, fwd_xy, s_f)
-        pitch = np.arctan2(-s_f, 1.0)
-        yaw = np.arctan2(vel[1], vel[0])
-        return np.array([roll, pitch, yaw])
-
-    def _surface_roll(self, grad_xy, fwd_xy, forward_slope):
-        """Return terrain-induced roll about the direction of travel."""
-        left_xy = np.array([-fwd_xy[1], fwd_xy[0]])
-        lateral_slope = np.dot(grad_xy, left_xy)
-        return np.arctan2(lateral_slope, np.sqrt(1.0 + forward_slope**2))
-
-    def _bilinear_gradient(self, point, corners):
-        """Gradient of the bilinear height patch in the global xy-plane."""
-        (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (x4, y4, h4) = corners
-
-        dx, dy = point[0] - x1, point[1] - y1
-        e_s = np.array([x2 - x1, y2 - y1])
-        e_t = np.array([x3 - x1, y3 - y1])
-        es2, et2 = e_s @ e_s, e_t @ e_t
-
-        s = min(max((dx * e_s[0] + dy * e_s[1]) / es2, 0.0), 1.0)
-        t = min(max((dx * e_t[0] + dy * e_t[1]) / et2, 0.0), 1.0)
-
-        dh_ds = (h2 - h1) * (1 - t) + (h4 - h3) * t
-        dh_dt = (h3 - h1) * (1 - s) + (h4 - h2) * s
-        return dh_ds * e_s / es2 + dh_dt * e_t / et2
-
-    def _point_height(self, point):
-        neighbor_points = self._get_neighbor_points(point)
-        height_to_surface = self._bilinear_height(point, neighbor_points)
-        return neighbor_points, height_to_surface
 
     def _grid_cell(self, point):
         """Index of the grid tile containing point's xy position, clipped."""
@@ -155,7 +95,7 @@ class _Surface(_Rotation):
         t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
 
         return (
-            h1 * (1 - s) * (1 - t)
+              h1 * (1 - s) * (1 - t)
             + h2 * s * (1 - t)
             + h3 * (1 - s) * t
             + h4 * s * t
@@ -191,66 +131,6 @@ class _Surface(_Rotation):
 
 
 class _DozerTrackSimulation(_Surface):
-    def _initialize_body_mode(self, is_uphill=True, is_surface_pitched: bool = False,
-                              is_surface_rolled: bool = False, is_backwards: bool = False):
-        self.enable_blade = False
-        # simulation parameters
-        self.b                  = 1.75
-        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
-        self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
-        self.u_split            = 0  # u-value where the grid switches to surface_abg2
-        self.v_split            = 2  # u-value where the grid switches to surface_abg2
-        self.transition_tiles   = self.b                      # tiles over which the offset ramps down past u_split
-        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
-        self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
-        self.is_initalization   = True
-
-        self.l                  = 2.349
-        self.stop_time          = 300.0
-        self.total_distance     = 0.0
-        self.dt                 = 1/100  
-        if is_backwards:
-            self.q_dot   *= -1
-            self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
-            self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
-        self.is_backwards       = is_backwards
-        self.is_surface_pitched = is_surface_pitched
-        self.is_surface_rolled = is_surface_rolled
-        # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
-        # tighter than the settle loop's 1e-6 convergence check, or the pose it
-        # returns is noisier than that check and the settle loop never converges
-        # -- which burns *more* passes, so loosening this is a net slowdown.
-        self.contact_tol        = 1e-7
-        self.log                = []
-        self.neighbor_points    = []
-        self.neighbor_log       = []
-        
-        # set up the surface grid
-        self.u_range       = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
-        self.v_range       = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 4 * self.b)
-        if is_backwards:
-            self.u_range       = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
-            self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
-        self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
-        self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
-        
-        stop_index         = 0 if self.is_backwards else -1 
-        self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
-        
-        self.surf_grid     = self._surface_grid()
-
-        # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
-        # hot height lookups skip the networkx attribute dicts entirely
-        self.grid_pts = [[(self.surf_grid.nodes[(i, j)]['x'],
-                           self.surf_grid.nodes[(i, j)]['y'],
-                           self.surf_grid.nodes[(i, j)]['z'])
-                          for j in range(len(self.vs))] for i in range(len(self.us))]
-
-        # put track on the surface at the start of the simulation
-        neighbor_points = self._body_update()
-        self.log.append([0, *self.q])
-        self.neighbor_log.append(np.array(neighbor_points))
-
     def _render_body_run(self, show_neighbors: bool = False):
         print("Rendering GIF...")
         
@@ -732,8 +612,9 @@ class _DozerTrackSimulation(_Surface):
 
             for s in ss:
                 grid_crossing_point = base + s * fwd
-                surface_height      = self._point_height(grid_crossing_point)[1]
-                delta = surface_height - grid_crossing_point[2]
+                neighbor_points = self._get_neighbor_points(grid_crossing_point)
+                height_to_surface = self._bilinear_height(grid_crossing_point, neighbor_points)
+                delta = height_to_surface - grid_crossing_point[2]
                 needed = delta + self.q[2]
                 # the midpoint (s == 0) is the last point of both halves
                 if s <= 0:
@@ -773,15 +654,8 @@ class DozerSimulation(_DozerTrackSimulation):
                  is_backwards: bool = False, blade_local_yaw: float = 0.0,
                  blade_local_roll: float = 0.0, blade_pitch: float = None,
                  enable_blade: bool = True):
+        
         self.enable_blade = enable_blade
-        if not enable_blade:
-            self._initialize_body_mode(
-                is_uphill=is_uphill,
-                is_surface_pitched=is_surface_pitched,
-                is_surface_rolled=is_surface_rolled,
-                is_backwards=is_backwards,
-            )
-            return
 
         # simulation parameters
         self.division_factor    = 4*2
@@ -810,11 +684,15 @@ class DozerSimulation(_DozerTrackSimulation):
             np.arcsin((self.H / 4) / self.L)
             if blade_pitch is None else blade_pitch
         )
+        
+        # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
+        # tighter than the settle loop's 1e-6 convergence check, or the pose it
+        # returns is noisier than that check and the settle loop never converges
+        # -- which burns *more* passes, so loosening this is a net slowdown.
         self.contact_tol = 1e-7
 
         # No vertex may be cut farther than this below its own starting height.
         self.max_world_cut_depth     = self.H
-
 
         if is_backwards:
             self.q_dot   *= -1
@@ -823,6 +701,7 @@ class DozerSimulation(_DozerTrackSimulation):
         self.is_backwards       = is_backwards
         self.is_surface_pitched = is_surface_pitched
         self.is_surface_rolled = is_surface_rolled
+        
         self.log                = []
         self.blade_log          = []
         self.neighbor_log       = []
@@ -849,11 +728,10 @@ class DozerSimulation(_DozerTrackSimulation):
                            self.surf_grid.nodes[(i, j)]['z'])
                           for j in range(len(self.vs))] for i in range(len(self.us))]
         self.starting_grid_heights = self._grid_heights().copy()
-
-        # q is retained for visualization and as the rigid-body pose origin;
-        # only the complete track model determines the supported pose.
-        neighbor_points = self._get_neighbor_points(self.q)
-        self._settle_tracks(self.q[3:6].copy())
+    
+        neighbor_points = self._body_update()
+    
+        
         self.log.append([0, *self.q])
         self.grid_log.append(self._grid_heights())
 
@@ -876,17 +754,6 @@ class DozerSimulation(_DozerTrackSimulation):
             self.blade_local_roll, 0.0, self.blade_local_yaw
         )
         return body_R @ local_R
-
-    def _starting_height(self, point):
-        """Undeformed surface height at point's horizontal position."""
-        i, j = self._grid_cell(point)
-        corners = (
-            (*self.grid_pts[i][j][:2], self.starting_grid_heights[i, j]),
-            (*self.grid_pts[i + 1][j][:2], self.starting_grid_heights[i + 1, j]),
-            (*self.grid_pts[i][j + 1][:2], self.starting_grid_heights[i, j + 1]),
-            (*self.grid_pts[i + 1][j + 1][:2], self.starting_grid_heights[i + 1, j + 1]),
-        )
-        return self._bilinear_height(point, corners)
 
     def run_and_plot(self, show_neighbors: bool = False):
         """Run the simulation and render the active body/blade view."""
