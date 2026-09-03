@@ -647,79 +647,71 @@ class _DozerTrackSimulation(_Surface):
         """
         return float(self._support_heights(R).max())
 
+
 class DozerSimulation(_DozerTrackSimulation):
     """Surface-aware bulldozer with an optional deforming blade."""
 
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
-                 is_backwards: bool = False, blade_local_yaw: float = 0.0,
-                 blade_local_roll: float = 0.0, blade_pitch: float = None,
-                 enable_blade: bool = True):
+                 is_backwards: bool = False, enable_blade: bool = True, blade_local_yaw: float = 0.0,
+                 blade_local_roll: float = 0.0, blade_pitch: float = None):
         
-        self.enable_blade = enable_blade
+        # ------ Load passed parameters ------ 
+        self.is_surface_pitched = is_surface_pitched
+        self.is_surface_rolled  = is_surface_rolled
+        self.is_backwards       = is_backwards
+        self.enable_blade       = enable_blade
+        self.blade_local_yaw    = blade_local_yaw
+        self.blade_local_roll   = blade_local_roll
+        self.blade_pitch        = (np.arcsin((self.H / 4) / self.L) if blade_pitch is None else blade_pitch)
 
-        # simulation parameters
-        self.division_factor    = 4*2
-        self.b                  = 1.75
-        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
-        self.surface_abg        = np.array([ 0.0, 0.0, 0.0])
-        self.u_split            = 0  # u-value where the grid switches to surface_abg2
-        self.v_split            = 0  # u-value where the grid switches to surface_abg2
-        self.transition_tiles   = 1/2 *self.b * self.division_factor # tiles over which the offset ramps down past u_split
-        self.q                  = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 if is_surface_pitched else np.pi / 2])
-        self.q_dot              = np.array([2.0, 0.0, 0.0, 0.0, 0.0, 0.0]) if is_surface_pitched else np.array([0.0, 2.0, 0.0, 0.0, 0.0, 0.0]) 
-        self.is_initalization   = True
-
-        self.stop_time          = 300.0
-        self.total_distance     = 0.0
+        # ------ General simulation parameters ------ 
         self.dt                 = 1/100 
-
-        # Bulldozer blade parameters
-        self.B1   = 2.921
-        self.H    = 0.955
-        self.L    = 1.2 
-        self.l    = 2.349
-        self.blade_local_yaw = blade_local_yaw
-        self.blade_local_roll = blade_local_roll
-        self.blade_pitch = (
-            np.arcsin((self.H / 4) / self.L)
-            if blade_pitch is None else blade_pitch
-        )
+        self.total_distance     = 0.0
         
+        # ------ Independent simulation limits ------ 
+        # change if tasks require move total distance to be traveled, still want it tight for fast tuning
+        self.stop_time   = 300.0
         # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
         # tighter than the settle loop's 1e-6 convergence check, or the pose it
         # returns is noisier than that check and the settle loop never converges
         # -- which burns *more* passes, so loosening this is a net slowdown.
         self.contact_tol = 1e-7
 
-        # No vertex may be cut farther than this below its own starting height.
-        self.max_world_cut_depth     = self.H
+        # ------ Bulldozer body parameters ------ 
+        self.b    = 1.75
+        self.l    = 2.349
 
+        # ------ Bulldozer blade parameters ------ 
+        self.B1   = 2.921
+        self.H    = 0.955
+        self.L    = 1.2 
+
+        # ------ Surface parameters ------ 
+        self.division_factor = 8
+        self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
+        self.u_split         = 0  # u-value where the grid switches to surface_abg2
+        self.v_split         = 0  # u-value where the grid switches to surface_abg2
+
+        # ------ set up Center Of Mass (COM) position, COM velocity, simulation surface ------ 
+        self.q       = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 
+                                 if is_surface_pitched else np.pi / 2])
+        self.q_dot   = np.array([2.0 if is_surface_pitched else 0.0, 0.0 if is_surface_pitched else 2.0, 
+                                 0.0, 0.0, 0.0, 0.0]) 
+        self.u_range = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 4 * self.b)
         if is_backwards:
             self.q_dot   *= -1
             self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
             self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
-        self.is_backwards       = is_backwards
-        self.is_surface_pitched = is_surface_pitched
-        self.is_surface_rolled = is_surface_rolled
-        
-        self.log                = []
-        self.blade_log          = []
-        self.neighbor_log       = []
-        self.grid_log           = []
-        
-        # set up the surface grid
-        self.u_range       = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
-        self.v_range       = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 4 * self.b)
-        if is_backwards:
             self.u_range       = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
             self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
         self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
         
-        stop_index         = 0 if self.is_backwards else -1 
-        self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
-        
-        self.surf_grid     = self._surface_grid()
+        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
+        self.transition_tiles   = 1/2 *self.b * self.division_factor # tiles over which the offset ramps down past u_split
+
+        self.surf_grid = self._surface_grid()
 
         # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
         # hot height lookups skip the networkx attribute dicts entirely.
@@ -729,9 +721,20 @@ class DozerSimulation(_DozerTrackSimulation):
                           for j in range(len(self.vs))] for i in range(len(self.us))]
         self.starting_grid_heights = self._grid_heights().copy()
     
+        # ------ Dependent simulation limits ------ 
+        self.max_world_cut_depth = self.H
+        stop_index         = 0 if self.is_backwards else -1 
+        self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
+            
+        # ------ Write 1st entry to simulation logs ------ 
+        self.log                = []
+        self.blade_log          = []
+        self.neighbor_log       = []
+        self.grid_log           = []
+        
+        self.is_initalization   = True
         neighbor_points = self._body_update()
     
-        
         self.log.append([0, *self.q])
         self.grid_log.append(self._grid_heights())
 
@@ -1167,7 +1170,6 @@ class DozerSimulation(_DozerTrackSimulation):
 
             self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
 
-
             # stop condition check
             if self.total_distance >= self.stop_distance:
                 break
@@ -1265,13 +1267,14 @@ DozerSimulation._run = DozerSimulation.run
 
 if __name__ == "__main__":
     simulation = DozerSimulation(
-        enable_blade       = True,
-        is_backwards       = False,
         is_uphill          = True,
         is_surface_pitched = False,
         is_surface_rolled  = True,
+        is_backwards       = False,
+        enable_blade       = True,
         blade_local_roll   = -0.3, 
-        blade_local_yaw    = 0.0, 
-        blade_pitch        = 0.0
+        blade_local_yaw    =  0.0, 
+        blade_pitch        =  0.0
     )
+
     simulation.run_and_plot()
