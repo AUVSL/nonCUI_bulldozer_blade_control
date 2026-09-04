@@ -260,18 +260,18 @@ class DozerSimulation(_DozerTrackSimulation):
     """Surface-aware bulldozer with an optional deforming blade."""
 
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
-                 is_backwards: bool = False, enable_blade: bool = True, blade_local_yaw: float = 0.0,
-                 blade_local_roll: float = 0.0, blade_pitch: float = None):
+                 is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3)):
         
         # ------ Load passed parameters ------ 
-        self.is_surface_pitched = is_surface_pitched
-        self.is_surface_rolled  = is_surface_rolled
-        self.is_backwards       = is_backwards
-        self.enable_blade       = enable_blade
-        self.blade_local_yaw    = blade_local_yaw
-        self.blade_local_roll   = blade_local_roll
-        self.blade_pitch        = (np.arcsin((self.H / 4) / self.L) if blade_pitch is None
-                                   else blade_pitch)
+        self.is_surface_pitched      = is_surface_pitched
+        self.is_surface_rolled       = is_surface_rolled
+        self.is_backwards            = is_backwards
+        self.enable_blade            = enable_blade
+        self.blade_roll_pitch_yaw    = blade_roll_pitch_yaw
+
+        if np.array_equal(blade_roll_pitch_yaw, np.zeros(3)):
+            self.blade_roll_pitch_yaw[1] = np.arcsin((self.H / 4) / self.L) 
+                                            
         # ------ General simulation parameters ------ 
         self.dt                 = 1/100 
         self.total_distance     = 0.0
@@ -356,13 +356,13 @@ class DozerSimulation(_DozerTrackSimulation):
     @property
     def blade_cut_depth(self):
         """Vertical cut depth commanded by blade pitch without tilting the blade."""
-        return self.L * np.sin(self.blade_pitch)
+        return self.L * np.sin(self.blade_roll_pitch_yaw[1])
 
     def _blade_rotation_lg(self, orient):
         """Blade-local roll/yaw composed on top of the body orientation."""
         body_R = self._rotation_lg(*orient)
         local_R = self._rotation_lg(
-            self.blade_local_roll, 0.0, self.blade_local_yaw
+            self.blade_roll_pitch_yaw[0], 0.0, self.blade_roll_pitch_yaw[2]
         )
         return body_R @ local_R
 
@@ -485,14 +485,12 @@ DozerSimulation._run = DozerSimulation.run
 
 if __name__ == "__main__":
     simulation = DozerSimulation(
-        is_uphill          = True,
-        is_surface_pitched = False,
-        is_surface_rolled  = True,
-        is_backwards       = False,
-        enable_blade       = True,
-        blade_local_roll   = -0.3, 
-        blade_local_yaw    =  0.0, 
-        blade_pitch        =  0.0
+        is_uphill            = True,
+        is_surface_pitched   = False,
+        is_surface_rolled    = True,
+        is_backwards         = False,
+        enable_blade         = True,
+        blade_roll_pitch_yaw = np.array([-0.3, 0.0, 0.0])
     )
 
     simulation.run_and_plot()
