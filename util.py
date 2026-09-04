@@ -335,13 +335,13 @@ class DozerSimulation():
         moment_friction = 2 * self.fy * ((self.l**2) / 4 - (self.x_ICR**2))
         self.Mr         = self._G(moment, moment_friction, self.daBg[2])
 
-        @staticmethod
-        def _G(force, friction, velocity):
-            if abs(velocity) > 1e-10:
-                return -friction * np.sign(velocity)
-            if abs(force) <= friction:
-                return -force
-            return -friction * np.sign(force)
+
+    def _G(self, force, friction, velocity):
+        if abs(velocity) > 1e-10:
+            return -friction * np.sign(velocity)
+        if abs(force) <= friction:
+            return -force
+        return -friction * np.sign(force)
 
     def _blade_terrain_interaction(self):
         # TODO: update this to be surface - body angle + blade angle, to account for non-flat surfaces
