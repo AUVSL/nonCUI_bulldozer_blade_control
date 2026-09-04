@@ -109,8 +109,9 @@ class DozerSimulation():
         self.v_dot = np.zeros(2)  # initial local acceleration vector
         self.q     = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 
                                0.0 if is_surface_pitched else np.pi / 2])
-        self.q_dot = np.array([2.0 if is_surface_pitched else 0.0, 0.0 
-                               if is_surface_pitched else 2.0, 0.0, 0.0, 0.0, 0.0]) 
+        # self.q_dot = np.array([2.0 if is_surface_pitched else 0.0, 0.0 
+                            #    if is_surface_pitched else 2.0, 0.0, 0.0, 0.0, 0.0])
+        self.q_dot = np.zeros(6) 
         self.dxyz  = np.zeros(3)
         self.daBg  = np.zeros(3)
         self.Rl    = np.zeros(2)
@@ -149,7 +150,6 @@ class DozerSimulation():
         neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
         self.neighbor_log.append(np.array(neighbor_points))
         self.blade_log.append(blade_points)
-
     
     def _rotation_lg(self, a, B, g):
         """Rotation matrix: local to global frame."""
@@ -258,7 +258,6 @@ class DozerSimulation():
                 hi, f_hi = angle, value
                 f_lo *= 0.5
         return angle
-
 
     def _track_xyz(self, pose):
         """Return [right, left] x [front, center, back] track points."""
@@ -606,11 +605,14 @@ class DozerSimulation():
         self.dxyz[1] = self._saturation(self.dxyz[1], self.lateral_velocity_limit)
         self.x_ICR = self._get_x_icr()
         
-        self.v_dot = self._vehicle_dynamics()
+        self._vehicle_dynamics()
         
         self.v += self.dt * self.v_dot
 
-        self.v[0] = np.clip(self.v[0], -self.velocity_limit, 0.0)
+        if self.is_backwards:
+            self.v[0] = np.clip(self.v[0], -self.velocity_limit, 0.0)
+        else:
+            self.v[0] = np.clip(self.v[0], 0.0, self.velocity_limit)
         self.v[1] = self._saturation(self.v[1], self.angular_velocity_limit)
         
         self.q_dot = self._S_matrix() @ self.v
@@ -664,7 +666,8 @@ class DozerSimulation():
                 self.neighbor_log.append(np.array(neighbor_points))
                 
     def _body_update(self):
-        if not self.is_initialized:
+        if self.is_initialized:
+            self._update_q_dot()
             self.q += self.dt * self.q_dot
             self.q[3:6] = (self.q[3:6] + np.pi) % (2 * np.pi) - np.pi
         else:
