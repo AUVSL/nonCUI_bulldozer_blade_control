@@ -3,10 +3,153 @@ import networkx as nx
 
 from visualization import Visualization
 
-class _Rotation():
-    """
-    Rotation matrices for transforming between local and global frames.
-    """
+class DozerSimulation():
+    """Surface-aware bulldozer with an optional deforming blade."""
+
+    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
+                 is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3)):
+        #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
+        # ------ Load passed parameters ------ 
+        self.is_surface_pitched      = is_surface_pitched
+        self.is_surface_rolled       = is_surface_rolled
+        self.is_backwards            = is_backwards
+        self.enable_blade            = enable_blade
+        self.blade_roll_pitch_yaw    = blade_roll_pitch_yaw
+
+        if np.array_equal(blade_roll_pitch_yaw, np.zeros(3)):
+            self.blade_roll_pitch_yaw[1] = np.arcsin((self.H / 4) / self.L) 
+                                            
+        # ------ General simulation parameters ------ 
+        self.dt             = 1/100
+        gravity             = 9.81 
+        self.total_distance = 0.0
+
+        # ------ Independent simulation limit parameters ------ 
+        # change if tasks require move total distance to be traveled, still want it tight for fast tuning
+        self.stop_time              = 300.0
+        # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
+        # tighter than the settle loop's 1e-6 convergence check, or the pose it
+        # returns is noisier than that check and the settle loop never converges
+        # -- which burns *more* passes, so loosening this is a net slowdown.
+        self.contact_tol            = 1e-7
+        self.fill_distance          = 8.0 # maximum distance for soil fill calculation
+        self.velocity_limit         = 2.222
+        self.lateral_velocity_limit = 0.0 # this governs how much the dozer can "slide" laterally
+
+        # ------ Bulldozer body parameters ------ 
+        mass              = 10156.0 # of the unloaded vehicle in kilograms
+        self.b            = 1.75    # track width in meters
+        self.l            = 2.349   # track length in meters
+        self.h            = 2.762/2 # body height in meters, scaled down by Sam
+        self.F_track_base = 600000.0 
+
+        # ------ Bulldozer blade parameters ------ 
+        self.B1 = 2.921 # blade width in meters
+        self.H  = 0.955 # blade height in meters
+        self.L  = 1.2   # blade arm length in meters
+        
+        # ------ Soil parameters ------ 
+        self.mu_l    = 0.1              # longitudinal friction coefficient
+        self.mu_t    = 0.9              # lateral      friction coefficient
+        self.mu_ss   = 0.5              # shear        friction coefficient
+        self.kb      = 0.734e6          # blade soil interaction constant
+        self.beta0   = np.radians(38.0) # soil accumulation angle in radians
+        self.gamma_g = 1640 * gravity   # soil weight per cubic meter
+        
+        # ------ Surface parameters ------ 
+        self.division_factor = 8
+        self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
+        self.u_split         = 0  # u-value where the grid switches to surface_abg2
+        self.v_split         = 0  # u-value where the grid switches to surface_abg2
+
+        # ------ Set up Center Of Mass (COM) position, COM velocity, simulation surface ------ 
+        self.u_range = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 4 * self.b)
+        if is_backwards:
+            self.q_dot   *= -1
+            self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
+            self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
+            self.u_range       = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
+            self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
+        self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
+        self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
+        
+        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
+        self.transition_tiles   = 1/2 *self.b * self.division_factor # tiles over which the offset ramps down past u_split
+
+        self.surf_grid = self._surface_grid()
+
+        # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
+        # hot height lookups skip the networkx attribute dicts entirely.
+        self.grid_pts = [[(self.surf_grid.nodes[(i, j)]['x'],
+                           self.surf_grid.nodes[(i, j)]['y'],
+                           self.surf_grid.nodes[(i, j)]['z'])
+                          for j in range(len(self.vs))] for i in range(len(self.us))]
+        self.starting_grid_heights = self._grid_heights().copy()
+    
+        # ------ Dependent simulation limit parameters ------ 
+        self.max_world_cut_depth    = self.H
+        stop_index                  = 0 if self.is_backwards else -1 
+        self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
+        self.angular_velocity_limit = 2 * self.velocity_limit / self.b
+
+        # ------ Forces and moment varaibles ------ 
+        self.F_track = np.array([self.F_track_base, self.F_track_base])  #[left, right]
+        self.rl      = self.mu_l * mass * gravity / 2      # longitudinal track force limit
+        self.fy      = self.mu_t * mass * gravity / self.l # lateral force limit
+        Ix           = mass * (self.b**2 + self.h**2) / 12 # moment of inertia about x-axis
+        Iy           = mass * (self.h**2 + self.l**2) / 12 # moment of inertia about y-axis
+        Iz           = mass * (self.b**2 + self.l**2) / 12 # moment of inertia about z-axis
+        self.M       = np.diag([mass, mass, mass, Ix, Iy, Iz])             # mass matrix
+        self.P       = np.array([0.0, 0.0, mass * gravity, 0.0, 0.0, 0.0]) # gravitational force vector
+        self.elim    = np.diag([1.0, 1.0, 1.0, 0.0, 0.0, 1.0])
+        
+        # ------ Velocity and rotation + corresponding derivative vector variables ------ 
+        self.v     = np.zeros(2)  # initial local velocity vector
+        self.v_dot = np.zeros(2)  # initial local acceleration vector
+        self.q     = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 
+                               0.0 if is_surface_pitched else np.pi / 2])
+        self.q_dot = np.array([2.0 if is_surface_pitched else 0.0, 0.0 
+                               if is_surface_pitched else 2.0, 0.0, 0.0, 0.0, 0.0]) 
+        self.dxyz  = np.zeros(3)
+        self.daBg  = np.zeros(3)
+        self.Rl    = np.zeros(2)
+        self.R_lg  = self._rotation_lg(self.q[3], self.q[4], self.q[5])
+        self.J_lg  = self._rotation_derivatives(self.q[3], self.q[4])
+                
+        # ------ Other kinematics and dynamic scalar variables ------ 
+        self.x_ICR     = 0.0
+        self.x_ICR_dot = 0.0
+        self.Fb        = 0.0
+        self.Mb        = 0.0
+        self.H3        = 0.0
+        self.H4        = 0.0
+        self.H3_sub    = 0.0
+        self.H4_sub    = 0.0
+        self.Fy        = 0.0
+        self.Mr        = 0.0
+        self.vtL       = 0.0
+        self.vtR       = 0.0
+            
+        # ------ Write 1st entry to simulation logs ------ 
+        self.log                = []
+        self.blade_log          = []
+        self.neighbor_log       = []
+        self.grid_log           = []
+        
+        self.is_initialized   = False
+        neighbor_points = self._body_update()
+    
+        self.log.append([0, *self.q])
+        self.grid_log.append(self._grid_heights())
+
+        # seed the blade points the same way, so blade_log stays aligned frame
+        # for frame with log/neighbor_log/grid_log
+        blade_points, blade_neighbors = self._blade_update(deform=False)
+        neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
+        self.neighbor_log.append(np.array(neighbor_points))
+        self.blade_log.append(blade_points)
+
     
     def _rotation_lg(self, a, B, g):
         """Rotation matrix: local to global frame."""
@@ -25,14 +168,6 @@ class _Rotation():
             [cB * sg, sa * sB * sg + ca * cg, ca * sB * sg - sa * cg],
             [-sB, sa * cB, ca * cB],
         ]).T
-
-
-class _Surface(_Rotation):
-    """Terrain geometry shared by both modes of :class:`Surface`.
-
-    The defaults follow blade-enabled behavior. ``_BodyMode`` customizes the
-    few places where tracked-body terrain/contact behavior differs.
-    """
 
     @property
     def subdivision(self):
@@ -125,7 +260,6 @@ class _Surface(_Rotation):
         return angle
 
 
-class _DozerTrackSimulation(_Surface):
     def _track_xyz(self, pose):
         """Return [right, left] x [front, center, back] track points."""
         pose       = np.asarray(pose)
@@ -255,103 +389,231 @@ class _DozerTrackSimulation(_Surface):
         """
         return float(self._support_heights(R).max())
 
+    @staticmethod
+    def _saturation(value, limit):
+        return float(np.clip(value, -abs(limit), abs(limit)))
 
-class DozerSimulation(_DozerTrackSimulation):
-    """Surface-aware bulldozer with an optional deforming blade."""
+    @staticmethod
+    def _G(force, friction, velocity):
+        if abs(velocity) > 1e-10:
+            return -friction * np.sign(velocity)
+        if abs(force) <= friction:
+            return -force
+        return -friction * np.sign(force)
 
-    def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
-                 is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3)):
+    @staticmethod
+    def _yc(left_depth, right_depth, width):
+        if left_depth == 0 and right_depth == 0:
+            return 0.0
+        return (
+            (2 * left_depth + right_depth) / (3 * (left_depth + right_depth)) * width
+            - width / 2
+        )
+
+    def _rotation_derivatives(self, a, B):
+        """Rotation derivative matrices"""
+        # TODO: change to accept input array
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB, tB = np.sin(B), np.cos(B), np.tan(B)
+
+        J_gl = np.array([
+            [1,   0,     -sB],
+            [0,  ca, sa * cB],
+            [0, -sa, ca * cB]
+        ])
+
+        J_lg = np.array([
+            [1, sa * tB, ca * tB],
+            [0,      ca,    - sa],
+            [0, sa / cB,  ca / cB]
+        ])
+
+        return J_gl, J_lg
+
+    def _get_x_icr(self, eps: float = 1e-3):
+        if abs(self.daBg[2]) < eps:
+            return 0.0
+        return float(np.clip(-self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
+
+    def _S_matrix(self):
+        """
+        Configuration-dependent velocity mapping matrix.
+        Recomputed every time step.
+
+        Maps v = [v_forward, v_turn] to q_dot.
+        """
+        S = np.zeros((6, 2))
+        S[0:3, 0] = self.R_lg[:, 0]                 # forward velocity
+        S[0:3, 1] = self.R_lg[:, 1] * (-self.x_ICR) # lateral/turning velocity
+        S[3:6, 1] = self.J_lg[:, 2]                 # yaw contribution
+
+        return S
+
+    def _Sd_matrix(self):
+        """
+        Time derivative of the S matrix.
+        """
+        a, B, g    = self.q[3:6]
+        Ad, Bd, Gd = self.q_dot[3:6]
         
-        # ------ Load passed parameters ------ 
-        self.is_surface_pitched      = is_surface_pitched
-        self.is_surface_rolled       = is_surface_rolled
-        self.is_backwards            = is_backwards
-        self.enable_blade            = enable_blade
-        self.blade_roll_pitch_yaw    = blade_roll_pitch_yaw
-
-        if np.array_equal(blade_roll_pitch_yaw, np.zeros(3)):
-            self.blade_roll_pitch_yaw[1] = np.arcsin((self.H / 4) / self.L) 
-                                            
-        # ------ General simulation parameters ------ 
-        self.dt                 = 1/100 
-        self.total_distance     = 0.0
+        sa, ca = np.sin(a), np.cos(a)
+        sB, cB = np.sin(B), np.cos(B)
+        sg, cg = np.sin(g), np.cos(g)
+        tB = np.tan(B)
         
-        # ------ Independent simulation limits ------ 
-        # change if tasks require move total distance to be traveled, still want it tight for fast tuning
-        self.stop_time   = 300.0
-        # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
-        # tighter than the settle loop's 1e-6 convergence check, or the pose it
-        # returns is noisier than that check and the settle loop never converges
-        # -- which burns *more* passes, so loosening this is a net slowdown.
-        self.contact_tol = 1e-7
+        R = self.R_lg
 
-        # ------ Bulldozer body parameters ------ 
-        self.b    = 1.75
-        self.l    = 2.349
-
-        # ------ Bulldozer blade parameters ------ 
-        self.B1   = 2.921
-        self.H    = 0.955
-        self.L    = 1.2 
-
-        # ------ Surface parameters ------ 
-        self.division_factor = 8
-        self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
-        self.u_split         = 0  # u-value where the grid switches to surface_abg2
-        self.v_split         = 0  # u-value where the grid switches to surface_abg2
-
-        # ------ set up Center Of Mass (COM) position, COM velocity, simulation surface ------ 
-        self.q       = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 0.0 
-                                 if is_surface_pitched else np.pi / 2])
-        self.q_dot   = np.array([2.0 if is_surface_pitched else 0.0, 0.0 if is_surface_pitched else 2.0, 
-                                 0.0, 0.0, 0.0, 0.0]) 
-        self.u_range = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
-        self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 4 * self.b)
-        if is_backwards:
-            self.q_dot   *= -1
-            self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
-            self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
-            self.u_range       = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
-            self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
-        self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
-        self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
+        S_11 = -sB * cg * Bd - R[1, 0] * Gd
+        S_21 = -sB * sg * Bd + R[0, 0] * Gd
+        S_31 = -cB * Bd
         
-        self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
-        self.transition_tiles   = 1/2 *self.b * self.division_factor # tiles over which the offset ramps down past u_split
-
-        self.surf_grid = self._surface_grid()
-
-        # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
-        # hot height lookups skip the networkx attribute dicts entirely.
-        self.grid_pts = [[(self.surf_grid.nodes[(i, j)]['x'],
-                           self.surf_grid.nodes[(i, j)]['y'],
-                           self.surf_grid.nodes[(i, j)]['z'])
-                          for j in range(len(self.vs))] for i in range(len(self.us))]
-        self.starting_grid_heights = self._grid_heights().copy()
-    
-        # ------ Dependent simulation limits ------ 
-        self.max_world_cut_depth = self.H
-        stop_index         = 0 if self.is_backwards else -1 
-        self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
-            
-        # ------ Write 1st entry to simulation logs ------ 
-        self.log                = []
-        self.blade_log          = []
-        self.neighbor_log       = []
-        self.grid_log           = []
+        S_12 = -self.x_ICR * (R[0, 2] * Ad + R[2, 1] * cg * Bd - R[1, 1] * Gd) 
+        - self.x_ICR_dot * R[0, 1]
         
-        self.is_initialized   = False
-        neighbor_points = self._body_update()
-    
-        self.log.append([0, *self.q])
-        self.grid_log.append(self._grid_heights())
+        S_22 = -self.x_ICR * (R[1, 2] * Ad + R[2, 1] * sg * Bd + R[0, 1] * Gd) 
+        - self.x_ICR_dot * R[1, 1]
+        
+        S_32 = -self.x_ICR * (R[2, 2] * Ad - sa * sB * Bd) 
+        - self.x_ICR_dot * R[2, 1]
+        
+        S_42 = -sa * tB * Ad + ca / (cB**2) * Bd
+        S_52 = -ca * Ad
+        S_62 = -sa / cB * Ad + ca * tB / cB * Bd
+        
+        return np.array([
+            [S_11, S_12],
+            [S_21, S_22],
+            [S_31, S_32],
+            [ 0.0, S_42],
+            [ 0.0, S_52],
+            [ 0.0, S_62],
+        ])
 
-        # seed the blade points the same way, so blade_log stays aligned frame
-        # for frame with log/neighbor_log/grid_log
-        blade_points, blade_neighbors = self._blade_update(deform=False)
-        neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
-        self.neighbor_log.append(np.array(neighbor_points))
-        self.blade_log.append(blade_points)
+    def _track_terrain_interaction(self):
+        self.vtL = self._saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], 
+                                   self.velocity_limit)
+        self.vtR = self._saturation(self.dxyz[0] + self.b / 2 * self.daBg[2], 
+                                   self.velocity_limit)
+        
+        FtL, FtR = self.F_track
+        
+        RlL     = self._G(FtL, self.rl, self.vtL)
+        RlR     = self._G(FtR, self.rl, self.vtR)
+        self.Rl = np.array([RlL, RlR])
+        
+        self.Fy = -2 * np.sign(self.dxyz[1]) * self.fy * abs(self.x_ICR)
+        
+        moment          = ((FtR + RlR) - (FtL + RlL)) * self.b / 2
+        moment_friction = 2 * self.fy * ((self.l**2) / 4 - (self.x_ICR**2))
+        self.Mr         = self._G(moment, moment_friction, self.daBg[2])
+
+    def _blade_terrain_interaction(self):
+        # TODO: update this to be surface - body angle + blade angle, to account for non-flat surfaces
+        a_rel = self.blade_roll_pitch_yaw[0]
+        
+        cut_height = abs(self.L * np.sin(self.blade_roll_pitch_yaw[1]))
+        
+        H1     = self.B1 * np.tan(abs(a_rel))
+        H2     = cut_height / np.cos(abs(a_rel))
+        H3_sub = -H2 + (np.sign(a_rel) * H1 / 2) - (H1 / 2)
+        H4_sub = -H2 - (np.sign(a_rel) * H1 / 2) - (H1 / 2)
+        H3     = self.H + H3_sub
+        H4     = self.H + H4_sub
+        
+        a_val = np.tan(abs(a_rel))**2
+        c_val = (H3 + H4) / 2
+        
+        fill_percent = min(1.0, self.total_distance / self.fill_distance)
+        
+        # TODO: update to account for later dump c_ycles
+        self.H3_sub = -H3_sub
+        self.H4_sub = -H4_sub
+
+        # TODO: handle case where both H3_sub and H4_sub near zero
+        if (H3_sub == 0) and (H4_sub == 0):
+            volume = 0.0
+            self.H3 = self.H4 = 0.0
+        else:
+            volume = 0.5 / np.tan(self.beta0) * (a_val * self.B1**3 / 12 + c_val**2 * self.B1)
+            self.H3 = max(H3, 0.0) * fill_percent
+            self.H4 = max(H4, 0.0) * fill_percent
+
+        soil_weight       = volume * self.gamma_g * fill_percent
+        hypotenuse        = self.B1 / np.cos(abs(a_rel))
+        cut_area          = 0.5 * self.B1 * H1 + hypotenuse * cut_height
+        soil_shear_force  = cut_area    * self.kb
+        soil_normal_force = soil_weight * self.mu_ss
+        
+        self.Fb = -soil_shear_force - soil_normal_force
+        
+        shear_moment_arm  = self._yc(-H3_sub, -H4_sub, self.B1)
+        normal_moment_arm = self._yc(     H3,      H4, self.B1) 
+        
+        self.Mb  = (   soil_shear_force *  shear_moment_arm 
+                    + soil_normal_force * normal_moment_arm)
+
+    def _vehicle_dynamics(self):
+        self._track_terrain_interaction()
+        self._blade_terrain_interaction()
+        
+        B_mat = np.zeros((6, 2))
+        B_mat[:3, 0]  =  self.R_lg[:, 0]
+        B_mat[:3, 1]  =  self.R_lg[:, 0]
+        B_mat[3:6, 0] = -self.R_lg[:, 2] * self.b / 2
+        B_mat[3:6, 1] =  self.R_lg[:, 2] * self.b / 2
+
+        Ct_vec = np.array([
+            self.Rl.sum(), self.Fy, 0.0, 0.0, 0.0,
+            self.Mr + (self.Rl[1] - self.Rl[0]) * self.b / 2,
+        ])
+                
+        R6 = np.zeros((6, 6))
+        R_blade = self._rotation_lg(*self.blade_roll_pitch_yaw)
+        R6[:3, :3]   = R_blade
+        R6[3:6, 3:6] = R_blade
+        
+        blade_vec = np.array([self.Fb, 0.0, 0.0, 0.0, 0.0, self.Mb])
+        Cb_vec    = self.elim @ R6 @ blade_vec
+
+        R6_lg = np.zeros((6, 6))
+        R6_lg[:3, :3]   = self.R_lg
+        R6_lg[3:6, 3:6] = self.R_lg
+        C = R6_lg @ (Ct_vec + Cb_vec)
+        
+        S  = self._S_matrix()
+        Sd = self._Sd_matrix()
+        
+        Bt = S.T @ B_mat
+        Ct = S.T @ C
+        Pt = S.T @ self.P
+        Mt = S.T @ self.M @ S
+        Et = S.T @ self.M @ Sd
+        
+        self.v_dot = np.linalg.solve(Mt, Bt @ self.F_track + Ct - Et @ self.v - Pt)
+
+    def _update_q_dot(self):
+        """Advance internal velocity state and return generalized velocity."""
+        a, B, g        = self.q[3:6]
+        self.R_lg      = self._rotation_lg(a, B, g)
+        _, self.J_lg   = self._rotation_derivatives(a, B)
+        
+        R_gl = self.R_lg.T
+        J_gl, self.J_lg = self._rotation_derivatives(a, B)
+        
+        self.dxyz = R_gl @ self.q_dot[:3]
+        self.daBg = J_gl @ self.q_dot[3:6]
+        
+        self.dxyz[1] = self._saturation(self.dxyz[1], self.lateral_velocity_limit)
+        self.x_ICR = self._get_x_icr()
+        
+        self.v_dot = self._vehicle_dynamics()
+        
+        self.v += self.dt * self.v_dot
+
+        self.v[0] = np.clip(self.v[0], -self.velocity_limit, 0.0)
+        self.v[1] = self._saturation(self.v[1], self.angular_velocity_limit)
+        
+        self.q_dot = self._S_matrix() @ self.v
 
     @property
     def blade_cut_depth(self):
