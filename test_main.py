@@ -2,8 +2,10 @@
 import numpy as np
 import pytest
 import util as surface_util
+import visualization as visualization_module
 from main import BulldozerSimulation
 from util import DozerSimulation, _DozerTrackSimulation, _Surface
+from visualization import Visualization
 # to run: pytest test_main.py
 
 # ───────────────── Fixtures ─────────────────
@@ -693,21 +695,25 @@ def test_track_geometry_helper_uses_the_logged_rigid_body_pose():
     np.testing.assert_allclose(local, expected, atol=1e-12)
 
 
-def test_blade_renderer_draws_and_updates_tracks_in_every_view(monkeypatch):
-    surface = DozerSimulation(is_uphill=False)
+def test_visualization_draws_and_updates_tracks_in_every_view(monkeypatch):
+    surface = DozerSimulation(is_uphill=False, blade_local_roll=0.25)
     surface.stop_time = 3 * surface.dt + 1e-12
     surface.run()
     captured = {}
 
-    monkeypatch.setattr(surface_util.Image.Image, "save", lambda *args, **kwargs: None)
-    real_close = surface_util.plt.close
     monkeypatch.setattr(
-        surface_util.plt,
+        visualization_module.Image.Image,
+        "save",
+        lambda *args, **kwargs: captured.setdefault("save_kwargs", kwargs),
+    )
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(
+        visualization_module.plt,
         "close",
         lambda fig: captured.setdefault("figure", fig),
     )
 
-    surface._render_blade_run()
+    Visualization(surface).visualization()
     figure = captured["figure"]
     expected = surface._track_xyz(np.asarray(surface.log)[::2][-1, 1:7])
     projections = {
@@ -730,7 +736,12 @@ def test_blade_renderer_draws_and_updates_tracks_in_every_view(monkeypatch):
                 if axis.name == "3d"
                 else projections.get((axis.get_xlabel(), axis.get_ylabel()))
             )
-            if projection is not None:
+            if axis.name == "3d":
+                np.testing.assert_allclose(
+                    np.asarray(track_collections[0]._segments3d),
+                    expected,
+                )
+            elif projection is not None:
                 np.testing.assert_allclose(
                     np.asarray(track_collections[0].get_segments()),
                     expected[:, :, projection],
@@ -741,9 +752,75 @@ def test_blade_renderer_draws_and_updates_tracks_in_every_view(monkeypatch):
             for axis in figure.axes
             if (axis.get_xlabel(), axis.get_ylabel()) == ("X (m)", "Z (m)")
         )
-        assert "tracks" in [
-            text.get_text() for text in side_axis.get_legend().get_texts()
-        ]
+        labels = [text.get_text() for text in side_axis.get_legend().get_texts()]
+        assert "tracks" in labels
+        assert "blade face" in labels
+        assert "blade contact points" in labels
+        assert captured["save_kwargs"]["duration"] == int(1_000 / 30)
+
+        blade = np.asarray(surface.blade_log)[::2][-1]
+        blade_top = (
+            blade[[0, -1], :3]
+            + surface._blade_rotation_lg(blade[0, 3:6])[:, 2] * surface.H
+        )
+        expected_face = np.vstack([
+            blade[0, :3], blade[-1, :3], blade_top[-1], blade_top[0]
+        ])
+        blade_face = next(
+            patch
+            for patch in side_axis.patches
+            if patch.get_label() == "blade face"
+        )
+        np.testing.assert_allclose(
+            blade_face.get_xy()[:4],
+            expected_face[:, [0, 2]],
+        )
+    finally:
+        real_close(figure)
+
+
+def test_body_visualization_does_not_require_blade_logs(monkeypatch, tmp_path):
+    surface = DozerSimulation(enable_blade=False, is_uphill=False)
+    surface.stop_time = 3 * surface.dt + 1e-12
+    surface.run()
+    del surface.blade_log
+    del surface.grid_log
+    captured = {}
+
+    monkeypatch.setattr(
+        visualization_module.Image.Image,
+        "save",
+        lambda *args, **kwargs: captured.setdefault("save_kwargs", kwargs),
+    )
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(
+        visualization_module.plt,
+        "close",
+        lambda figure: captured.setdefault("figure", figure),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    Visualization(surface).visualization(show_neighbors=True)
+    figure = captured["figure"]
+
+    try:
+        assert (tmp_path / "figures").is_dir()
+        side_axis = next(
+            axis
+            for axis in figure.axes
+            if (axis.get_xlabel(), axis.get_ylabel()) == ("X (m)", "Z (m)")
+        )
+        labels = [text.get_text() for text in side_axis.get_legend().get_texts()]
+        collection_labels = {
+            collection.get_label() for collection in side_axis.collections
+        }
+        assert "tracks" in labels
+        assert "grid neighbors" in labels
+        assert "blade face" not in labels
+        assert "blade contact points" not in labels
+        assert "track orientations" in collection_labels
+        assert "track offsets" in collection_labels
+        assert captured["save_kwargs"]["duration"] == int(1_000 / 20)
     finally:
         real_close(figure)
 
@@ -781,30 +858,24 @@ def test_blade_enabled_short_run_keeps_logs_aligned_and_deforms():
     assert np.max(starting_heights - surface._grid_heights()) > 0.0
 
 
-@pytest.mark.parametrize(
-    ("enable_blade", "expected_renderer"),
-    ((True, "blade"), (False, "body")),
-)
-def test_run_and_plot_uses_one_mode_aware_dispatcher(
-    monkeypatch, enable_blade, expected_renderer
-):
+@pytest.mark.parametrize("enable_blade", (True, False))
+def test_run_and_plot_uses_one_mode_aware_visualization(monkeypatch, enable_blade):
     surface = DozerSimulation(enable_blade=enable_blade)
     calls = []
     monkeypatch.setattr(surface, "run", lambda: calls.append("run"))
+
+    def visualization(instance, show_neighbors=False):
+        calls.append((
+            "visualization", instance.simulation.enable_blade, show_neighbors
+        ))
+
     monkeypatch.setattr(
-        surface,
-        "_render_blade_run",
-        lambda show_neighbors: calls.append(("blade", show_neighbors)),
-    )
-    monkeypatch.setattr(
-        surface,
-        "_render_body_run",
-        lambda show_neighbors: calls.append(("body", show_neighbors)),
+        surface_util.Visualization, "visualization", visualization
     )
 
     surface.run_and_plot(show_neighbors=True)
 
-    assert calls == ["run", (expected_renderer, True)]
+    assert calls == ["run", ("visualization", enable_blade, True)]
 
 
 def _reached_contact(surface, tile=(1, 1), depth=-10.0):
