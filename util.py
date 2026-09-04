@@ -340,7 +340,7 @@ class DozerSimulation(_DozerTrackSimulation):
         self.neighbor_log       = []
         self.grid_log           = []
         
-        self.is_initalization   = True
+        self.is_initialized   = False
         neighbor_points = self._body_update()
     
         self.log.append([0, *self.q])
@@ -402,11 +402,11 @@ class DozerSimulation(_DozerTrackSimulation):
                 self.neighbor_log.append(np.array(neighbor_points))
                 
     def _body_update(self):
-        if not self.is_initalization:
+        if not self.is_initialized:
             self.q += self.dt * self.q_dot
             self.q[3:6] = (self.q[3:6] + np.pi) % (2 * np.pi) - np.pi
         else:
-            self.is_initalization = False
+            self.is_initialized = True
 
         #TODO: when optimizing run time for machine learning remove neighbor point tracking
         neighbor_points = self._get_neighbor_points(self.q)
