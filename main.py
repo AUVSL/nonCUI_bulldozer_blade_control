@@ -487,7 +487,7 @@ class BulldozerSimulation:
             self.v[0]  = max(min(self.v[0], self.velocity_limit), 0)
             self.v[1]  = self.saturation(self.v[1], self.angular_velocity_limit)
             self.q_dot = self.S_matrix() @ self.v
-
+            
             self.q   += self.dt * self.q_dot
             self.total_distance += np.linalg.norm(self.dt * self.q_dot[0:3])
             

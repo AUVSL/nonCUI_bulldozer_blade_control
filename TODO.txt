@@ -1,11 +1,6 @@
 1) blade update
 2) blade angle limits
 3) fixing max depth cuts to factor in roll
-4) Better Argument Passing
-     def _rotation_lg(self, a, B, g):
-     def _rotation_gl(self, a, B, g):
-     def _rotation_derivatives(self, a, B):
-     _blade_rotation_lg(self, orient)
-5) visualize forces in gif
-6) implement soil fall off rate proportional to turning rate : linear rate
-7) docker container
+4) visualize forces in gif
+5) implement soil fall off rate proportional to turning rate : linear rate
+6) docker container

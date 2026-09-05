@@ -3,6 +3,33 @@ import networkx as nx
 
 from visualization import Visualization
 
+class Control():
+    def __init__(self):
+        # controller reference
+        self.desired_depth = -0.05
+        self.desired_roll_pitch_yaw = np.array([ 0, 0, 0])
+        
+        # Blade Proportional controller gain(s)       
+        self.Kp = 3.0  
+        
+    def controller_errors(self, blade_roll_pitch_yaw):
+        """
+        Computes blade roll, pitch, yaw errors relative to desired surface and depth.
+        """
+        roll, pitch, yaw                                    = blade_roll_pitch_yaw
+        desired_roll, desired_pitch_multiplier, desired_yaw = self.desired_roll_pitch_yaw
+
+        # TODO: update blade angle limits from -1 to 1 to something more realistic, and update the test cases accordingly
+        desired_pitch = desired_pitch_multiplier * np.arcsin(np.clip(self.desired_depth / self.L, -1.0, 1.0))
+
+        errors   = np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
+        plot_out = np.array(          [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
+
+        return errors, plot_out
+    
+    def proportional_controller(self, blade_roll_pitch_yaw):
+        return self.Kp * self.controller_errors(blade_roll_pitch_yaw)
+
 class DozerSimulation():
     """Surface-aware bulldozer with an optional deforming blade."""
 
@@ -44,6 +71,9 @@ class DozerSimulation():
         self.B1 = 2.921 # blade width in meters
         self.H  = 0.955 # blade height in meters
         self.L  = 1.2   # blade arm length in meters
+        
+        # TODO: this should just get rolled into the controller gain when tuning with the blade rate limitors.
+        self.blade_angle_actuation_scaler = 1/100
         
         # -------------------------------- Soil parameters --------------------------------- 
         self.mu_l    = 0.1              # longitudinal friction coefficient
@@ -114,8 +144,8 @@ class DozerSimulation():
         self.dxyz  = np.zeros(3)
         self.daBg  = np.zeros(3)
         self.Rl    = np.zeros(2)
-        self.R_lg  = self._rotation_lg(self.q[3], self.q[4], self.q[5])
-        self.J_lg  = self._rotation_derivatives(self.q[3], self.q[4])
+        self.R_lg  = self._rotation_lg(*self.q[3:6])
+        self.J_lg  = self._rotation_derivatives()
                 
         # ----------------- Other kinematics and dynamic scalar variables ------------------ 
         self.x_ICR     = 0.0
@@ -192,7 +222,6 @@ class DozerSimulation():
     # ------------------------------------- ROTATION --------------------------------------     
     def _rotation_lg(self, a, B, g):
         """Rotation matrix: local to global frame."""
-        # TODO: change to accept input array
         return self._rotation_gl(a, B, g).T
 
     def _rotation_gl(self, a, B, g):
@@ -225,12 +254,9 @@ class DozerSimulation():
     # ----------------------------------- BODY DYNAMICS ----------------------------------- 
     def _update_q_dot(self):
         """Advance internal velocity state and return generalized velocity."""
-        a, B, g        = self.q[3:6]
-        self.R_lg      = self._rotation_lg(a, B, g)
-        _, self.J_lg   = self._rotation_derivatives(a, B)
-        
-        R_gl = self.R_lg.T
-        J_gl, self.J_lg = self._rotation_derivatives(a, B)
+        self.R_lg       = self._rotation_lg(*self.q[3:6])
+        R_gl            = self.R_lg.T
+        J_gl, self.J_lg = self._rotation_derivatives()
         
         self.dxyz = R_gl @ self.q_dot[:3]
         self.daBg = J_gl @ self.q_dot[3:6]
@@ -250,9 +276,11 @@ class DozerSimulation():
         
         self.q_dot = self._S_matrix() @ self.v
 
-    def _rotation_derivatives(self, a, B):
+    def _rotation_derivatives(self):
         """Rotation derivative matrices"""
-        # TODO: change to accept input array
+        a = self.q[3]
+        B = self.q[4]
+        
         sa, ca = np.sin(a), np.cos(a)
         sB, cB, tB = np.sin(B), np.cos(B), np.tan(B)
 
@@ -334,7 +362,6 @@ class DozerSimulation():
         moment          = ((FtR + RlR) - (FtL + RlL)) * self.b / 2
         moment_friction = 2 * self.fy * ((self.l**2) / 4 - (self.x_ICR**2))
         self.Mr         = self._G(moment, moment_friction, self.daBg[2])
-
 
     def _G(self, force, friction, velocity):
         if abs(velocity) > 1e-10:
@@ -618,8 +645,10 @@ class DozerSimulation():
 
     # ---------------------------- BLADE SURFACE DEFORMATION ------------------------------ 
     def _blade_update(self, deform=True):
-        orient = self.q[3:6].copy()
-        R      = self._blade_rotation_lg(orient)
+        # if deform:
+            # errors, _                 = self.controller_errors()
+            # self.blade_roll_pitch_yaw += self.gain * self.Kp * errors
+        R  = self._blade_rotation_lg(self.q[3:6])
         p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.blade_cut_depth()])
         p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.blade_cut_depth()])
 
@@ -641,13 +670,13 @@ class DozerSimulation():
         if deform:
             self._deform_blade_tiles(contacts_by_tile)
 
-        blade_points = [np.concatenate((point, orient)) for point in xyz]
+        blade_points    = [np.concatenate((point, self.q[3:6])) for point in xyz]
         blade_neighbors = [self._get_neighbor_points(point) for point in contact_points]
         return blade_points, blade_neighbors
 
-    def _blade_rotation_lg(self, orient):
+    def _blade_rotation_lg(self, orientation):
         """Blade-local roll/yaw composed on top of the body orientation."""
-        body_R = self._rotation_lg(*orient)
+        body_R = self._rotation_lg(*orientation)
         local_R = self._rotation_lg(
             self.blade_roll_pitch_yaw[0], 0.0, self.blade_roll_pitch_yaw[2]
         )
@@ -760,7 +789,7 @@ if __name__ == "__main__":
         is_surface_rolled    = False,
         is_backwards         = False,
         enable_blade         = True,
-        blade_roll_pitch_yaw = np.array([0.3, 0.0, 0.0])
+        blade_roll_pitch_yaw = np.array([0.0, 0.0, 0.0])
     )
 
     simulation.run_and_plot()
