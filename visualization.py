@@ -602,12 +602,13 @@ class Visualization:
             body_arrow_3d[0] = None
             q_lateral_3d[0].remove()
             q_lateral_3d[0] = None
-        for artist in flat_artists + three_d_artists:
+        cached_artists = flat_artists + three_d_artists
+        for artist in cached_artists:
             artist.set_visible(False)
         axis_top.set_title("")
         figure.canvas.draw()
         background = figure.canvas.copy_from_bbox(figure.bbox)
-        for artist in flat_artists + three_d_artists:
+        for artist in cached_artists:
             artist.set_visible(True)
 
         fps = 30 if enable_blade else 20

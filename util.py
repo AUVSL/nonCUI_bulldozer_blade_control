@@ -71,6 +71,7 @@ class DozerSimulation():
         self.B1 = 2.921 # blade width in meters
         self.H  = 0.955 # blade height in meters
         self.L  = 1.2   # blade arm length in meters
+        self.blade_arm_offset = np.array([0.5, 0, 0])
         
         # TODO: this should just get rolled into the controller gain when tuning with the blade rate limitors.
         self.blade_angle_actuation_scaler = 1/100
@@ -649,8 +650,11 @@ class DozerSimulation():
             # errors, _                 = self.controller_errors()
             # self.blade_roll_pitch_yaw += self.gain * self.Kp * errors
         R  = self._blade_rotation_lg(self.q[3:6])
-        p0 = self.q[:3] + R @ np.array([self.L, -self.B1 / 2, -self.blade_cut_depth()])
-        p1 = self.q[:3] + R @ np.array([self.L,  self.B1 / 2, -self.blade_cut_depth()])
+        
+        p0 = (self.q[:3] + self._rotation_lg(*self.q[3:6]) @ self.blade_arm_offset
+                         + R @ np.array([self.L, -self.B1 / 2, -self.blade_cut_depth()]))
+        p1 = (self.q[:3] + self._rotation_lg(*self.q[3:6]) @ self.blade_arm_offset
+                         + R @ np.array([self.L,  self.B1 / 2, -self.blade_cut_depth()]))
 
         # TODO: when go back to optimize the code consider using the vector between p0 and p1 so not O(n) points
         length = np.linalg.norm(p1 - p0)
@@ -784,7 +788,7 @@ DozerSimulation._run = DozerSimulation.run
 
 if __name__ == "__main__":
     simulation = DozerSimulation(
-        is_uphill            = False,
+        is_uphill            = True,
         is_surface_pitched   = False,
         is_surface_rolled    = False,
         is_backwards         = False,
