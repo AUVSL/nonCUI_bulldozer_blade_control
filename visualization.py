@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.collections import LineCollection
 from matplotlib.patches import Polygon
 from matplotlib.ticker import MaxNLocator
@@ -20,6 +21,72 @@ class Visualization:
 
     def __init__(self, simulation):
         self.simulation = simulation
+
+    def forces_visualization(self, filename="figures/forces.gif"):
+        """Animate logged forces in the 4-by-2 dashboard used by main.py.
+
+        Uses the same frame stride and playback rate as the geometry GIF.
+        Dynamics values are snapshots from each simulation step, not recomputed
+        from the final state.
+        """
+        if not self.simulation.force_log:
+            raise ValueError("No force samples are available to visualize.")
+        samples = self.simulation.force_log
+        times = np.array([row["time"] for row in samples])
+        panels = [
+            ("Blade force", "Fb (N)", [("Fb", "Blade")]),
+            ("Blade moment", "Mb (N m)", [("Mb", "Blade")]),
+            ("Track rolling resistance", "Rl (N)", [("Rl_left", "Left"), ("Rl_right", "Right")]),
+            ("Lateral track force", "Fy (N)", [("Fy", "Lateral")]),
+            ("Track turning moment", "Mr (N m)", [("Mr", "Turning")]),
+            ("Velocity", "m/s (forward), rad/s (turn)", [("v_forward", "Forward"), ("v_turn", "Turn")]),
+            ("Blade roll error", "Error (rad)", [("roll_error", "Roll")]),
+            ("Track drive forces", "Force (N)", [("drive_left", "Left"), ("drive_right", "Right")]),
+        ]
+        figure, axes = plt.subplots(4, 2, figsize=(12, 9), sharex=True)
+        title = figure.suptitle("Forces & Moments over Time")
+        traces, cursors = [], []
+        for axis, (name, units, series) in zip(axes.flat, panels):
+            values = []
+            for key, label in series:
+                history = np.array([row[key] for row in samples])
+                line, = axis.plot([], [], label=label)
+                traces.append((line, history))
+                values.append(history)
+            low, high = np.min(values), np.max(values)
+            margin = 0.08 * (high - low) if high > low else max(abs(low) * 0.08, 1.0)
+            axis.set_ylim(low - margin, high + margin)
+            axis.set_xlim(times[0], max(times[-1], times[0] + self.simulation.dt))
+            axis.set_title(name)
+            axis.set_ylabel(units)
+            axis.set_xlabel("Time (s)")
+            axis.grid(True, linewidth=0.4)
+            if len(series) > 1:
+                axis.legend(loc="upper right", fontsize=8)
+            cursors.append(axis.axvline(times[0], color="gray", linestyle="--", linewidth=0.8))
+        figure.tight_layout(rect=(0, 0, 1, 0.96))
+
+        def update(index):
+            for line, history in traces:
+                line.set_data(times[:index + 1], history[:index + 1])
+            for cursor in cursors:
+                cursor.set_xdata([times[index], times[index]])
+            title.set_text(f"Forces & Moments over Time - t = {times[index]:.2f} s")
+            return [line for line, _ in traces] + cursors + [title]
+
+        indices = list(range(0, len(samples), 2))
+        if indices[-1] != len(samples) - 1:
+            indices.append(len(samples) - 1)
+        fps = 30 if self.simulation.enable_blade else 20
+        output = Path(filename)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            movie = FuncAnimation(figure, update, frames=indices, interval=1000 / fps, blit=False)
+            movie.save(str(output), writer=PillowWriter(fps=fps))
+        finally:
+            plt.close(figure)
+        print(f"Saved {output}")
+        return output
 
     def visualization(self, show_neighbors: bool = False):
         """Write the logged simulation to ``figures/simulation.gif``."""

@@ -59,7 +59,7 @@ class DozerSimulation():
         # returns is noisier than that check and the settle loop never converges
         # -- which burns *more* passes, so loosening this is a net slowdown.
         self.contact_tol            = 1e-7
-        self.fill_distance          = 8.0    # maximum distance for soil fill calculation
+        self.fill_distance          = 8.0    # maximum distance for soil fill calculation TODO: should be computed relative to depth of cut
         self.velocity_limit         = 2.222
         self.lateral_velocity_limit = 0.0    # this governs how much the dozer can "slide" laterally
         self.blade_roll_pitch_yaw_limits      = np.array([0.0735, 0.430, 0.387]) # radians
@@ -175,12 +175,14 @@ class DozerSimulation():
         self.blade_log    = []
         self.neighbor_log = []
         self.grid_log     = []
+        self.force_log    = []
         
         self.is_initialized = False
         neighbor_points     = self._body_update()
 
     
         self.log.append([0, *self.q])
+        self._log_forces(0.0)
         self.grid_log.append(self._grid_heights())
 
         # seed the blade points the same way, so blade_log stays aligned frame
@@ -755,7 +757,9 @@ class DozerSimulation():
     def run_and_plot(self, show_neighbors: bool = False):
         """Run the simulation and visualize the active body/blade view."""
         self.run()
-        return Visualization(self).visualization(show_neighbors)
+        visualizer = Visualization(self)
+        visualizer.visualization(show_neighbors)
+        visualizer.forces_visualization()
 
     def run(self):
         """Advance either the blade-enabled or tracked-body simulation."""
@@ -780,12 +784,25 @@ class DozerSimulation():
 
             # log data for visualization and analysis
             self.log.append([t, *self.q])
+            self._log_forces(t)
             if self.enable_blade:
                 self.neighbor_log.append(np.array(neighbor_points))
                 self.blade_log.append(blade_points)
                 self.grid_log.append(self._grid_heights())
             else:
                 self.neighbor_log.append(np.array(neighbor_points))
+
+    def _log_forces(self, t):
+        """Snapshot dynamics values alongside each logged pose."""
+        self.force_log.append({
+            "time": float(t),
+            "Fb": float(self.Fb), "Mb": float(self.Mb),
+            "Rl_left": float(self.Rl[0]), "Rl_right": float(self.Rl[1]),
+            "Fy": float(self.Fy), "Mr": float(self.Mr),
+            "v_forward": float(self.v[0]), "v_turn": float(self.v[1]),
+            "roll_error": float(self.controller.controller_errors(self.blade_roll_pitch_yaw)[0][0]),
+            "drive_left": float(self.F_track[0]), "drive_right": float(self.F_track[1]),
+        })
 
     # Used by 3D visualizer
     def _track_xyz(self, pose):
