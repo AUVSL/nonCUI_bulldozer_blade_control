@@ -3,14 +3,16 @@ import networkx as nx
 
 from visualization import Visualization
 
+
 class Control():
-    def __init__(self):
+    def __init__(self, L):
         # controller reference
-        self.desired_depth = -0.05
+        self.L = L
+        self.desired_depth = -0.5
         self.desired_roll_pitch_yaw = np.array([ 0, 0, 0])
         
         # Blade Proportional controller gain(s)       
-        self.Kp = 3.0  
+        self.Kp = np.array([3.0, 3.0, 3.0])  
         
     def controller_errors(self, blade_roll_pitch_yaw):
         """
@@ -28,7 +30,8 @@ class Control():
         return errors, plot_out
     
     def proportional_controller(self, blade_roll_pitch_yaw):
-        return self.Kp * self.controller_errors(blade_roll_pitch_yaw)
+        return self.Kp * self.controller_errors(blade_roll_pitch_yaw)[0]
+
 
 class DozerSimulation():
     """Surface-aware bulldozer with an optional deforming blade."""
@@ -37,11 +40,11 @@ class DozerSimulation():
                  is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3)):
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # ----------------------------- Load passed parameters ----------------------------- 
-        self.is_surface_pitched      = is_surface_pitched
-        self.is_surface_rolled       = is_surface_rolled
-        self.is_backwards            = is_backwards
-        self.enable_blade            = enable_blade
-        self.blade_roll_pitch_yaw    = blade_roll_pitch_yaw
+        self.is_surface_pitched   = is_surface_pitched
+        self.is_surface_rolled    = is_surface_rolled
+        self.is_backwards         = is_backwards
+        self.enable_blade         = enable_blade
+        self.blade_roll_pitch_yaw = blade_roll_pitch_yaw
                            
         # ------------------------- General simulation parameters -------------------------- 
         self.dt             = 1/100
@@ -56,16 +59,18 @@ class DozerSimulation():
         # returns is noisier than that check and the settle loop never converges
         # -- which burns *more* passes, so loosening this is a net slowdown.
         self.contact_tol            = 1e-7
-        self.fill_distance          = 8.0 # maximum distance for soil fill calculation
+        self.fill_distance          = 8.0    # maximum distance for soil fill calculation
         self.velocity_limit         = 2.222
-        self.lateral_velocity_limit = 0.0 # this governs how much the dozer can "slide" laterally
-
+        self.lateral_velocity_limit = 0.0    # this governs how much the dozer can "slide" laterally
+        self.blade_roll_pitch_yaw_limits      = np.array([0.0735, 0.430, 0.387]) # radians
+        self.blade_roll_pitch_yaw_rate_limits = np.array([0.0735, 0.143, 0.194]) # radians per second
+        
         # --------------------------- Bulldozer body parameters ---------------------------- 
         mass              = 10156.0 # of the unloaded vehicle in kilograms
         self.b            = 1.75    # track width in meters
         self.l            = 2.349   # track length in meters
         self.h            = 2.762/2 # body height in meters, scaled down by Sam
-        self.F_track_base = 600000.0 
+        self.F_track_base = 600000.0
 
         # -------------------------- Bulldozer blade parameters ---------------------------- 
         self.B1 = 2.921 # blade width in meters
@@ -97,10 +102,10 @@ class DozerSimulation():
             self.q_dot   *= -1
             self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
             self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
-            self.u_range       = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
-            self.v_range       = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
-        self.us            = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
-        self.vs            = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
+            self.u_range  = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
+            self.v_range  = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
+        self.us           = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
+        self.vs           = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
         
         self.offset             = np.array([0, 0, self.b]) if is_uphill else np.array([0, 0, -self.b])
         self.transition_tiles   = 1/2 *self.b * self.division_factor # tiles over which the offset ramps down past u_split
@@ -123,7 +128,7 @@ class DozerSimulation():
         if np.array_equal(blade_roll_pitch_yaw, np.zeros(3)):
             self.blade_roll_pitch_yaw[1] = np.arcsin((self.H / 4) / self.L) 
 
-        # ------------------------- Forces and moment varaibles ---------------------------- 
+        # ------------------------ Forces and moment Parameters --------------------------- 
         self.F_track = np.array([self.F_track_base, self.F_track_base])  #[left, right]
         self.rl      = self.mu_l * mass * gravity / 2      # longitudinal track force limit
         self.fy      = self.mu_t * mass * gravity / self.l # lateral force limit
@@ -161,15 +166,19 @@ class DozerSimulation():
         self.Mr        = 0.0
         self.vtL       = 0.0
         self.vtR       = 0.0
-            
-        # ----------------------- Write 1st entry to simulation logs ----------------------- 
-        self.log                = []
-        self.blade_log          = []
-        self.neighbor_log       = []
-        self.grid_log           = []
         
-        self.is_initialized   = False
-        neighbor_points = self._body_update()
+        # ----------------------------------- Controller ----------------------------------- 
+        self.controller = Control(self.L)
+        
+        # ----------------------- Write 1st entry to simulation logs ----------------------- 
+        self.log          = []
+        self.blade_log    = []
+        self.neighbor_log = []
+        self.grid_log     = []
+        
+        self.is_initialized = False
+        neighbor_points     = self._body_update()
+
     
         self.log.append([0, *self.q])
         self.grid_log.append(self._grid_heights())
@@ -646,9 +655,17 @@ class DozerSimulation():
 
     # ---------------------------- BLADE SURFACE DEFORMATION ------------------------------ 
     def _blade_update(self, deform=True):
-        # if deform:
-            # errors, _                 = self.controller_errors()
-            # self.blade_roll_pitch_yaw += self.gain * self.Kp * errors
+        if deform:
+            previous_angles = np.array(self.blade_roll_pitch_yaw, dtype=float, copy=True)
+            controller_output = self.controller.proportional_controller(previous_angles)
+            requested_angles = previous_angles + self.blade_angle_actuation_scaler * controller_output
+
+            # dx = (x_t - x_{t-1}) / dt; limit each axis in radians per second.
+            requested_rates = (requested_angles - previous_angles) / self.dt
+            limited_rates = np.clip(
+                requested_rates, -self.blade_roll_pitch_yaw_rate_limits, self.blade_roll_pitch_yaw_rate_limits)
+            self.blade_roll_pitch_yaw = np.clip(
+                previous_angles + limited_rates * self.dt, -self.blade_roll_pitch_yaw_limits, self.blade_roll_pitch_yaw_limits)
         R  = self._blade_rotation_lg(self.q[3:6])
         
         p0 = (self.q[:3] + self._rotation_lg(*self.q[3:6]) @ self.blade_arm_offset
