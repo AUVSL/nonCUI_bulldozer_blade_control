@@ -9,7 +9,7 @@ class Control():
         # controller reference
         self.L = L
         self.desired_depth = -0.5
-        self.desired_roll_pitch_yaw = np.array([ 0, 0, 0])
+        self.desired_roll_pitch_yaw = np.array([ 0, 1, 0])
         
         # Blade Proportional controller gain(s)       
         self.Kp = np.array([3.0, 3.0, 3.0])  
@@ -30,7 +30,7 @@ class Control():
         return errors, plot_out
     
     def proportional_controller(self, blade_roll_pitch_yaw):
-        return self.Kp * self.controller_errors(blade_roll_pitch_yaw)[0]
+        return -self.Kp * self.controller_errors(blade_roll_pitch_yaw)[0]
 
 
 class DozerSimulation():
