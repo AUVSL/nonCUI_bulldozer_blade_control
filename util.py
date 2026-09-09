@@ -8,7 +8,7 @@ class Control():
     def __init__(self, L):
         # controller reference
         self.L = L
-        self.desired_depth = -0.5
+        self.desired_depth = -0.2
         self.desired_roll_pitch_yaw = np.array([ 0, 1, 0])
         
         # Blade Proportional controller gain(s)       
@@ -125,8 +125,8 @@ class DozerSimulation():
         stop_index                  = 0 if self.is_backwards else -1 
         self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
         self.angular_velocity_limit = 2 * self.velocity_limit / self.b
-        if np.array_equal(blade_roll_pitch_yaw, np.zeros(3)):
-            self.blade_roll_pitch_yaw[1] = np.arcsin((self.H / 4) / self.L) 
+        # if np.array_equal(blade_roll_pitch_yaw, np.zeros(3)):
+        #     self.blade_roll_pitch_yaw[1] = np.arcsin((self.H / 4) / self.L) 
 
         # ------------------------ Forces and moment Parameters --------------------------- 
         self.F_track = np.array([self.F_track_base, self.F_track_base])  #[left, right]
@@ -491,11 +491,11 @@ class DozerSimulation():
 
     # ------------------------------ TRACK SURFACE CONTACT -------------------------------- 
     def _settle_tracks(self, orient):
-        """Set q's supported pose from both complete track contact lines."""
+        """Set the supported pose from tracks and the enabled blade top edge."""
         self.q[3:6] = orient
         for _ in range(20):
-            # Roll and pitch settle onto the ground so no quarter of the body
-            # hangs. Yaw is the heading and cannot change during settling.
+            # Balance track/blade support across the body. Yaw is the heading
+            # and cannot change during settling.
             new_orient = self.q[3:6].copy()
             new_orient[0] = self._body_contact_roll(new_orient)
             new_orient[1] = self._body_contact_pitch(new_orient)
@@ -510,7 +510,7 @@ class DozerSimulation():
                 break
 
     def _body_contact_roll(self, orient):
-        """Roll (at orient's pitch and yaw) that leaves both tracks on the ground."""
+        """Roll that balances left/right track and blade support."""
         def imbalance(roll):
             z_left, z_right = self._track_resting_heights(
                 self._rotation_lg(roll, orient[1], orient[2]))
@@ -519,8 +519,8 @@ class DozerSimulation():
 
     def _track_resting_heights(self, R):
         """
-        The lowest-height question asked of each track on its own, as
-        (left, right). _body_contact_roll balances the pair.
+        Required support heights on each side of the body, as (left, right).
+        Includes the blade when enabled; _body_contact_roll balances the pair.
         """
         support = self._support_heights(R)
         return float(support[1].max()), float(support[0].max())
@@ -528,8 +528,9 @@ class DozerSimulation():
     def _support_heights(self, R):
         """
         Lowest body height each quarter of the contact patch calls for, as a
-        [right, left] x [back, front] array. The rigid body can only rest at the
-        highest of the four, so any quarter asking for less hangs clear of the
+        [right, left] x [back, front] array. Tracks use current soil; the enabled
+        blade top uses the original soil surface. The body rests at the highest
+        of the four, so any quarter asking for less hangs clear of the
         ground unless the pose balances them: _body_contact_roll balances left
         against right, _contact_pitch front against back.
 
@@ -582,7 +583,109 @@ class DozerSimulation():
                     support[i, 0] = max(support[i, 0], needed)
                 if s >= 0:
                     support[i, 1] = max(support[i, 1], needed)
+        if self.enable_blade:
+            support = np.maximum(support, self._blade_support_heights(R))
         return support
+
+
+    def _blade_support_heights(self, R):
+        """Required body heights for the blade top above undeformed soil.
+
+        Classify support by body-local left/right and front/back, like the
+        tracks. Partition the full edge at grid and body-axis crossings. Within
+        each tile the interpolated clearance is quadratic, so also check its
+        interior maximum instead of relying only on the blade's endpoints.
+        """
+        edge        = self._blade_edge_local(top=True)
+        local_delta = edge[1] - edge[0]
+        start       = self.q[:3] + R @ edge[0]
+        delta       = R @ local_delta
+        breaks      = {0.0, 0.5, 1.0}
+        # seach x axis tiles via (self.us, 0) then y axis tiles via (self.vs, 1)
+        for grid, axis in ((self.us, 0), (self.vs, 1)):
+            # skip if the track runs parallel to this axis' lines (fwd[axis] ~ 0) 
+            # to avoid divide by zero issue
+            if abs(delta[axis]) > 1e-12:
+                # log splits along the local normal blade length where x and y grid crossings are
+                lower, upper = sorted((start[axis], start[axis] + delta[axis]))
+                for coordinate in grid[(grid > lower) & (grid < upper)]:
+                    breaks.add(float((coordinate - start[axis]) / delta[axis]))
+
+        def needed(t):
+            point = start + t * delta
+            return self._undeformed_height(point) - (R @ (edge[0] + t * local_delta))[2]
+        
+        # Support holds the highest requirement found for each region. 
+        # Starting at negative infinity lets the first real value replace it; 
+        # regions with no blade coverage remain -np.inf.
+        support = np.full((2, 2), -np.inf)
+        breaks  = sorted(breaks)
+        # This visits consecutive intervals: [0, 0.3], [0.3, 0.5], and so on.
+        for lo, hi in zip(breaks[:-1], breaks[1:]):
+            left, middle, right = needed(lo), needed((lo + hi) / 2), needed(hi)
+            maximum             = max(left, right)
+            # A bilinear tile's maximum is at a corner, but the blade may miss that
+            # corner and encounter its highest terrain point inside the interval.
+            # For example, this unit tile has h(x, y) = x + y - 2*x*y:
+            #
+            #   y = 1    1 ------- 0
+            #            |         |
+            #   y = 0    0 ------- 1
+            #           x = 0     x = 1
+            #
+            # Along x = y = t, h(t) = 2*t - 2*t**2: both endpoints have height 0,
+            # but the midpoint has height 0.5. Other oblique paths can also have
+            # interior peaks, so check the quadratic's maximum, not just endpoints.
+            # Fit f(s) = A*s**2 + B*s + C, where s spans this interval:
+            # t = lo + s*(hi - lo). The samples give:
+            #   f(0)   = left   => C = left
+            #   f(1)   = right  => B = right - left - A
+            #   f(0.5) = middle => middle = (left + right)/2 - A/4
+            # Hence A = 2*(left + right - 2*middle).
+            #
+            # If A < 0, the curve bends downward and may have an interior maximum.
+            # Setting f'(s) = 2*A*s + B = 0 gives s = -B/(2*A).
+            # If 0 < s < 1, evaluate needed(lo + s*(hi - lo)) and compare it
+            # with the endpoint maximum. Otherwise, the endpoints suffice.
+            # The tolerance avoids dividing by a nearly zero A.
+            quadratic = 2 * (left + right - 2 * middle)
+            linear    = right - left - quadratic
+            if quadratic < -1e-12:
+                fraction = -linear / (2 * quadratic)
+                if 0.0 < fraction < 1.0:
+                    maximum = max(maximum, needed(lo + fraction * (hi - lo)))
+                    
+            # Splitting at center of tile ensures each local coordinate is non-zero since we include local x=0 
+            local  = edge[0] + (lo + hi) / 2 * local_delta
+
+            sides = [i for i, sign in enumerate((-1, 1)) if sign * local[1] >= -1e-12]
+            
+            # The blade edge always stays in front of the body origin (local x > 0),
+            # so update only the front support column (index 1).
+            for i in sides:
+                support[i, 1] = max(support[i, 1], maximum)
+        return support
+
+    def _blade_edge_local(self, top=False):
+        """Blade edge endpoints in the body frame, including the arm offset."""
+        local_R = self._rotation_lg(
+            self.blade_roll_pitch_yaw[0], 0.0, self.blade_roll_pitch_yaw[2]
+        )
+        z = (self.H if top else 0.0) - self.blade_cut_depth()
+        return np.array([
+            self.blade_arm_offset + local_R @ np.array([self.L, y, z])
+            for y in (-self.B1 / 2, self.B1 / 2)
+        ])
+
+    def _undeformed_height(self, point):
+        """Original soil height, unaffected by cuts made during the run."""
+        i, j = self._grid_cell(point)
+        corners = [
+            (*self.grid_pts[ci][cj][:2], self.starting_grid_heights[ci, cj])
+            for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
+        ]
+        return self._bilinear_height(point, corners)
+
 
     def _bilinear_height(self, point, corners):
         """Bilinearly interpolate height from a tile's four corner vertices."""
@@ -632,7 +735,7 @@ class DozerSimulation():
         return angle
 
     def _body_contact_pitch(self, orient):
-        """Pitch (at orient's roll and yaw) that leaves both ends on the ground."""
+        """Pitch that balances front/back track and blade support."""
         def imbalance(pitch):
             z_front, z_back = self._half_resting_heights(
                 self._rotation_lg(orient[0], pitch, orient[2]))
@@ -642,7 +745,7 @@ class DozerSimulation():
     def _half_resting_heights(self, R):
         """
         The same question asked of each half of the body, as (front, back).
-        _contact_pitch balances the pair.
+        _body_contact_pitch balances the pair.
         """
         support = self._support_heights(R)
         return float(support[:, 1].max()), float(support[:, 0].max())
@@ -650,8 +753,8 @@ class DozerSimulation():
     def _resting_height(self, R):
         """
         Lowest body height q[2] (for orientation R and the current q[:2]) that
-        keeps every point of both rigid tracks on or above the surface, so the
-        body rests on its highest contact and no track segment is submerged.
+        keeps the tracks above current soil and the enabled blade top above
+        undeformed soil. The body rests on its highest required contact.
         """
         return float(self._support_heights(R).max())
 
@@ -668,12 +771,11 @@ class DozerSimulation():
                 requested_rates, -self.blade_roll_pitch_yaw_rate_limits, self.blade_roll_pitch_yaw_rate_limits)
             self.blade_roll_pitch_yaw = np.clip(
                 previous_angles + limited_rates * self.dt, -self.blade_roll_pitch_yaw_limits, self.blade_roll_pitch_yaw_limits)
-        R  = self._blade_rotation_lg(self.q[3:6])
-        
-        p0 = (self.q[:3] + self._rotation_lg(*self.q[3:6]) @ self.blade_arm_offset
-                         + R @ np.array([self.L, -self.B1 / 2, -self.blade_cut_depth()]))
-        p1 = (self.q[:3] + self._rotation_lg(*self.q[3:6]) @ self.blade_arm_offset
-                         + R @ np.array([self.L,  self.B1 / 2, -self.blade_cut_depth()]))
+            # Apply the new blade command to the supported body pose before
+            # any soil is removed; the original terrain remains the constraint.
+            self._settle_tracks(self.q[3:6].copy())
+        body_R = self._rotation_lg(*self.q[3:6])
+        p0, p1 = self.q[:3] + self._blade_edge_local() @ body_R.T
 
         # TODO: when go back to optimize the code consider using the vector between p0 and p1 so not O(n) points
         length = np.linalg.norm(p1 - p0)
