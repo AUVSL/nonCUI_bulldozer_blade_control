@@ -587,7 +587,6 @@ class DozerSimulation():
             support = np.maximum(support, self._blade_support_heights(R))
         return support
 
-
     def _blade_support_heights(self, R):
         """Required body heights for the blade top above undeformed soil.
 
@@ -686,7 +685,6 @@ class DozerSimulation():
         ]
         return self._bilinear_height(point, corners)
 
-
     def _bilinear_height(self, point, corners):
         """Bilinearly interpolate height from a tile's four corner vertices."""
         (x1, y1, h1), (x2, y2, h2), (x3, y3, h3), (_, _, h4) = corners
@@ -774,6 +772,8 @@ class DozerSimulation():
             # Apply the new blade command to the supported body pose before
             # any soil is removed; the original terrain remains the constraint.
             self._settle_tracks(self.q[3:6].copy())
+            #TODO: if performance is an issue I could just call settle track after the body acceleration update
+    
         body_R = self._rotation_lg(*self.q[3:6])
         p0, p1 = self.q[:3] + self._blade_edge_local() @ body_R.T
 
