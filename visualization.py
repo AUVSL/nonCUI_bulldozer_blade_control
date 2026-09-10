@@ -10,6 +10,7 @@ from matplotlib.colors import to_rgba
 from matplotlib.patches import Polygon
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
+from mpl_toolkits.mplot3d import proj3d
 from PIL import Image
 
 
@@ -147,7 +148,8 @@ class Visualization:
         # points toward the blade: a full-height rear and a lower front hood.
         half_body_length = simulation.l / 2
         body_split = -half_body_length + 3 * simulation.l / 5
-        half_body_width = (simulation.b - simulation.track_width) / 2
+        body_width_scale = 0.8  # Fraction of the gap between the tracks filled by the body.
+        half_body_width = body_width_scale * (simulation.b - simulation.track_width) / 2
         body_bottom, body_top = simulation.track_height / 2, simulation.h
         front_top = body_bottom + (body_top - body_bottom) * 2 / 3
         # Keep the hood height at the body split and lower its nose by 30%.
@@ -298,24 +300,25 @@ class Visualization:
                 ]),
             ], axis=1)
 
+        soil_color = "saddlebrown"
         segments = grid_segments(grid_z_data[0])
         grid_3d = Line3DCollection(
             segments,
-            colors="saddlebrown",
+            colors=soil_color,
             linewidths=0.5,
             alpha=0.5,
             zorder=0,
         )
         grid_back = LineCollection(
             segments[:, :, [1, 2]],
-            colors="black",
+            colors=soil_color,
             linewidths=0.5,
             alpha=0.5,
             zorder=0,
         )
         grid_side = LineCollection(
             segments[:, :, [0, 2]],
-            colors="black",
+            colors=soil_color,
             linewidths=0.5,
             alpha=0.5,
             zorder=0,
@@ -325,7 +328,7 @@ class Visualization:
         axis_side.add_collection(grid_side)
         axis_top.add_collection(LineCollection(
             segments[:, :, [0, 1]],
-            colors="black",
+            colors=soil_color,
             linewidths=0.5,
             alpha=0.5,
             zorder=0,
@@ -494,27 +497,38 @@ class Visualization:
             )
             q_lateral_3d = [None]
 
+        def blade_face_color(face, projection=None):
+            # The vertex order faces blade-local +x (toward the soil).
+            # Counterclockwise screen winding exposes the front; clockwise
+            # exposes the back. Projection also handles the isometric camera.
+            if projection is None:
+                x, y, _ = proj3d.proj_transform(*face.T, axis_3d.get_proj())
+            else:
+                x, y = face[:, projection].T
+            signed_area = np.sum(x * np.roll(y, -1) - y * np.roll(x, -1))
+            return "grey" if signed_area >= 0.0 else body_yellow
+
         if enable_blade:
             initial_blade = blade_data[0]
             blade_arrow_top = axis_top.quiver(
                 initial_blade[:, 0], initial_blade[:, 1],
                 np.full(len(initial_blade), initial_forward[0]),
                 np.full(len(initial_blade), initial_forward[1]),
-                color="black", scale=1 / arrow_length, scale_units="xy",
+                color="grey", scale=1 / arrow_length, scale_units="xy",
                 angles="xy", zorder=7,
             )
             blade_arrow_back = axis_back.quiver(
                 initial_blade[:, 1], initial_blade[:, 2],
                 np.full(len(initial_blade), initial_forward[1]),
                 np.full(len(initial_blade), initial_forward[2]),
-                color="black", scale=1 / arrow_length, scale_units="xy",
+                color="grey", scale=1 / arrow_length, scale_units="xy",
                 angles="xy", zorder=7,
             )
             blade_arrow_side = axis_side.quiver(
                 initial_blade[:, 0], initial_blade[:, 2],
                 np.full(len(initial_blade), initial_forward[0]),
                 np.full(len(initial_blade), initial_forward[2]),
-                color="black", scale=1 / arrow_length, scale_units="xy",
+                color="grey", scale=1 / arrow_length, scale_units="xy",
                 angles="xy", zorder=7,
             )
             blade_arrow_3d = [None]
@@ -528,23 +542,23 @@ class Visualization:
             ])
             blade_face_top = Polygon(
                 initial_blade_face[:, [0, 1]], closed=True,
-                facecolor="black", edgecolor="black", alpha=1.0, zorder=6,
+                facecolor="grey", edgecolor="#4a4a4a", alpha=1.0, zorder=6,
             )
             blade_face_back = Polygon(
                 initial_blade_face[:, [1, 2]], closed=True,
-                facecolor="black", edgecolor="black", alpha=1.0, zorder=6,
+                facecolor="grey", edgecolor="#4a4a4a", alpha=1.0, zorder=6,
             )
             blade_face_side = Polygon(
                 initial_blade_face[:, [0, 2]], closed=True,
-                facecolor="black", edgecolor="black", alpha=1.0, zorder=6,
+                facecolor="grey", edgecolor="#4a4a4a", alpha=1.0, zorder=6,
                 label="blade face",
             )
             axis_top.add_patch(blade_face_top)
             axis_back.add_patch(blade_face_back)
             axis_side.add_patch(blade_face_side)
 
-        # Sort all vehicle faces together by camera depth. Separate collections
-        # draw whole parts over each other, making an opaque body look transparent.
+        # Gather the vehicle faces and colors in rear/hood/right-track/left-track
+        # order, followed by the blade when enabled.
         def vehicle_polygons(frame_index):
             faces = list(body_data[frame_index][:, body_faces].reshape(-1, 4, 3))
             faces.extend(track_polygons(frame_index))
@@ -557,13 +571,54 @@ class Visualization:
         vehicle_edges = ([to_rgba("darkgoldenrod")] * len(body_colors)
                          + [to_rgba("#202326")] * len(track_colors))
         if enable_blade:
-            vehicle_colors.append(to_rgba("black", 1.0))
-            vehicle_edges.append(to_rgba("black", 1.0))
-        vehicle_3d = Poly3DCollection(
-            vehicle_polygons(0), facecolors=vehicle_colors, edgecolors=vehicle_edges,
-            linewidths=0.8, zsort="average", zorder=5, label="dozer",
-        )
-        axis_3d.add_collection3d(vehicle_3d)
+            vehicle_colors.append(to_rgba("grey", 1.0))
+            vehicle_edges.append(to_rgba("#4a4a4a", 1.0))
+        # Keep convex parts separate. Their separating planes give a reliable
+        # draw order; average depths of long faces can wrongly cover a track.
+        part_sizes = [len(body_faces), len(body_faces), len(track_faces), len(track_faces)]
+        if enable_blade:
+            part_sizes.append(1)
+        part_offsets = np.r_[0, np.cumsum(part_sizes)]
+        part_slices = [slice(start, end) for start, end in zip(part_offsets[:-1], part_offsets[1:])]
+        initial_vehicle = vehicle_polygons(0)
+        vehicle_parts = []
+        for section in part_slices:
+            artist = Poly3DCollection(
+                initial_vehicle[section], facecolors=vehicle_colors[section],
+                edgecolors=vehicle_edges[section], linewidths=0.8,
+                zsort="average", zorder=5, label="dozer",
+            )
+            axis_3d.add_collection3d(artist)
+            vehicle_parts.append(artist)
+
+        def ordered_vehicle_parts(frame_index):
+            # Recover the camera in world coordinates from the projection.
+            eye = np.linalg.solve(axis_3d.get_proj(), [0.0, 0.0, -1.0, 0.0])
+            pose = data[frame_index, 1:7]
+            if abs(eye[3]) > 1e-12:
+                eye_world = eye[:3] / eye[3]
+            else:  # Orthographic camera: only the viewing direction matters.
+                eye_world = pose[:3] + eye[:3] / np.linalg.norm(eye[:3]) * 1e6
+            eye_local = simulation._rotation_lg(*pose[3:6]).T @ (eye_world - pose[:3])
+
+            # Parts 2/3 are the -y/+y tracks. Paint the far track, then the
+            # body, then the near track so the body cannot clip the near tread.
+            far_track, near_track = (2, 3) if eye_local[1] >= 0.0 else (3, 2)
+            rear, hood = (0, 1) if eye_local[0] >= body_split else (1, 0)
+            order = [far_track, rear, hood, near_track]
+            if enable_blade:
+                face = vehicle_polygons(frame_index)[-1]
+                normal = np.cross(face[1] - face[0], face[3] - face[0])
+                body_center = body_data[frame_index].mean(axis=(0, 1))
+                body_side = np.dot(normal, body_center - face[0])
+                eye_side = np.dot(normal, eye_world - face[0])
+                # From behind the blade, the vehicle can obscure it; from
+                # the soil-facing side, the blade is in front of the vehicle.
+                if body_side * eye_side >= 0.0:
+                    order.insert(0, 4)
+                else:
+                    order.append(4)
+            return [vehicle_parts[index] for index in order]
 
         def set_neighbors(frame_index):
             points = (
@@ -673,7 +728,7 @@ class Visualization:
                 np.full(len(blade), direction[0]),
                 np.full(len(blade), direction[1]),
                 np.full(len(blade), direction[2]),
-                length=arrow_length, color="black", zorder=7,
+                length=arrow_length, color="grey", zorder=7,
             )
 
             blade_top = blade_top_data[frame_index]
@@ -683,6 +738,13 @@ class Visualization:
             blade_face_top.set_xy(blade_face[:, [0, 1]])
             blade_face_back.set_xy(blade_face[:, [1, 2]])
             blade_face_side.set_xy(blade_face[:, [0, 2]])
+            for patch, projection in ((blade_face_top, [0, 1]),
+                                      (blade_face_back, [1, 2])):
+                patch.set_facecolor(blade_face_color(blade_face, projection))
+            # Show the grey working face in the bottom-left panel.
+            blade_face_side.set_facecolor("grey")
+            vehicle_colors[-1] = to_rgba(blade_face_color(blade_face), 1.0)
+            vehicle_parts[-1].set_facecolor([vehicle_colors[-1]])
 
         if show_neighbors:
             set_neighbors(0)
@@ -727,7 +789,9 @@ class Visualization:
         figure.set_layout_engine("none")
 
         def update(frame_index):
-            vehicle_3d.set_verts(vehicle_polygons(frame_index))
+            polygons = vehicle_polygons(frame_index)
+            for artist, section in zip(vehicle_parts, part_slices):
+                artist.set_verts(polygons[section])
             set_body(frame_index)
             set_grid(frame_index)
             set_tracks(frame_index)
@@ -743,7 +807,7 @@ class Visualization:
             *[artist for _, artist in body_projections],
             track_top, track_back, track_side,
         ]
-        three_d_artists = [grid_3d, vehicle_3d]
+        three_d_artists = [grid_3d, *vehicle_parts]
         if show_neighbors:
             flat_artists.extend([green_back, green_side, green_top])
             three_d_artists.append(green_3d)
@@ -805,8 +869,8 @@ class Visualization:
                 dynamic_3d_artists.append(blade_arrow_3d[0])
             # Draw diagnostic arrows beneath the solid vehicle so they do not
             # appear through its opaque body and track faces.
-            scene_artists = [artist for artist in three_d_artists if artist is not vehicle_3d]
-            for artist in scene_artists + dynamic_3d_artists + [vehicle_3d]:
+            scene_artists = [artist for artist in three_d_artists if artist not in vehicle_parts]
+            for artist in scene_artists + dynamic_3d_artists + ordered_vehicle_parts(frame_index):
                 artist.do_3d_projection()
                 axis_3d.draw_artist(artist)
             axis_top.draw_artist(axis_top.title)
