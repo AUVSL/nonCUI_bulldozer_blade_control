@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
-from matplotlib.collections import LineCollection
+from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.patches import Polygon
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
@@ -105,6 +105,43 @@ class Visualization:
         track_data = track_path[::2]
         neighbor_data = simulation.neighbor_log[::2]
 
+        # Extrude a capsule-shaped side profile across the track width.
+        # Inset the semicircle centers to preserve the overall length l;
+        # the lower straight edge stays at local z=0.
+        radius = simulation.track_height / 2
+        end_center = simulation.l / 2 - radius
+        half_width = simulation.track_width / 2
+        front_angles = np.linspace(-np.pi / 2, np.pi / 2, 17)
+        rear_angles = np.linspace(np.pi / 2, 3 * np.pi / 2, 17)
+        profile_x = np.r_[end_center + radius * np.cos(front_angles),
+                          -end_center + radius * np.cos(rear_angles)]
+        profile_z = np.r_[radius + radius * np.sin(front_angles),
+                          radius + radius * np.sin(rear_angles)]
+        profile_size = len(profile_x)
+        track_local = np.concatenate([
+            np.column_stack((profile_x, np.full(profile_size, side * half_width), profile_z))
+            for side in (-1.0, 1.0)
+        ])
+        tracks_local = np.array([
+            track_local + [0.0, side * simulation.b / 2, 0.0]
+            for side in (-1.0, 1.0)
+        ])
+        # Quads wrap around the tread; the two caps are yellow lateral faces.
+        track_faces = [
+            [i, (i + 1) % profile_size, (i + 1) % profile_size + profile_size,
+             i + profile_size]
+            for i in range(profile_size)
+        ]
+        track_faces.extend([
+            list(range(profile_size - 1, -1, -1)),
+            list(range(profile_size, 2 * profile_size)),
+        ])
+        track_mesh_path = np.array([
+            row[1:4] + tracks_local @ simulation._rotation_lg(*row[4:7]).T
+            for row in log_data
+        ])
+        track_mesh_data = track_mesh_path[::2]
+
         # Surface x/y positions are fixed. Blade mode supplies a height snapshot
         # for each frame; body-only mode repeats the final static surface.
         grid_x = np.array([[point[0] for point in column]
@@ -134,6 +171,9 @@ class Visualization:
         bound_x = [grid_x.ravel(), track_path[:, :, :, 0].ravel()]
         bound_y = [grid_y.ravel(), track_path[:, :, :, 1].ravel()]
         bound_z = [grid_z_data.ravel(), track_path[:, :, :, 2].ravel()]
+        bound_x.append(track_mesh_path[:, :, :, 0].ravel())
+        bound_y.append(track_mesh_path[:, :, :, 1].ravel())
+        bound_z.append(track_mesh_path[:, :, :, 2].ravel())
         if enable_blade:
             bound_x.extend([
                 blade_path[:, :, 0].ravel(),
@@ -279,35 +319,30 @@ class Visualization:
         axis_side.set_xlabel("X (m)")
         axis_side.set_ylabel("Z (m)")
 
-        # Both rigid track centerlines are shared by body and blade modes.
+        # Keep the contact lines for diagnostics; render the rounded tracks.
         initial_tracks = track_data[0]
-        track_3d = Line3DCollection(
-            initial_tracks,
-            colors="darkorange",
-            linewidths=3.0,
-            zorder=5,
-            label="tracks",
+
+        def track_polygons(frame_index):
+            return [vertices[face] for vertices in track_mesh_data[frame_index]
+                    for face in track_faces]
+
+        initial_faces = track_polygons(0)
+        track_colors = (["#444a50"] * profile_size + ["yellow", "yellow"]) * 2
+        track_3d = Poly3DCollection(
+            initial_faces, facecolors=track_colors, edgecolors="#202326",
+            linewidths=0.8, zorder=5, label="tracks",
         )
-        track_top = LineCollection(
-            initial_tracks[:, :, [0, 1]],
-            colors="darkorange",
-            linewidths=3.0,
-            zorder=5,
-            label="tracks",
+        track_top = PolyCollection(
+            [face[:, [0, 1]] for face in initial_faces], facecolors=track_colors,
+            edgecolors="#202326", linewidths=0.8, zorder=5, label="tracks",
         )
-        track_back = LineCollection(
-            initial_tracks[:, :, [1, 2]],
-            colors="darkorange",
-            linewidths=3.0,
-            zorder=5,
-            label="tracks",
+        track_back = PolyCollection(
+            [face[:, [1, 2]] for face in initial_faces], facecolors=track_colors,
+            edgecolors="#202326", linewidths=0.8, zorder=5, label="tracks",
         )
-        track_side = LineCollection(
-            initial_tracks[:, :, [0, 2]],
-            colors="darkorange",
-            linewidths=3.0,
-            zorder=5,
-            label="tracks",
+        track_side = PolyCollection(
+            [face[:, [0, 2]] for face in initial_faces], facecolors=track_colors,
+            edgecolors="#202326", linewidths=0.8, zorder=5, label="tracks",
         )
         axis_3d.add_collection3d(track_3d)
         axis_top.add_collection(track_top)
@@ -315,11 +350,11 @@ class Visualization:
         axis_side.add_collection(track_side)
 
         def set_tracks(frame_index):
-            tracks = track_data[frame_index]
-            track_3d.set_segments(tracks)
-            track_top.set_segments(tracks[:, :, [0, 1]])
-            track_back.set_segments(tracks[:, :, [1, 2]])
-            track_side.set_segments(tracks[:, :, [0, 2]])
+            faces = track_polygons(frame_index)
+            track_3d.set_verts(faces)
+            track_top.set_verts([face[:, [0, 1]] for face in faces])
+            track_back.set_verts([face[:, [1, 2]] for face in faces])
+            track_side.set_verts([face[:, [0, 2]] for face in faces])
 
         green_3d = green_top = green_back = green_side = None
         if show_neighbors:
