@@ -197,6 +197,35 @@ class Visualization:
                 for frame in blade_data
             ])
             grid_z_data = np.asarray(simulation.grid_log)[::2]
+
+            arm_thickness = 0.1  # Square cross-section in metres.
+            arm_mesh_data = []
+            for pose, blade, blade_top in zip(data[:, 1:7], blade_data, blade_top_data):
+                rotation = simulation._rotation_lg(*pose[3:6])
+                blade_up = (blade_top[0] - blade[0, :3]) / simulation.H
+                arms = []
+                for side in (-1.0, 1.0):
+                    mount = np.array(simulation.blade_arm_offset, dtype=float, copy=True)
+                    mount[1] += side * half_body_width
+                    mount[2] = body_bottom
+                    start = pose[:3] + rotation @ mount
+                    fraction = 0.5 + side * half_body_width / simulation.B1
+                    end = ((1 - fraction) * blade[0, :3] + fraction * blade[-1, :3]
+                           + body_bottom * blade_up)
+                    direction = end - start
+                    direction /= max(np.linalg.norm(direction), 1e-12)
+                    lateral = np.cross(rotation[:, 2], direction)
+                    if np.linalg.norm(lateral) < 1e-8:
+                        lateral = rotation[:, 1].copy()
+                    lateral /= np.linalg.norm(lateral)
+                    vertical = np.cross(direction, lateral)
+                    cross_section = arm_thickness / 2 * np.array([
+                        -lateral - vertical, lateral - vertical,
+                        lateral + vertical, -lateral + vertical,
+                    ])
+                    arms.append(np.vstack([start + cross_section, end + cross_section]))
+                arm_mesh_data.append(arms)
+            arm_mesh_data = np.asarray(arm_mesh_data)
         else:
             static_grid_z = np.array([[point[2] for point in column]
                                       for column in simulation.grid_pts])
@@ -221,6 +250,9 @@ class Visualization:
         bound_y.append(body_path[:, :, :, 1].ravel())
         bound_z.append(body_path[:, :, :, 2].ravel())
         if enable_blade:
+            bound_x.append(arm_mesh_data[:, :, :, 0].ravel())
+            bound_y.append(arm_mesh_data[:, :, :, 1].ravel())
+            bound_z.append(arm_mesh_data[:, :, :, 2].ravel())
             bound_x.extend([
                 blade_path[:, :, 0].ravel(),
                 blade_top_data[:, :, 0].ravel(),
@@ -433,8 +465,12 @@ class Visualization:
 
         initial_body_faces = body_data[0][:, body_faces].reshape(-1, 4, 3)
         body_yellow = "gold"
+        track_dark = "#444a50"
         body_colors = ["#b8860b", "#ffdf50", "#e8b923",
                        "#e8b923", body_yellow, body_yellow] * 2
+        # The second block is the hood; faces 1 and 2 are its top and nose.
+        body_colors[len(body_faces) + 1] = body_yellow
+        body_colors[len(body_faces) + 2] = body_yellow
         body_projections = []
         for axis, projection in ((axis_top, [0, 1]), (axis_back, [1, 2]),
                                  (axis_side, [0, 2])):
@@ -459,7 +495,7 @@ class Visualization:
                     for face in track_faces]
 
         initial_faces = track_polygons(0)
-        track_colors = (["#444a50"] * profile_size + [body_yellow, body_yellow]) * 2
+        track_colors = ([track_dark] * profile_size + [body_yellow, body_yellow]) * 2
         track_top = PolyCollection(
             [face[:, [0, 1]] for face in initial_faces], facecolors=track_colors,
             edgecolors="#202326", linewidths=0.8, zorder=5, label="tracks",
@@ -627,12 +663,26 @@ class Visualization:
             axis_back.add_patch(blade_face_back)
             axis_side.add_patch(blade_face_side)
 
+        arm_projections = []
+        if enable_blade:
+            initial_arms = arm_mesh_data[0][:, body_faces].reshape(-1, 4, 3)
+            for axis, projection in ((axis_top, [0, 1]), (axis_back, [1, 2]),
+                                     (axis_side, [0, 2])):
+                artist = PolyCollection(
+                    initial_arms[:, :, projection], facecolors=track_dark,
+                    edgecolors="#202326", linewidths=0.6, zorder=4,
+                    label="blade arms",
+                )
+                axis.add_collection(artist)
+                arm_projections.append((projection, artist))
+
         # Gather the vehicle faces and colors in rear/hood/right-track/left-track
-        # order, followed by the blade when enabled.
+        # order, followed by two arms and the blade when enabled.
         def vehicle_polygons(frame_index):
             faces = list(body_data[frame_index][:, body_faces].reshape(-1, 4, 3))
             faces.extend(track_polygons(frame_index))
             if enable_blade:
+                faces.extend(arm_mesh_data[frame_index][:, body_faces].reshape(-1, 4, 3))
                 blade, top = blade_data[frame_index], blade_top_data[frame_index]
                 faces.append(np.vstack([blade[0, :3], blade[-1, :3], top[-1], top[0]]))
             return faces
@@ -641,13 +691,15 @@ class Visualization:
         vehicle_edges = ([to_rgba("darkgoldenrod")] * len(body_colors)
                          + [to_rgba("#202326")] * len(track_colors))
         if enable_blade:
+            vehicle_colors.extend([to_rgba(track_dark)] * (2 * len(body_faces)))
+            vehicle_edges.extend([to_rgba("#202326")] * (2 * len(body_faces)))
             vehicle_colors.append(to_rgba("grey", 1.0))
             vehicle_edges.append(to_rgba("#4a4a4a", 1.0))
         # Keep convex parts separate. Their separating planes give a reliable
         # draw order; average depths of long faces can wrongly cover a track.
         part_sizes = [len(body_faces), len(body_faces), len(track_faces), len(track_faces)]
         if enable_blade:
-            part_sizes.append(1)
+            part_sizes.extend([len(body_faces), len(body_faces), 1])
         part_offsets = np.r_[0, np.cumsum(part_sizes)]
         part_slices = [slice(start, end) for start, end in zip(part_offsets[:-1], part_offsets[1:])]
         initial_vehicle = vehicle_polygons(0)
@@ -677,6 +729,8 @@ class Visualization:
             rear, hood = (0, 1) if eye_local[0] >= body_split else (1, 0)
             order = [far_track, rear, hood, near_track]
             if enable_blade:
+                far_arm, near_arm = (4, 5) if eye_local[1] >= 0.0 else (5, 4)
+                order = [far_track, far_arm, rear, hood, near_arm, near_track]
                 face = vehicle_polygons(frame_index)[-1]
                 normal = np.cross(face[1] - face[0], face[3] - face[0])
                 body_center = body_data[frame_index].mean(axis=(0, 1))
@@ -685,9 +739,9 @@ class Visualization:
                 # From behind the blade, the vehicle can obscure it; from
                 # the soil-facing side, the blade is in front of the vehicle.
                 if body_side * eye_side >= 0.0:
-                    order.insert(0, 4)
+                    order.insert(0, 6)
                 else:
-                    order.append(4)
+                    order.append(6)
             return [vehicle_parts[index] for index in order]
 
         def set_neighbors(frame_index):
@@ -871,10 +925,15 @@ class Visualization:
             if not enable_blade:
                 set_body_diagnostics(frame_index)
             set_q_and_blade(frame_index)
+            if enable_blade:
+                arms = arm_mesh_data[frame_index][:, body_faces].reshape(-1, 4, 3)
+                for projection, artist in arm_projections:
+                    artist.set_verts(arms[:, :, projection])
             axis_top.set_title(f"t = {data[frame_index, 0]:.2f} s")
 
         flat_artists = [
             grid_back, grid_side, soil_walls_back, soil_walls_side,
+            *[artist for _, artist in arm_projections],
             *[artist for _, artist in body_projections],
             track_top, track_back, track_side,
         ]
