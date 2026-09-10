@@ -24,8 +24,8 @@ class Control():
         # TODO: update blade angle limits from -1 to 1 to something more realistic, and update the test cases accordingly
         desired_pitch = desired_pitch_multiplier * np.arcsin(np.clip(self.desired_depth / self.L, -1.0, 1.0))
 
-        errors   = np.array([desired_roll  - roll,      desired_pitch - pitch, desired_yaw - yaw])
-        plot_out = np.array(          [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
+        errors   = np.array([desired_roll  - roll,       desired_pitch - pitch, desired_yaw - yaw])
+        plot_out = np.array(            [errors[0], np.sin(errors[1]) * self.L,         errors[2]])
 
         return errors, plot_out
     
@@ -53,7 +53,7 @@ class DozerSimulation():
 
         # -------------------- Independent simulation limit parameters --------------------- 
         # change if tasks require move total distance to be traveled, still want it tight for fast tuning
-        self.stop_time              = 300.0
+        self.stop_time              = 5.0
         # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
         # tighter than the settle loop's 1e-6 convergence check, or the pose it
         # returns is noisier than that check and the settle loop never converges
@@ -96,8 +96,8 @@ class DozerSimulation():
         self.v_split         = 0  # u-value where the grid switches to surface_abg2
 
         # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface ----- 
-        self.u_range = (-2* self.b/2, 4 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
-        self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 4 * self.b)
+        self.u_range = (-2* self.b/2, 5 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 5 * self.b)
         if is_backwards:
             self.q_dot   *= -1
             self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
@@ -157,6 +157,7 @@ class DozerSimulation():
         self.x_ICR     = 0.0
         self.x_ICR_dot = 0.0
         self.Fb        = 0.0
+        self.cut_limit_reached = False
         self.Mb        = 0.0
         self.H3        = 0.0
         self.H4        = 0.0
@@ -427,6 +428,11 @@ class DozerSimulation():
         self.Mb  = (   soil_shear_force *  shear_moment_arm 
                     + soil_normal_force * normal_moment_arm)
 
+        if self.enable_blade and self.cut_limit_reached:
+            # The velocity clamp prevents resistance from reversing the vehicle.
+            self.Fb = 1e9 if self.is_backwards else -1e9
+            self.Mb = 0.0
+
     def _yc(self, left_depth, right_depth, width):
         if left_depth == 0 and right_depth == 0:
             return 0.0
@@ -509,6 +515,10 @@ class DozerSimulation():
             if converged:
                 break
 
+        # Commit the stop check only for the settled orientation, never a
+        # trial angle visited by the contact solver.
+        self._support_heights(self._rotation_lg(*self.q[3:6]), check_cut_limit=True)
+
     def _body_contact_roll(self, orient):
         """Roll that balances left/right track and blade support."""
         def imbalance(roll):
@@ -525,7 +535,7 @@ class DozerSimulation():
         support = self._support_heights(R)
         return float(support[1].max()), float(support[0].max())
 
-    def _support_heights(self, R):
+    def _support_heights(self, R, check_cut_limit=False):
         """
         Lowest body height each quarter of the contact patch calls for, as a
         [right, left] x [back, front] array. Tracks use current soil; the enabled
@@ -583,7 +593,14 @@ class DozerSimulation():
                     support[i, 0] = max(support[i, 0], needed)
                 if s >= 0:
                     support[i, 1] = max(support[i, 1], needed)
+                    
         if self.enable_blade:
+            if check_cut_limit:
+                blade_R = R @ self._rotation_lg(
+                    self.blade_roll_pitch_yaw[0], 0.0, self.blade_roll_pitch_yaw[2])
+                deepest_depth = (blade_R[2, 2] * self.blade_cut_depth() + abs(blade_R[2, 1]) * self.B1 / 2)
+                stop_height = (self._undeformed_height(self.q) - self.max_world_cut_depth + deepest_depth)
+                self.cut_limit_reached = bool(support.max() <= stop_height + self.contact_tol)
             support = np.maximum(support, self._blade_support_heights(R))
         return support
 

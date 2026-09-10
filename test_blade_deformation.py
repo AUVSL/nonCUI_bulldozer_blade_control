@@ -110,3 +110,84 @@ def test_bilinear_peak_inside_tile_is_included(simulation):
     simulation._blade_edge_local = lambda top=False: np.array([[0., 0., 0.], [1., 1., 0.]])
     support = simulation._blade_support_heights(np.eye(3))
     assert support.max() == pytest.approx(1.)
+
+
+@pytest.mark.parametrize("offset, stopped", [(0.01, False), (0.0, True), (-0.01, True)])
+def test_track_cut_limit_before_blade_support(simulation, monkeypatch, offset, stopped):
+    sim = simulation
+    sim.blade_roll_pitch_yaw[:] = [0.1, 0.2, 0.0]
+    R = sim._rotation_lg(0.15, 0.1, 0.0)
+    local_R = sim._rotation_lg(0.1, 0.0, 0.0)
+    uncut_center = sim.blade_arm_offset + local_R @ np.array([sim.L, 0., 0.])
+    relative_edge = (sim._blade_edge_local() - uncut_center) @ R.T
+    deepest_depth = -relative_edge[:, 2].min()
+    # Measure track-only support for this orientation on the flat terrain.
+    sim.enable_blade = False
+    track_height = sim._support_heights(R).max()
+    sim.enable_blade = True
+    sim.starting_grid_heights[:] = (
+        track_height + sim.max_world_cut_depth
+        - deepest_depth - offset)
+
+    def blade_support(rotation):
+        assert sim.cut_limit_reached == stopped
+        return np.full((2, 2), 10.0)
+
+    monkeypatch.setattr(sim, "_blade_support_heights", blade_support)
+    sim._support_heights(R, check_cut_limit=True)
+    sim._blade_terrain_interaction()
+    assert (sim.Fb == -1e9) == stopped
+
+
+def test_cut_limit_force_stops_and_holds_vehicle(simulation):
+    sim = simulation
+    sim.starting_grid_heights[:] = sim.max_world_cut_depth
+    sim._settle_tracks(sim.q[3:6].copy())
+    assert sim.cut_limit_reached
+    sim.v[0] = sim.velocity_limit
+    sim.q_dot[0] = sim.velocity_limit
+    for _ in range(2):
+        sim._update_q_dot()
+        assert sim.Fb == -1e9
+        assert sim.v[0] == 0.0
+
+
+def test_disabled_blade_does_not_stop_at_cut_limit(simulation):
+    sim = simulation
+    sim.enable_blade = False
+    sim.starting_grid_heights[:] = sim.max_world_cut_depth
+    sim._settle_tracks(sim.q[3:6].copy())
+    assert not sim.cut_limit_reached
+
+
+def test_default_run_stops_at_cut_limit():
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.zeros(3))
+    sim.stop_time = 5.0
+    sim.run()
+    assert sim.total_distance < sim.stop_distance
+    assert sim.cut_limit_reached
+    assert sim.Fb == -1e9
+    assert sim.v[0] == 0.0
+
+
+@pytest.mark.parametrize("roll", [-0.2, 0.0, 0.2])
+def test_cut_limit_roll_depth_excludes_arm_lift(simulation, roll):
+    sim = simulation
+    sim.blade_roll_pitch_yaw[:] = [roll, 0.2, 0.0]
+    pitch = 0.15
+    R = sim._rotation_lg(0.0, pitch, 0.0)
+    sim.enable_blade = False
+    track_height = sim._support_heights(R).max()
+    sim.enable_blade = True
+    # Analytic depth below the uncut center; either roll sign lowers an end.
+    depth = np.cos(pitch) * (
+        np.cos(roll) * sim.blade_cut_depth() + abs(np.sin(roll)) * sim.B1 / 2)
+    sim.starting_grid_heights[:] = track_height + sim.max_world_cut_depth - depth
+    for arm_height in (0.0, 10.0):
+        sim.blade_arm_offset = np.array([5.0, 0.0, arm_height])
+        sim._support_heights(R, check_cut_limit=True)
+        assert sim.cut_limit_reached
+        sim.starting_grid_heights[:] -= 0.01
+        sim._support_heights(R, check_cut_limit=True)
+        assert not sim.cut_limit_reached
+        sim.starting_grid_heights[:] += 0.01
