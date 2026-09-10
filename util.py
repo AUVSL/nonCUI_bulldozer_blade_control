@@ -72,7 +72,7 @@ class DozerSimulation():
         self.h            = 2.762/2 # body height in meters, scaled down by Sam
         self.F_track_base = 600000.0
         self.track_width  = 0.7112
-        self.track_height = 0.6
+        self.track_height = 0.5
         
         # -------------------------- Bulldozer blade parameters ---------------------------- 
         self.B1 = 2.921 # blade width in meters

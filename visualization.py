@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.collections import LineCollection, PolyCollection
+from matplotlib.colors import to_rgba
 from matplotlib.patches import Polygon
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
@@ -142,6 +143,41 @@ class Visualization:
         ])
         track_mesh_data = track_mesh_path[::2]
 
+        # Two blocks fill the gap between the inner track faces. Local +x
+        # points toward the blade: a full-height rear and a lower front hood.
+        half_body_length = simulation.l / 2
+        body_split = -half_body_length + 3 * simulation.l / 5
+        half_body_width = (simulation.b - simulation.track_width) / 2
+        body_bottom, body_top = simulation.track_height / 2, simulation.h
+        front_top = body_bottom + (body_top - body_bottom) * 2 / 3
+        # Keep the hood height at the body split and lower its nose by 30%.
+        front_nose_top = front_top - 0.3 * (front_top - body_bottom)
+        body_local = np.array([
+            [
+                [back, -half_body_width, body_bottom],
+                [front, -half_body_width, body_bottom],
+                [front, half_body_width, body_bottom],
+                [back, half_body_width, body_bottom],
+                [back, -half_body_width, back_top],
+                [front, -half_body_width, nose_top],
+                [front, half_body_width, nose_top],
+                [back, half_body_width, back_top],
+            ]
+            for back, front, back_top, nose_top in (
+                (-half_body_length, body_split, body_top, body_top),
+                (body_split, half_body_length, front_top, front_nose_top),
+            )
+        ])
+        body_faces = np.array([
+            [0, 1, 2, 3], [4, 5, 6, 7], [1, 2, 6, 5],
+            [0, 3, 7, 4], [0, 1, 5, 4], [2, 3, 7, 6],
+        ])
+        body_path = np.array([
+            row[1:4] + body_local @ simulation._rotation_lg(*row[4:7]).T
+            for row in log_data
+        ])
+        body_data = body_path[::2]
+
         # Surface x/y positions are fixed. Blade mode supplies a height snapshot
         # for each frame; body-only mode repeats the final static surface.
         grid_x = np.array([[point[0] for point in column]
@@ -174,6 +210,9 @@ class Visualization:
         bound_x.append(track_mesh_path[:, :, :, 0].ravel())
         bound_y.append(track_mesh_path[:, :, :, 1].ravel())
         bound_z.append(track_mesh_path[:, :, :, 2].ravel())
+        bound_x.append(body_path[:, :, :, 0].ravel())
+        bound_y.append(body_path[:, :, :, 1].ravel())
+        bound_z.append(body_path[:, :, :, 2].ravel())
         if enable_blade:
             bound_x.extend([
                 blade_path[:, :, 0].ravel(),
@@ -319,6 +358,26 @@ class Visualization:
         axis_side.set_xlabel("X (m)")
         axis_side.set_ylabel("Z (m)")
 
+        initial_body_faces = body_data[0][:, body_faces].reshape(-1, 4, 3)
+        body_yellow = "gold"
+        body_colors = ["#b8860b", "#ffdf50", "#e8b923",
+                       "#e8b923", body_yellow, body_yellow] * 2
+        body_projections = []
+        for axis, projection in ((axis_top, [0, 1]), (axis_back, [1, 2]),
+                                 (axis_side, [0, 2])):
+            faces = PolyCollection(
+                initial_body_faces[:, :, projection], facecolors=body_colors,
+                edgecolors="darkgoldenrod", linewidths=0.8, zorder=4,
+                label="dozer body",
+            )
+            axis.add_collection(faces)
+            body_projections.append((projection, faces))
+
+        def set_body(frame_index):
+            faces = body_data[frame_index][:, body_faces].reshape(-1, 4, 3)
+            for projection, artist in body_projections:
+                artist.set_verts(faces[:, :, projection])
+
         # Keep the contact lines for diagnostics; render the rounded tracks.
         initial_tracks = track_data[0]
 
@@ -327,11 +386,7 @@ class Visualization:
                     for face in track_faces]
 
         initial_faces = track_polygons(0)
-        track_colors = (["#444a50"] * profile_size + ["yellow", "yellow"]) * 2
-        track_3d = Poly3DCollection(
-            initial_faces, facecolors=track_colors, edgecolors="#202326",
-            linewidths=0.8, zorder=5, label="tracks",
-        )
+        track_colors = (["#444a50"] * profile_size + [body_yellow, body_yellow]) * 2
         track_top = PolyCollection(
             [face[:, [0, 1]] for face in initial_faces], facecolors=track_colors,
             edgecolors="#202326", linewidths=0.8, zorder=5, label="tracks",
@@ -344,14 +399,12 @@ class Visualization:
             [face[:, [0, 2]] for face in initial_faces], facecolors=track_colors,
             edgecolors="#202326", linewidths=0.8, zorder=5, label="tracks",
         )
-        axis_3d.add_collection3d(track_3d)
         axis_top.add_collection(track_top)
         axis_back.add_collection(track_back)
         axis_side.add_collection(track_side)
 
         def set_tracks(frame_index):
             faces = track_polygons(frame_index)
-            track_3d.set_verts(faces)
             track_top.set_verts([face[:, [0, 1]] for face in faces])
             track_back.set_verts([face[:, [1, 2]] for face in faces])
             track_side.set_verts([face[:, [0, 2]] for face in faces])
@@ -447,21 +500,21 @@ class Visualization:
                 initial_blade[:, 0], initial_blade[:, 1],
                 np.full(len(initial_blade), initial_forward[0]),
                 np.full(len(initial_blade), initial_forward[1]),
-                color="red", scale=1 / arrow_length, scale_units="xy",
+                color="black", scale=1 / arrow_length, scale_units="xy",
                 angles="xy", zorder=7,
             )
             blade_arrow_back = axis_back.quiver(
                 initial_blade[:, 1], initial_blade[:, 2],
                 np.full(len(initial_blade), initial_forward[1]),
                 np.full(len(initial_blade), initial_forward[2]),
-                color="red", scale=1 / arrow_length, scale_units="xy",
+                color="black", scale=1 / arrow_length, scale_units="xy",
                 angles="xy", zorder=7,
             )
             blade_arrow_side = axis_side.quiver(
                 initial_blade[:, 0], initial_blade[:, 2],
                 np.full(len(initial_blade), initial_forward[0]),
                 np.full(len(initial_blade), initial_forward[2]),
-                color="red", scale=1 / arrow_length, scale_units="xy",
+                color="black", scale=1 / arrow_length, scale_units="xy",
                 angles="xy", zorder=7,
             )
             blade_arrow_3d = [None]
@@ -475,25 +528,42 @@ class Visualization:
             ])
             blade_face_top = Polygon(
                 initial_blade_face[:, [0, 1]], closed=True,
-                facecolor="red", edgecolor="darkred", alpha=0.35, zorder=6,
+                facecolor="black", edgecolor="black", alpha=1.0, zorder=6,
             )
             blade_face_back = Polygon(
                 initial_blade_face[:, [1, 2]], closed=True,
-                facecolor="red", edgecolor="darkred", alpha=0.35, zorder=6,
+                facecolor="black", edgecolor="black", alpha=1.0, zorder=6,
             )
             blade_face_side = Polygon(
                 initial_blade_face[:, [0, 2]], closed=True,
-                facecolor="red", edgecolor="darkred", alpha=0.35, zorder=6,
+                facecolor="black", edgecolor="black", alpha=1.0, zorder=6,
                 label="blade face",
-            )
-            blade_face_3d = Poly3DCollection(
-                [initial_blade_face], facecolors="red", edgecolors="darkred",
-                alpha=0.35, zorder=6,
             )
             axis_top.add_patch(blade_face_top)
             axis_back.add_patch(blade_face_back)
             axis_side.add_patch(blade_face_side)
-            axis_3d.add_collection3d(blade_face_3d)
+
+        # Sort all vehicle faces together by camera depth. Separate collections
+        # draw whole parts over each other, making an opaque body look transparent.
+        def vehicle_polygons(frame_index):
+            faces = list(body_data[frame_index][:, body_faces].reshape(-1, 4, 3))
+            faces.extend(track_polygons(frame_index))
+            if enable_blade:
+                blade, top = blade_data[frame_index], blade_top_data[frame_index]
+                faces.append(np.vstack([blade[0, :3], blade[-1, :3], top[-1], top[0]]))
+            return faces
+
+        vehicle_colors = [to_rgba(color, 1.0) for color in body_colors + track_colors]
+        vehicle_edges = ([to_rgba("darkgoldenrod")] * len(body_colors)
+                         + [to_rgba("#202326")] * len(track_colors))
+        if enable_blade:
+            vehicle_colors.append(to_rgba("black", 1.0))
+            vehicle_edges.append(to_rgba("black", 1.0))
+        vehicle_3d = Poly3DCollection(
+            vehicle_polygons(0), facecolors=vehicle_colors, edgecolors=vehicle_edges,
+            linewidths=0.8, zsort="average", zorder=5, label="dozer",
+        )
+        axis_3d.add_collection3d(vehicle_3d)
 
         def set_neighbors(frame_index):
             points = (
@@ -603,7 +673,7 @@ class Visualization:
                 np.full(len(blade), direction[0]),
                 np.full(len(blade), direction[1]),
                 np.full(len(blade), direction[2]),
-                length=arrow_length, color="red", zorder=7,
+                length=arrow_length, color="black", zorder=7,
             )
 
             blade_top = blade_top_data[frame_index]
@@ -613,7 +683,6 @@ class Visualization:
             blade_face_top.set_xy(blade_face[:, [0, 1]])
             blade_face_back.set_xy(blade_face[:, [1, 2]])
             blade_face_side.set_xy(blade_face[:, [0, 2]])
-            blade_face_3d.set_verts([blade_face])
 
         if show_neighbors:
             set_neighbors(0)
@@ -622,8 +691,8 @@ class Visualization:
             set_body_diagnostics(0)
         set_q_and_blade(0)
 
-        legend_handles = [track_side, q_arrow_side]
-        legend_labels = ["tracks", "q (center of mass)"]
+        legend_handles = [body_projections[-1][1], track_side, q_arrow_side]
+        legend_labels = ["dozer body", "tracks", "q (center of mass)"]
         if enable_blade:
             legend_handles.extend([
                 blade_arrow_side, blade_face_side
@@ -658,6 +727,8 @@ class Visualization:
         figure.set_layout_engine("none")
 
         def update(frame_index):
+            vehicle_3d.set_verts(vehicle_polygons(frame_index))
+            set_body(frame_index)
             set_grid(frame_index)
             set_tracks(frame_index)
             if show_neighbors:
@@ -668,9 +739,11 @@ class Visualization:
             axis_top.set_title(f"t = {data[frame_index, 0]:.2f} s")
 
         flat_artists = [
-            grid_back, grid_side, track_top, track_back, track_side,
+            grid_back, grid_side,
+            *[artist for _, artist in body_projections],
+            track_top, track_back, track_side,
         ]
-        three_d_artists = [grid_3d, track_3d]
+        three_d_artists = [grid_3d, vehicle_3d]
         if show_neighbors:
             flat_artists.extend([green_back, green_side, green_top])
             three_d_artists.append(green_3d)
@@ -678,7 +751,6 @@ class Visualization:
             flat_artists.extend([
                 blade_face_top, blade_face_back, blade_face_side,
             ])
-            three_d_artists.append(blade_face_3d)
         else:
             flat_artists.extend([
                 body_arrow_top, body_arrow_back, body_arrow_side,
@@ -731,7 +803,10 @@ class Visualization:
             dynamic_3d_artists.append(q_arrow_3d[0])
             if enable_blade:
                 dynamic_3d_artists.append(blade_arrow_3d[0])
-            for artist in three_d_artists + dynamic_3d_artists:
+            # Draw diagnostic arrows beneath the solid vehicle so they do not
+            # appear through its opaque body and track faces.
+            scene_artists = [artist for artist in three_d_artists if artist is not vehicle_3d]
+            for artist in scene_artists + dynamic_3d_artists + [vehicle_3d]:
                 artist.do_3d_projection()
                 axis_3d.draw_artist(artist)
             axis_top.draw_artist(axis_top.title)
