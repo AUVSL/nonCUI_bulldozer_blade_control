@@ -204,11 +204,16 @@ class Visualization:
                 static_grid_z, (len(data),) + static_grid_z.shape
             )
 
+        # Give the terrain a fixed base below every logged cut, so the side
+        # walls retain their thickness as the top surface deforms.
+        soil_base_height = float(grid_z_data.min()) - simulation.subdivision
+
         # Include all geometry that can appear during the run when choosing
         # view bounds. Blade-only histories are never touched in body-only mode.
         bound_x = [grid_x.ravel(), track_path[:, :, :, 0].ravel()]
         bound_y = [grid_y.ravel(), track_path[:, :, :, 1].ravel()]
-        bound_z = [grid_z_data.ravel(), track_path[:, :, :, 2].ravel()]
+        bound_z = [grid_z_data.ravel(), track_path[:, :, :, 2].ravel(),
+                   np.array([soil_base_height])]
         bound_x.append(track_mesh_path[:, :, :, 0].ravel())
         bound_y.append(track_mesh_path[:, :, :, 1].ravel())
         bound_z.append(track_mesh_path[:, :, :, 2].ravel())
@@ -300,6 +305,24 @@ class Visualization:
                 ]),
             ], axis=1)
 
+        # Only perimeter edges get vertical walls; the top remains a mesh.
+        last_i, last_j = np.array(grid_x.shape) - 1
+        boundary_edges = (((ia == 0) & (ib == 0))
+                          | ((ia == last_i) & (ib == last_i))
+                          | ((ja == 0) & (jb == 0))
+                          | ((ja == last_j) & (jb == last_j)))
+        terrain_center = np.array([grid_x.mean(), grid_y.mean(), soil_base_height])
+
+        def soil_wall_faces(z):
+            upper = grid_segments(z)[boundary_edges]
+            lower = upper.copy()
+            lower[:, :, 2] = soil_base_height
+            faces = np.stack([upper[:, 0], upper[:, 1], lower[:, 1], lower[:, 0]], axis=1)
+            normals = np.cross(faces[:, 1] - faces[:, 0], faces[:, 2] - faces[:, 0])
+            inward = np.sum(normals * (faces.mean(axis=1) - terrain_center), axis=1) < 0
+            faces[inward] = faces[inward, ::-1]
+            return faces
+
         soil_color = "saddlebrown"
         segments = grid_segments(grid_z_data[0])
         grid_3d = Line3DCollection(
@@ -334,11 +357,38 @@ class Visualization:
             zorder=0,
         ))
 
+        initial_walls = soil_wall_faces(grid_z_data[0])
+        soil_walls_3d = Poly3DCollection(
+            initial_walls, facecolors=soil_color, edgecolors=soil_color,
+            linewidths=0.2, alpha=1.0, zorder=1,
+        )
+        soil_walls_back = PolyCollection(
+            initial_walls[:, :, [1, 2]], facecolors=soil_color,
+            edgecolors=soil_color, linewidths=0.2, alpha=1.0, zorder=1,
+        )
+        soil_walls_side = PolyCollection(
+            initial_walls[:, :, [0, 2]], facecolors=soil_color,
+            edgecolors=soil_color, linewidths=0.2, alpha=1.0, zorder=1,
+        )
+        axis_3d.add_collection3d(soil_walls_3d)
+        axis_back.add_collection(soil_walls_back)
+        axis_side.add_collection(soil_walls_side)
+
         def set_grid(frame_index):
             frame_segments = grid_segments(grid_z_data[frame_index])
             grid_3d.set_segments(frame_segments)
             grid_back.set_segments(frame_segments[:, :, [1, 2]])
             grid_side.set_segments(frame_segments[:, :, [0, 2]])
+            walls = soil_wall_faces(grid_z_data[frame_index])
+            # Hide the far walls so they cannot cover the visible top mesh.
+            x, y, _ = proj3d.proj_transform(
+                walls[:, :, 0].ravel(), walls[:, :, 1].ravel(),
+                walls[:, :, 2].ravel(), axis_3d.get_proj())
+            x, y = x.reshape(-1, 4), y.reshape(-1, 4)
+            visible = np.sum(x * np.roll(y, -1, axis=1) - y * np.roll(x, -1, axis=1), axis=1) > 0
+            soil_walls_3d.set_verts(walls[visible])
+            soil_walls_back.set_verts(walls[:, :, [1, 2]])
+            soil_walls_side.set_verts(walls[:, :, [0, 2]])
 
         axis_3d.set_box_aspect((half_x, half_y, half_z), zoom=1)
         axis_3d.grid(False)
@@ -748,6 +798,7 @@ class Visualization:
 
         if show_neighbors:
             set_neighbors(0)
+        set_grid(0)
         set_tracks(0)
         if not enable_blade:
             set_body_diagnostics(0)
@@ -803,11 +854,11 @@ class Visualization:
             axis_top.set_title(f"t = {data[frame_index, 0]:.2f} s")
 
         flat_artists = [
-            grid_back, grid_side,
+            grid_back, grid_side, soil_walls_back, soil_walls_side,
             *[artist for _, artist in body_projections],
             track_top, track_back, track_side,
         ]
-        three_d_artists = [grid_3d, *vehicle_parts]
+        three_d_artists = [grid_3d, soil_walls_3d, *vehicle_parts]
         if show_neighbors:
             flat_artists.extend([green_back, green_side, green_top])
             three_d_artists.append(green_3d)
