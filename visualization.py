@@ -323,7 +323,26 @@ class Visualization:
             faces[inward] = faces[inward, ::-1]
             return faces
 
+        def soil_top_faces(z):
+            points = np.stack([grid_x, grid_y, z], axis=-1)
+            return np.stack([
+                points[:-1, :-1], points[1:, :-1],
+                points[1:, 1:], points[:-1, 1:],
+            ], axis=2).reshape(-1, 4, 3)
+
         soil_color = "saddlebrown"
+        soil_top_color = "burlywood"
+        initial_tiles = soil_top_faces(grid_z_data[0])
+        soil_top_3d = Poly3DCollection(
+            initial_tiles, facecolors=soil_top_color, edgecolors="none",
+            alpha=1.0, zorder=0,
+        )
+        axis_3d.add_collection3d(soil_top_3d)
+        # XY positions never change, so this fill can stay in the background.
+        axis_top.add_collection(PolyCollection(
+            initial_tiles[:, :, [0, 1]], facecolors=soil_top_color,
+            edgecolors="none", alpha=1.0, zorder=-1,
+        ))
         segments = grid_segments(grid_z_data[0])
         grid_3d = Line3DCollection(
             segments,
@@ -375,6 +394,7 @@ class Visualization:
         axis_side.add_collection(soil_walls_side)
 
         def set_grid(frame_index):
+            soil_top_3d.set_verts(soil_top_faces(grid_z_data[frame_index]))
             frame_segments = grid_segments(grid_z_data[frame_index])
             grid_3d.set_segments(frame_segments)
             grid_back.set_segments(frame_segments[:, :, [1, 2]])
@@ -858,7 +878,7 @@ class Visualization:
             *[artist for _, artist in body_projections],
             track_top, track_back, track_side,
         ]
-        three_d_artists = [grid_3d, soil_walls_3d, *vehicle_parts]
+        three_d_artists = [soil_top_3d, grid_3d, soil_walls_3d, *vehicle_parts]
         if show_neighbors:
             flat_artists.extend([green_back, green_side, green_top])
             three_d_artists.append(green_3d)
