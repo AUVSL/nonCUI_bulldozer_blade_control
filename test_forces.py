@@ -24,6 +24,11 @@ def test_force_history_matches_logged_steps(enable_blade):
     assert last["Fb"] == simulation.Fb
     assert last["Mr"] == simulation.Mr
     assert last["v_forward"] == simulation.v[0]
+    center = simulation._blade_bottom_center()
+    assert last["starting_surface_height"] == pytest.approx(simulation._undeformed_height(center))
+    assert last["blade_bottom_height"] == pytest.approx(center[2])
+    simulation.q[2] += 1.0
+    assert last["blade_bottom_height"] == pytest.approx(center[2])
     original = last["drive_left"]
     simulation.F_track[0] = -1
     assert last["drive_left"] == original
@@ -34,6 +39,7 @@ def test_force_gif_includes_final_sample_and_all_panels(monkeypatch, tmp_path):
     for index in range(1, 4):
         simulation.Fb = -100.0 * index
         simulation.Mb = 20.0 * index
+        simulation.q[2] += 0.1
         simulation._log_forces(index * simulation.dt)
     captured = []
     real_close = visual.plt.close
@@ -42,9 +48,15 @@ def test_force_gif_includes_final_sample_and_all_panels(monkeypatch, tmp_path):
         output = Visualization(simulation).forces_visualization(tmp_path / "forces.gif")
         with Image.open(output) as gif:
             assert gif.n_frames == 3
-            assert gif.size == (1200, 900)
+            assert gif.size == (1200, 1100)
         figure = captured[-1]
-        assert len(figure.axes) == 8
+        assert len(figure.axes) == 9
+        height_axis = figure.axes[-1]
+        assert height_axis.get_title() == "Blade-center heights"
+        for line, key in zip(height_axis.lines[:2], ("starting_surface_height", "blade_bottom_height")):
+            np.testing.assert_allclose(line.get_ydata(), [row[key] for row in simulation.force_log])
+            np.testing.assert_allclose(line.get_xdata(), [0, .01, .02, .03])
+        assert np.ptp(height_axis.lines[1].get_ydata()) > 0.2
         np.testing.assert_allclose(figure.axes[0].lines[0].get_ydata(), [0, -100, -200, -300])
         np.testing.assert_allclose(figure.axes[0].lines[0].get_xdata(), [0, .01, .02, .03])
     finally:

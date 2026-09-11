@@ -25,7 +25,7 @@ class Visualization:
         self.simulation = simulation
 
     def forces_visualization(self, filename="figures/forces.gif"):
-        """Animate logged forces in the 4-by-2 dashboard used by main.py.
+        """Animate logged forces, blade pitch, and blade-center heights.
 
         Uses the same frame stride and playback rate as the geometry GIF.
         Dynamics values are snapshots from each simulation step, not recomputed
@@ -45,10 +45,20 @@ class Visualization:
             ("Blade pitch", "Pitch (rad)", [("blade_pitch", "Pitch")]),
             ("Track drive forces", "Force (N)", [("drive_left", "Left"), ("drive_right", "Right")]),
         ]
-        figure, axes = plt.subplots(4, 2, figsize=(12, 9), sharex=True)
+        panels.append(("Blade-center heights", "World height (m)", [
+            ("starting_surface_height", "Original surface at blade center"),
+            ("blade_bottom_height", "Blade bottom center"),
+        ]))
+        figure = plt.figure(figsize=(12, 11))
+        layout = figure.add_gridspec(5, 2)
+        axes = [figure.add_subplot(layout[row, column])
+                for row in range(4) for column in range(2)]
+        axes.append(figure.add_subplot(layout[4, :]))
+        for axis in axes[1:]:
+            axis.sharex(axes[0])
         title = figure.suptitle("Forces & Moments over Time")
         traces, cursors = [], []
-        for axis, (name, units, series) in zip(axes.flat, panels):
+        for axis, (name, units, series) in zip(axes, panels):
             values = []
             for key, label in series:
                 history = np.array([row[key] for row in samples])

@@ -8,7 +8,7 @@ class Control():
     def __init__(self, L):
         # controller reference
         self.L = L
-        self.desired_depth = 0.2
+        self.desired_depth = 0.3
         self.desired_roll_pitch_yaw = np.array([ 0, 1, 0])
         
         # Blade Proportional controller gain(s)       
@@ -35,10 +35,10 @@ class Control():
         """
         deformation =  starting_surface_height - blade_bottom_height
         errors      = np.array([0.0, self.desired_depth - deformation, 0.0])
-        return errors*100, errors.copy()
+        return errors, errors.copy()
 
     def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
-        return self.Kp * self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
+        return self.Kp * self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0] * 100
     
     def dummy_track_controlller(self, dozer_position_and_orientation):
         F_track_base = 600000.0
@@ -75,7 +75,7 @@ class DozerSimulation():
         self.velocity_limit         = 2.222
         self.lateral_velocity_limit = 0.0    # this governs how much the dozer can "slide" laterally
         self.blade_roll_pitch_yaw_limits      = np.array([0.0735, 0.430, 0.387]) # radians
-        self.blade_roll_pitch_yaw_rate_limits = np.array([0.0735, 0.143, 0.194]) # radians per second
+        self.blade_roll_pitch_yaw_rate_limits = self.blade_roll_pitch_yaw_limits*1.5 # radians per second
         
         # --------------------------- Bulldozer body parameters ---------------------------- 
         mass              = 10156.0 # of the unloaded vehicle in kilograms
@@ -106,12 +106,12 @@ class DozerSimulation():
         # ------------------------------- Surface parameters ------------------------------- 
         self.division_factor = 8
         self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
-        self.u_split         = 10  # u-value where the grid switches to surface_abg2
-        self.v_split         = 10  # u-value where the grid switches to surface_abg2
+        self.u_split         = 20  # u-value where the grid switches to surface_abg2
+        self.v_split         = 20  # u-value where the grid switches to surface_abg2
 
         # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface ----- 
-        self.u_range = (-2* self.b/2, 5 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
-        self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-2* self.b/2, 5 * self.b)
+        self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-1* self.b/2, 8 * self.b)
         if is_backwards:
             self.q_dot   *= -1
             self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
@@ -936,6 +936,7 @@ class DozerSimulation():
 
     def _log_forces(self, t):
         """Snapshot dynamics values alongside each logged pose."""
+        blade_center = self._blade_bottom_center()
         self.force_log.append({
             "time": float(t),
             "Fb": float(self.Fb), "Mb": float(self.Mb),
@@ -944,6 +945,8 @@ class DozerSimulation():
             "v_forward": float(self.v[0]), "v_turn": float(self.v[1]),
             "roll_error": float(self.controller.blade_controller_errors(self.blade_roll_pitch_yaw)[0][0]),
             "blade_pitch": float(self.blade_roll_pitch_yaw[1]),
+            "starting_surface_height": float(self._undeformed_height(blade_center)),
+            "blade_bottom_height": float(blade_center[2]),
             "drive_left": float(self.F_track[0]), "drive_right": float(self.F_track[1]),
         })
 
