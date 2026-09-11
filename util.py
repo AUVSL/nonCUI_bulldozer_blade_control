@@ -8,13 +8,13 @@ class Control():
     def __init__(self, L):
         # controller reference
         self.L = L
-        self.desired_depth = -0.2
+        self.desired_depth = 0.2
         self.desired_roll_pitch_yaw = np.array([ 0, 1, 0])
         
         # Blade Proportional controller gain(s)       
         self.Kp = np.array([3.0, 3.0, 3.0])  
         
-    def controller_errors(self, blade_roll_pitch_yaw):
+    def blade_controller_errors(self, blade_roll_pitch_yaw):
         """
         Computes blade roll, pitch, yaw errors relative to desired surface and depth.
         """
@@ -29,8 +29,12 @@ class Control():
 
         return errors, plot_out
     
-    def proportional_controller(self, blade_roll_pitch_yaw):
-        return -self.Kp * self.controller_errors(blade_roll_pitch_yaw)[0]
+    def proportional_blade_controller(self, blade_roll_pitch_yaw):
+        return self.Kp * self.blade_controller_errors(blade_roll_pitch_yaw)[0]
+    
+    def dummy_track_controlller(self, dozer_position_and_orientation):
+        F_track_base = 600000.0
+        return np.array([F_track_base, F_track_base])
 
 
 class DozerSimulation():
@@ -255,6 +259,7 @@ class DozerSimulation():
     # ------------------------------------ BODY UPDATE ------------------------------------     
     def _body_update(self):
         if self.is_initialized:
+            self.F_track = self.controller.dummy_track_controlller(self.q)
             self._update_q_dot()
             self.q += self.dt * self.q_dot
             self.q[3:6] = (self.q[3:6] + np.pi) % (2 * np.pi) - np.pi
@@ -778,9 +783,9 @@ class DozerSimulation():
     # ---------------------------- BLADE SURFACE DEFORMATION ------------------------------ 
     def _blade_update(self, deform=True):
         if deform:
-            previous_angles = np.array(self.blade_roll_pitch_yaw, dtype=float, copy=True)
-            controller_output = self.controller.proportional_controller(previous_angles)
-            requested_angles = previous_angles + self.blade_angle_actuation_scaler * controller_output
+            previous_angles   = np.array(self.blade_roll_pitch_yaw, dtype=float, copy=True)
+            controller_output = self.controller.proportional_blade_controller(previous_angles)
+            requested_angles  = previous_angles + self.blade_angle_actuation_scaler * controller_output
 
             # dx = (x_t - x_{t-1}) / dt; limit each axis in radians per second.
             requested_rates = (requested_angles - previous_angles) / self.dt
@@ -921,7 +926,8 @@ class DozerSimulation():
             "Rl_left": float(self.Rl[0]), "Rl_right": float(self.Rl[1]),
             "Fy": float(self.Fy), "Mr": float(self.Mr),
             "v_forward": float(self.v[0]), "v_turn": float(self.v[1]),
-            "roll_error": float(self.controller.controller_errors(self.blade_roll_pitch_yaw)[0][0]),
+            "roll_error": float(self.controller.blade_controller_errors(self.blade_roll_pitch_yaw)[0][0]),
+            "blade_pitch": float(self.blade_roll_pitch_yaw[1]),
             "drive_left": float(self.F_track[0]), "drive_right": float(self.F_track[1]),
         })
 

@@ -42,7 +42,7 @@ class Visualization:
             ("Lateral track force", "Fy (N)", [("Fy", "Lateral")]),
             ("Track turning moment", "Mr (N m)", [("Mr", "Turning")]),
             ("Velocity", "m/s (forward), rad/s (turn)", [("v_forward", "Forward"), ("v_turn", "Turn")]),
-            ("Blade roll error", "Error (rad)", [("roll_error", "Roll")]),
+            ("Blade pitch", "Pitch (rad)", [("blade_pitch", "Pitch")]),
             ("Track drive forces", "Force (N)", [("drive_left", "Left"), ("drive_right", "Right")]),
         ]
         figure, axes = plt.subplots(4, 2, figsize=(12, 9), sharex=True)
