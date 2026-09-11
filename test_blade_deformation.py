@@ -160,8 +160,11 @@ def test_disabled_blade_does_not_stop_at_cut_limit(simulation):
     assert not sim.cut_limit_reached
 
 
-def test_default_run_stops_at_cut_limit():
+def test_excessive_cut_command_stops_at_cut_limit():
     sim = DozerSimulation(blade_roll_pitch_yaw=np.zeros(3))
+    # Normal 0.2 m feedback can finish the course; deliberately request a cut
+    # beyond the terrain limit to exercise the independent stop protection.
+    sim.controller.desired_depth = sim.max_world_cut_depth + sim.H
     sim.stop_time = 5.0
     sim.run()
     assert sim.total_distance < sim.stop_distance
@@ -191,3 +194,64 @@ def test_cut_limit_roll_depth_excludes_arm_lift(simulation, roll):
         sim._support_heights(R, check_cut_limit=True)
         assert not sim.cut_limit_reached
         sim.starting_grid_heights[:] += 0.01
+
+
+@pytest.mark.parametrize("depth, expected", [(-0.1, 0.3), (0.1, 0.1), (0.2, 0.0), (0.3, -0.1)])
+def test_deformation_controller_signed_depth_error(simulation, depth, expected):
+    controller = simulation.controller
+    angles = np.array([0.04, 0.1, -0.03])
+    errors, plot_errors = controller.blade_deformation_errors(angles, 2.0, 2.0 - depth)
+    np.testing.assert_allclose(errors, [-0.04, expected, 0.03], atol=1e-12)
+    np.testing.assert_allclose(plot_errors, errors)
+    np.testing.assert_allclose(
+        controller.proportional_blade_controller(angles, 2.0, 2.0 - depth),
+        controller.Kp * errors)
+
+
+def test_blade_bottom_center_includes_body_and_offset(simulation):
+    sim = simulation
+    angle = np.pi / 6
+    depth = 0.2
+    sim.q[:] = [1.0, -1.0, 2.0, angle, 0.0, np.pi / 2]
+    sim.blade_arm_offset = np.array([0.4, 0.3, 0.1])
+    sim.blade_roll_pitch_yaw[:] = [angle, np.arcsin(depth / sim.L), 0.0]
+    expected = [
+        1.0 - (0.3 * np.cos(angle) - 0.1 * np.sin(angle) + depth * np.sin(2 * angle)),
+        -1.0 + 0.4 + sim.L,
+        2.0 + 0.3 * np.sin(angle) + 0.1 * np.cos(angle) - depth * np.cos(2 * angle),
+    ]
+    np.testing.assert_allclose(sim._blade_bottom_center(), expected, atol=1e-12)
+
+
+def test_controller_samples_original_surface_at_blade_center(simulation, monkeypatch):
+    sim = simulation
+    sim.starting_grid_heights[:] = 0.3 * sim.us[:, None] + 0.1 * sim.vs[None, :]
+    sim.blade_arm_offset = np.array([0.4, 0.2, 0.1])
+    observed = []
+
+    def capture(angles, starting_height, blade_height):
+        observed.append((starting_height, blade_height))
+        return np.zeros(3)
+
+    monkeypatch.setattr(sim.controller, "proportional_blade_controller", capture)
+    sim._blade_update()
+    np.testing.assert_allclose(observed, [[0.3 * (sim.L + 0.4) + 0.1 * 0.2, 0.1]])
+
+
+@pytest.mark.parametrize("initial_depth, direction", [(0.1, 1), (0.3, -1)])
+def test_deformation_feedback_moves_pitch_toward_target(simulation, initial_depth, direction):
+    sim = simulation
+    sim.blade_roll_pitch_yaw[1] = np.arcsin(initial_depth / sim.L)
+    before = sim.blade_roll_pitch_yaw[1]
+    sim._blade_update()
+    change = sim.blade_roll_pitch_yaw[1] - before
+    assert direction * change > 0
+    assert abs(change) <= sim.blade_roll_pitch_yaw_rate_limits[1] * sim.dt + 1e-12
+
+
+def test_deformation_controller_converges_on_flat_surface(simulation):
+    sim = simulation
+    for _ in range(300):
+        sim._blade_update()
+    measured_depth = sim._undeformed_height(sim._blade_bottom_center()) - sim._blade_bottom_center()[2]
+    assert measured_depth == pytest.approx(0.2, abs=1e-3)

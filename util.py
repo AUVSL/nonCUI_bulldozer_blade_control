@@ -29,8 +29,16 @@ class Control():
 
         return errors, plot_out
     
-    def proportional_blade_controller(self, blade_roll_pitch_yaw):
-        return self.Kp * self.blade_controller_errors(blade_roll_pitch_yaw)[0]
+    def blade_deformation_errors(self, starting_surface_height, blade_bottom_height):
+        """ Positive deformation is below the original surface; positive depth
+        error requests more cut. The pitch gain maps metres to angle commands.
+        """
+        deformation =  starting_surface_height - blade_bottom_height
+        errors      = np.array([0.0, self.desired_depth - deformation, 0.0])
+        return errors*100, errors.copy()
+
+    def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
+        return self.Kp * self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
     
     def dummy_track_controlller(self, dozer_position_and_orientation):
         F_track_base = 600000.0
@@ -98,8 +106,8 @@ class DozerSimulation():
         # ------------------------------- Surface parameters ------------------------------- 
         self.division_factor = 8
         self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
-        self.u_split         = 0  # u-value where the grid switches to surface_abg2
-        self.v_split         = 0  # u-value where the grid switches to surface_abg2
+        self.u_split         = 10  # u-value where the grid switches to surface_abg2
+        self.v_split         = 10  # u-value where the grid switches to surface_abg2
 
         # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface ----- 
         self.u_range = (-2* self.b/2, 5 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
@@ -700,6 +708,11 @@ class DozerSimulation():
             for y in (-self.B1 / 2, self.B1 / 2)
         ])
 
+    def _blade_bottom_center(self):
+        """World position of the cutting-edge center, including both transforms."""
+        body_R = self._rotation_lg(*self.q[3:6])
+        return self.q[:3] + body_R @ self._blade_edge_local().mean(axis=0)
+
     def _undeformed_height(self, point):
         """Original soil height, unaffected by cuts made during the run."""
         i, j = self._grid_cell(point)
@@ -784,7 +797,10 @@ class DozerSimulation():
     def _blade_update(self, deform=True):
         if deform:
             previous_angles   = np.array(self.blade_roll_pitch_yaw, dtype=float, copy=True)
-            controller_output = self.controller.proportional_blade_controller(previous_angles)
+            blade_center = self._blade_bottom_center()
+            starting_height = self._undeformed_height(blade_center)
+            controller_output = self.controller.proportional_blade_controller(
+                starting_height, blade_center[2])
             requested_angles  = previous_angles + self.blade_angle_actuation_scaler * controller_output
 
             # dx = (x_t - x_{t-1}) / dt; limit each axis in radians per second.
