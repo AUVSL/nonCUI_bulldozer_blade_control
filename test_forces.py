@@ -82,7 +82,7 @@ def test_requested_rates_are_saved_before_limiting(monkeypatch):
     command = np.array([2., -3., 4.])
     monkeypatch.setattr(simulation.controller, "proportional_blade_controller", lambda *_: command)
     simulation._blade_update()
-    expected = simulation.blade_angle_actuation_scaler * command / simulation.dt
+    expected = command / simulation.dt
     np.testing.assert_allclose(simulation.requested_blade_rates, expected)
     assert np.all(np.abs(expected) > simulation.blade_roll_pitch_yaw_rate_limits)
     assert np.all(np.abs(simulation.blade_roll_pitch_yaw - previous)

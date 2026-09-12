@@ -11,8 +11,12 @@ class Control():
         self.desired_depth = 0.3
         self.desired_roll_pitch_yaw = np.array([ 0, 1, 0])
         
-        # Blade Proportional controller gain(s)       
+        # Blade proportional and derivative controller gains
         self.Kp = np.array([1.0, 1.0, 1.0])  * dt * zero_to_max_angle_time
+        self.dt = dt
+        self.Kd = 0.1 * self.Kp  # derivative gain; set to zero for P-only
+        self.previous_blade_error = None
+        self.derivative_error = np.zeros(3)  # angular error change (rad/s)
         
     def blade_controller_errors(self, blade_roll_pitch_yaw):
         """
@@ -40,8 +44,18 @@ class Control():
         return errors, errors.copy()
 
     def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
-        return self.Kp * self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
-    
+        """Return a PD angle increment using the existing angular depth error."""
+        errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
+        # No previous sample exists on startup or after a reset.
+        self.derivative_error = (np.zeros(3) if self.previous_blade_error is None
+                                 else (errors - self.previous_blade_error) / self.dt)
+        self.previous_blade_error = errors.copy()
+        return self.Kp * errors + self.Kd * self.derivative_error
+
+    def reset_derivative(self):
+        self.previous_blade_error = None
+        self.derivative_error[:] = 0.0
+
     def dummy_track_controlller(self, dozer_position_and_orientation):
         F_track_base = 600000.0
         return np.array([F_track_base, F_track_base])
@@ -189,6 +203,7 @@ class DozerSimulation():
         self.neighbor_log = []
         self.grid_log     = []
         self.force_log    = []
+        self.blade_depth_rmse = None
         
         self.is_initialized = False
         neighbor_points     = self._body_update()
@@ -906,6 +921,12 @@ class DozerSimulation():
     def run(self):
         """Advance either the blade-enabled or tracked-body simulation."""
         t = 0.0
+        # Include the initial pose and every completed step of this run.
+        # Read the reference now in case it was changed after construction.
+        depth_errors = []
+        if self.enable_blade:
+            center = self._blade_bottom_center()
+            depth_errors.append(self._undeformed_height(center) - center[2] - self.controller.desired_depth)
         for _ in range(int(self.stop_time / self.dt)):
             t += self.dt
             
@@ -920,13 +941,11 @@ class DozerSimulation():
 
             self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
 
-            # stop condition check
-            if self.total_distance >= self.stop_distance:
-                break
-
             # log data for visualization and analysis
             self.log.append([t, *self.q])
             self._log_forces(t)
+            if self.enable_blade:
+                depth_errors.append(self.force_log[-1]["blade_depth_error"])
             if self.enable_blade:
                 self.neighbor_log.append(np.array(neighbor_points))
                 self.blade_log.append(blade_points)
@@ -934,9 +953,20 @@ class DozerSimulation():
             else:
                 self.neighbor_log.append(np.array(neighbor_points))
 
+            # Keep the terminal pose in the history and RMSE as well.
+            if self.total_distance >= self.stop_distance:
+                break
+
+        self.blade_depth_rmse = float(np.sqrt(np.mean(np.square(depth_errors)))) if depth_errors else None
+        if self.blade_depth_rmse is not None:
+            print(f"Blade depth RMSE: {self.blade_depth_rmse:.6f} m ({len(depth_errors)} samples)")
+
     def _log_forces(self, t):
         """Snapshot dynamics values alongside each logged pose."""
         blade_center = self._blade_bottom_center()
+        starting_height = float(self._undeformed_height(blade_center))
+        blade_depth = starting_height - float(blade_center[2])
+        desired_depth = float(self.controller.desired_depth)
         self.force_log.append({
             "time": float(t),
             "Fb": float(self.Fb), "Mb": float(self.Mb),
@@ -948,7 +978,10 @@ class DozerSimulation():
             "requested_roll_rate": float(self.requested_blade_rates[0]),
             "requested_pitch_rate": float(self.requested_blade_rates[1]),
             "requested_yaw_rate": float(self.requested_blade_rates[2]),
-            "starting_surface_height": float(self._undeformed_height(blade_center)),
+            "starting_surface_height": starting_height,
+            "blade_depth": blade_depth,
+            "desired_depth": desired_depth,
+            "blade_depth_error": blade_depth - desired_depth,
             "blade_bottom_height": float(blade_center[2]),
             "drive_left": float(self.F_track[0]), "drive_right": float(self.F_track[1]),
         })
