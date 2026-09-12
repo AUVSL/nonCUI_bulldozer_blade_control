@@ -25,7 +25,7 @@ class Visualization:
         self.simulation = simulation
 
     def forces_visualization(self, filename="figures/forces.gif"):
-        """Animate logged forces, blade pitch, and blade-center heights.
+        """Animate logged forces, blade pitch, blade-center heights, and requested rates.
 
         Uses the same frame stride and playback rate as the geometry GIF.
         Dynamics values are snapshots from each simulation step, not recomputed
@@ -49,11 +49,17 @@ class Visualization:
             ("starting_surface_height", "Original surface at blade center"),
             ("blade_bottom_height", "Blade bottom center"),
         ]))
-        figure = plt.figure(figsize=(12, 11))
-        layout = figure.add_gridspec(5, 2)
+        panels.append(("Requested blade rates (before limiting)", "Rate (rad/s)", [
+            ("requested_roll_rate", "Roll"),
+            ("requested_pitch_rate", "Pitch"),
+            ("requested_yaw_rate", "Yaw"),
+        ]))
+        figure = plt.figure(figsize=(12, 13))
+        layout = figure.add_gridspec(6, 2)
         axes = [figure.add_subplot(layout[row, column])
                 for row in range(4) for column in range(2)]
         axes.append(figure.add_subplot(layout[4, :]))
+        axes.append(figure.add_subplot(layout[5, :]))
         for axis in axes[1:]:
             axis.sharex(axes[0])
         title = figure.suptitle("Forces & Moments over Time")

@@ -5,14 +5,14 @@ from visualization import Visualization
 
 
 class Control():
-    def __init__(self, L):
+    def __init__(self, L, dt, zero_to_max_angle_time):
         # controller reference
         self.L = L
         self.desired_depth = 0.3
         self.desired_roll_pitch_yaw = np.array([ 0, 1, 0])
         
         # Blade Proportional controller gain(s)       
-        self.Kp = np.array([3.0, 3.0, 3.0])  
+        self.Kp = np.array([1.0, 1.0, 1.0])  * dt * zero_to_max_angle_time
         
     def blade_controller_errors(self, blade_roll_pitch_yaw):
         """
@@ -33,12 +33,14 @@ class Control():
         """ Positive deformation is below the original surface; positive depth
         error requests more cut. The pitch gain maps metres to angle commands.
         """
-        deformation =  starting_surface_height - blade_bottom_height
-        errors      = np.array([0.0, self.desired_depth - deformation, 0.0])
+        deformation   =  starting_surface_height - blade_bottom_height
+        AAA           = self.desired_depth - deformation
+        desired_pitch = np.arcsin(np.clip(AAA / self.L, -1.0, 1.0))
+        errors        = np.array([0.0, desired_pitch, 0.0])
         return errors, errors.copy()
 
     def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
-        return self.Kp * self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0] * 100
+        return self.Kp * self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
     
     def dummy_track_controlller(self, dozer_position_and_orientation):
         F_track_base = 600000.0
@@ -75,7 +77,8 @@ class DozerSimulation():
         self.velocity_limit         = 2.222
         self.lateral_velocity_limit = 0.0    # this governs how much the dozer can "slide" laterally
         self.blade_roll_pitch_yaw_limits      = np.array([0.0735, 0.430, 0.387]) # radians
-        self.blade_roll_pitch_yaw_rate_limits = self.blade_roll_pitch_yaw_limits*1.5 # radians per second
+        zero_to_max_angle_time = 1              # second
+        self.blade_roll_pitch_yaw_rate_limits = self.blade_roll_pitch_yaw_limits / zero_to_max_angle_time # radians per second
         
         # --------------------------- Bulldozer body parameters ---------------------------- 
         mass              = 10156.0 # of the unloaded vehicle in kilograms
@@ -91,9 +94,6 @@ class DozerSimulation():
         self.H  = 0.955 # blade height in meters
         self.L  = 1.2   # blade arm length in meters
         self.blade_arm_offset = np.array([0.5, 0, 0])
-        
-        # TODO: this should just get rolled into the controller gain when tuning with the blade rate limitors.
-        self.blade_angle_actuation_scaler = 1/100
         
         # -------------------------------- Soil parameters --------------------------------- 
         self.mu_l    = 0.1              # longitudinal friction coefficient
@@ -139,8 +139,6 @@ class DozerSimulation():
         stop_index                  = 0 if self.is_backwards else -1 
         self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
         self.angular_velocity_limit = 2 * self.velocity_limit / self.b
-        # if np.array_equal(blade_roll_pitch_yaw, np.zeros(3)):
-        #     self.blade_roll_pitch_yaw[1] = np.arcsin((self.H / 4) / self.L) 
 
         # ------------------------ Forces and moment Parameters --------------------------- 
         self.F_track = np.array([self.F_track_base, self.F_track_base])  #[left, right]
@@ -158,8 +156,7 @@ class DozerSimulation():
         self.v_dot = np.zeros(2)  # initial local acceleration vector
         self.q     = np.array([0.0, 0.0, 0.0, self.surface_abg[0], self.surface_abg[1], 
                                0.0 if is_surface_pitched else np.pi / 2])
-        # self.q_dot = np.array([2.0 if is_surface_pitched else 0.0, 0.0 
-                            #    if is_surface_pitched else 2.0, 0.0, 0.0, 0.0, 0.0])
+        
         self.q_dot = np.zeros(6) 
         self.dxyz  = np.zeros(3)
         self.daBg  = np.zeros(3)
@@ -183,7 +180,8 @@ class DozerSimulation():
         self.vtR       = 0.0
         
         # ----------------------------------- Controller ----------------------------------- 
-        self.controller = Control(self.L)
+        self.controller = Control(self.L, self.dt, zero_to_max_angle_time)
+        self.requested_blade_rates = np.zeros(3)  # roll, pitch, yaw before limiting (rad/s)
         
         # ----------------------- Write 1st entry to simulation logs ----------------------- 
         self.log          = []
@@ -801,10 +799,12 @@ class DozerSimulation():
             starting_height = self._undeformed_height(blade_center)
             controller_output = self.controller.proportional_blade_controller(
                 starting_height, blade_center[2])
-            requested_angles  = previous_angles + self.blade_angle_actuation_scaler * controller_output
+            requested_angles  = previous_angles + controller_output
 
             # dx = (x_t - x_{t-1}) / dt; limit each axis in radians per second.
             requested_rates = (requested_angles - previous_angles) / self.dt
+
+            self.requested_blade_rates = requested_rates.copy()
             limited_rates = np.clip(
                 requested_rates, -self.blade_roll_pitch_yaw_rate_limits, self.blade_roll_pitch_yaw_rate_limits)
             self.blade_roll_pitch_yaw = np.clip(
@@ -945,6 +945,9 @@ class DozerSimulation():
             "v_forward": float(self.v[0]), "v_turn": float(self.v[1]),
             "roll_error": float(self.controller.blade_controller_errors(self.blade_roll_pitch_yaw)[0][0]),
             "blade_pitch": float(self.blade_roll_pitch_yaw[1]),
+            "requested_roll_rate": float(self.requested_blade_rates[0]),
+            "requested_pitch_rate": float(self.requested_blade_rates[1]),
+            "requested_yaw_rate": float(self.requested_blade_rates[2]),
             "starting_surface_height": float(self._undeformed_height(blade_center)),
             "blade_bottom_height": float(blade_center[2]),
             "drive_left": float(self.F_track[0]), "drive_right": float(self.F_track[1]),
