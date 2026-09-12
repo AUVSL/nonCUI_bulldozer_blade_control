@@ -12,9 +12,11 @@ class Control():
         self.desired_roll_pitch_yaw = np.array([ 0, 1, 0])
         
         # Blade proportional and derivative controller gains
-        self.Kp = np.array([1.0, 1.0, 1.0])  * dt * zero_to_max_angle_time
+        self.Kp = np.ones(3) * dt * zero_to_max_angle_time
+        self.Kp[1] = 0.64  # tuned pitch gain, assigned directly (no dt scaling)
         self.dt = dt
-        self.Kd = 0.1 * self.Kp  # derivative gain; set to zero for P-only
+        self.Kd = np.ones(3) * 0.1 * dt * zero_to_max_angle_time
+        self.Kd[1] = 0.128  # tuned pitch derivative gain; zero gives P-only
         self.previous_blade_error = None
         self.derivative_error = np.zeros(3)  # angular error change (rad/s)
         
@@ -61,11 +63,40 @@ class Control():
         return np.array([F_track_base, F_track_base])
 
 
+class PIControl(Control):
+    """Separate PI blade controller with conditional-integration anti-windup."""
+
+    def __init__(self, L, dt, zero_to_max_angle_time):
+        super().__init__(L, dt, zero_to_max_angle_time)
+        self.Kp = np.array([0.01, 0.00025, 0.01])  # tuned PI pitch gain
+        self.Ki = np.array([0.0, 0.0001, 0.0])  # tuned integral gain
+        self.integral_error = np.zeros(3)  # integral of angular depth error (rad s)
+        self._previous_integral = self.integral_error.copy()
+
+    def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
+        errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
+        self._previous_integral = self.integral_error.copy()
+        self.integral_error += np.where(self.Ki != 0., errors * self.dt, 0.)
+        return self.Kp * errors + self.Ki * self.integral_error
+
+    def apply_actuator_feedback(self, requested_increment, applied_increment):
+        """Freeze integration into a limit, but permit unwinding out of it."""
+        blocked_increment = requested_increment - applied_increment
+        integral_increment = self.Ki * (self.integral_error - self._previous_integral)
+        blocked = (np.abs(blocked_increment) > 1e-12) & (blocked_increment * integral_increment > 0.)
+        self.integral_error[blocked] = self._previous_integral[blocked]
+
+    def reset_integrator(self):
+        self.integral_error[:] = 0.
+        self._previous_integral[:] = 0.
+
+
 class DozerSimulation():
     """Surface-aware bulldozer with an optional deforming blade."""
 
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
-                 is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3)):
+                 is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3),
+                 controller_type: str = "pd"):
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # ----------------------------- Load passed parameters ----------------------------- 
         self.is_surface_pitched   = is_surface_pitched
@@ -194,7 +225,10 @@ class DozerSimulation():
         self.vtR       = 0.0
         
         # ----------------------------------- Controller ----------------------------------- 
-        self.controller = Control(self.L, self.dt, zero_to_max_angle_time)
+        if controller_type not in ("pd", "pi"):
+            raise ValueError("controller_type must be 'pd' or 'pi'")
+        controller_class = PIControl if controller_type == "pi" else Control
+        self.controller = controller_class(self.L, self.dt, zero_to_max_angle_time)
         self.requested_blade_rates = np.zeros(3)  # roll, pitch, yaw before limiting (rad/s)
         
         # ----------------------- Write 1st entry to simulation logs ----------------------- 
@@ -824,6 +858,9 @@ class DozerSimulation():
                 requested_rates, -self.blade_roll_pitch_yaw_rate_limits, self.blade_roll_pitch_yaw_rate_limits)
             self.blade_roll_pitch_yaw = np.clip(
                 previous_angles + limited_rates * self.dt, -self.blade_roll_pitch_yaw_limits, self.blade_roll_pitch_yaw_limits)
+            if isinstance(self.controller, PIControl):
+                self.controller.apply_actuator_feedback(
+                    controller_output, self.blade_roll_pitch_yaw - previous_angles)
             # Apply the new blade command to the supported body pose before
             # any soil is removed; the original terrain remains the constraint.
             self._settle_tracks(self.q[3:6].copy())
