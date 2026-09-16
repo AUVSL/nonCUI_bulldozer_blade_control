@@ -25,7 +25,7 @@ class Visualization:
         self.simulation = simulation
 
     def _pile_vertices(self, blade, pile_state):
-        """Build the soil wedge from a logged blade frame and scalar pile state."""
+        """Build a full-width pile that grows outward from the blade with soil load."""
         simulation = self.simulation
         h3, h4, roll, yaw = pile_state
         blade = np.asarray(blade)
@@ -40,8 +40,10 @@ class Visualization:
         forward /= max(np.linalg.norm(forward), 1e-12)
         vertices = []
         visible = False
-        for side, load_height in ((1.0, h3), (-1.0, h4)):
-            bottom = center + side * simulation.B1 / 2 * rotation[:, 1]
+        sections = max(3, int(np.ceil(4 * simulation.B1 / simulation.subdivision)) + 1)
+        for fraction in np.linspace(0.0, 1.0, sections):
+            load_height = (1 - fraction) * h3 + fraction * h4
+            bottom = center + (0.5 - fraction) * simulation.B1 * rotation[:, 1]
 
             def clearance(distance):
                 point = bottom + distance * up
@@ -49,20 +51,28 @@ class Visualization:
 
             # Locate the soil/blade intersection along the actual tilted face.
             low, high = 0.0, simulation.H
-            if clearance(0.0) > 1e-7 or clearance(simulation.H) <= 0.0:
-                # An edge clear of the soil or completely buried supports no pile.
+            if clearance(simulation.H) <= 0.0:
+                # Keep inactive sections collapsed to preserve mesh connectivity.
                 base = bottom.copy()
                 base[2] = simulation._undeformed_height(base)
                 vertices.extend([base.copy(), base.copy(), base.copy()])
                 continue
-            for _ in range(40):
-                middle = (low + high) / 2
-                if clearance(middle) < 0.0:
-                    low = middle
-                else:
-                    high = middle
-            base = bottom + high * up
-            height = min(max(load_height, 0.0), simulation.H - high)
+            if clearance(0.0) > 0.0:
+                # Keep existing soil on the ground under a raised blade section.
+                # Do not switch an entire side on when its cutting edge touches.
+                base = bottom.copy()
+                base[2] = simulation._undeformed_height(base)
+                exposed_height = clearance(simulation.H) / max(up[2], 1e-12)
+            else:
+                for _ in range(40):
+                    middle = (low + high) / 2
+                    if clearance(middle) < 0.0:
+                        low = middle
+                    else:
+                        high = middle
+                base = bottom + high * up
+                exposed_height = simulation.H - high
+            height = min(max(load_height, 0.0), exposed_height)
             crest = base + height * up
             visible |= height > 1e-6
             toe = base + forward * max(crest[2] - base[2], 0.0) / np.tan(simulation.beta0)
@@ -74,11 +84,13 @@ class Visualization:
         """Triangulate only the above-ground brown pile."""
         if not len(vertices):
             return []
-        faces = []
-        for indices in ([0, 1, 4, 3], [0, 1, 2], [3, 5, 4],
-                        [0, 3, 5, 2], [1, 2, 5, 4]):
-            for index in range(1, len(indices) - 1):
-                faces.append(vertices[[indices[0], indices[index], indices[index + 1]]])
+        strips = np.asarray(vertices).reshape(-1, 3, 3)
+        faces = [strips[0, [0, 1, 2]], strips[-1, [0, 2, 1]]]
+        for left, right in zip(strips[:-1], strips[1:]):
+            # Join base-to-crest, crest-to-toe, and toe-to-base surfaces.
+            for first, second in ((0, 1), (1, 2), (2, 0)):
+                faces.append(np.array([left[first], left[second], right[second]]))
+                faces.append(np.array([left[first], right[second], right[first]]))
         return faces
 
     def _surface_tooth_faces(self, blade, terrain_heights, blade_yaw=0.0):
