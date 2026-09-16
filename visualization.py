@@ -24,6 +24,106 @@ class Visualization:
     def __init__(self, simulation):
         self.simulation = simulation
 
+    def _pile_vertices(self, blade, pile_state):
+        """Build the soil wedge from a logged blade frame and scalar pile state."""
+        simulation = self.simulation
+        h3, h4, roll, yaw = pile_state
+        blade = np.asarray(blade)
+        if not simulation.enable_blade or max(h3, h4) <= 1e-6:
+            return np.empty((0, 3))
+        rotation = (simulation._rotation_lg(*blade[0, 3:6])
+                    @ simulation._rotation_lg(roll, 0.0, yaw))
+        center = (blade[0, :3] + blade[-1, :3]) / 2
+        up = rotation[:, 2]
+        forward = rotation[:, 0].copy()
+        forward[2] = 0.0
+        forward /= max(np.linalg.norm(forward), 1e-12)
+        vertices = []
+        visible = False
+        for side, load_height in ((1.0, h3), (-1.0, h4)):
+            bottom = center + side * simulation.B1 / 2 * rotation[:, 1]
+
+            def clearance(distance):
+                point = bottom + distance * up
+                return point[2] - simulation._undeformed_height(point)
+
+            # Locate the soil/blade intersection along the actual tilted face.
+            low, high = 0.0, simulation.H
+            if clearance(0.0) > 1e-7 or clearance(simulation.H) <= 0.0:
+                # An edge clear of the soil or completely buried supports no pile.
+                base = bottom.copy()
+                base[2] = simulation._undeformed_height(base)
+                vertices.extend([base.copy(), base.copy(), base.copy()])
+                continue
+            for _ in range(40):
+                middle = (low + high) / 2
+                if clearance(middle) < 0.0:
+                    low = middle
+                else:
+                    high = middle
+            base = bottom + high * up
+            height = min(max(load_height, 0.0), simulation.H - high)
+            crest = base + height * up
+            visible |= height > 1e-6
+            toe = base + forward * max(crest[2] - base[2], 0.0) / np.tan(simulation.beta0)
+            toe[2] = simulation._undeformed_height(toe)
+            vertices.extend([base, crest, toe])
+        return np.asarray(vertices) if visible else np.empty((0, 3))
+
+    def _pile_faces(self, vertices, terrain_heights=None):
+        """Triangulate only the above-ground brown pile."""
+        if not len(vertices):
+            return []
+        faces = []
+        for indices in ([0, 1, 4, 3], [0, 1, 2], [3, 5, 4],
+                        [0, 3, 5, 2], [1, 2, 5, 4]):
+            for index in range(1, len(indices) - 1):
+                faces.append(vertices[[indices[0], indices[index], indices[index + 1]]])
+        return faces
+
+    def _surface_tooth_faces(self, blade, terrain_heights, blade_yaw=0.0):
+        """Bridge the cutting edge to the next soil grid boundary ahead of it."""
+        simulation = self.simulation
+        blade = np.asarray(blade)
+        rotation = (simulation._rotation_lg(*blade[0, 3:6])
+                    @ simulation._rotation_lg(0.0, 0.0, blade_yaw))
+        forward = rotation[:, 0].copy()
+        forward[2] = 0.0
+        forward /= max(np.linalg.norm(forward), 1e-12)
+
+        def height(point):
+            i, j = simulation._grid_cell(point)
+            corners = [(*simulation.grid_pts[ci][cj][:2], terrain_heights[ci, cj])
+                       for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))]
+            return simulation._bilinear_height(point, corners)
+
+        edge = blade[:, :3].copy()
+        ground = edge.copy()
+        for index, point in enumerate(edge):
+            distances = []
+            for axis, coordinates in ((0, simulation.us), (1, simulation.vs)):
+                if abs(forward[axis]) > 1e-12:
+                    crossings = (coordinates - point[axis]) / forward[axis]
+                    distances.extend(crossings[crossings > 1e-8])
+            distance = min(distances) if distances else simulation.subdivision
+            ground[index] = point + distance * forward
+            ground[index, 2] = height(ground[index])
+            # A lifted blade must not pull a soil patch into the air.
+            edge[index, 2] = min(point[2], height(point))
+        faces = []
+        for index in range(len(edge) - 1):
+            faces.extend([
+                np.array([edge[index], ground[index], ground[index + 1]]),
+                np.array([edge[index], ground[index + 1], edge[index + 1]]),
+            ])
+        return faces
+
+    @staticmethod
+    def _pile_in_front_of_blade(face, eye, body_center):
+        """The pile is on the opposite side of the blade plane from the body."""
+        normal = np.cross(face[1] - face[0], face[3] - face[0])
+        return np.dot(normal, body_center - face[0]) * np.dot(normal, eye - face[0]) < 0.0
+
     def forces_visualization(self, filename="figures/forces.gif"):
         """Animate logged forces, blade pitch, blade-center heights, and requested rates.
 
@@ -213,6 +313,12 @@ class Visualization:
                 for frame in blade_data
             ])
             grid_z_data = np.asarray(simulation.grid_log)[::2]
+            # Compute geometry only for rendered frames, after the simulation run.
+            history = getattr(simulation, "pile_log", [])
+            pile_data = ([self._pile_vertices(blade, state)
+                          for blade, state in zip(blade_data, history[::2])]
+                         if len(history) == len(log_data)
+                         else [np.empty((0, 3)) for _ in data])
 
             arm_thickness = 0.1  # Square cross-section in metres.
             arm_mesh_data = []
@@ -282,6 +388,12 @@ class Visualization:
                 blade_path[:, :, 2].ravel(),
                 blade_top_data[:, :, 2].ravel(),
             ])
+        if enable_blade:
+            for vertices in pile_data:
+                if len(vertices):
+                    bound_x.append(vertices[:, 0])
+                    bound_y.append(vertices[:, 1])
+                    bound_z.append(vertices[:, 2])
         if show_neighbors:
             neighbor_points = np.array([
                 point
@@ -691,6 +803,43 @@ class Visualization:
             axis_back.add_patch(blade_face_back)
             axis_side.add_patch(blade_face_side)
 
+        pile_projections = []
+        tooth_projections = []
+        if enable_blade:
+            pile_3d = Poly3DCollection([], facecolors="saddlebrown", edgecolors="none",
+                                       alpha=1.0, linewidths=0, antialiased=False, label="soil pile")
+            axis_3d.add_collection3d(pile_3d)
+            tooth_3d = Poly3DCollection([], facecolors=soil_top_color, edgecolors="none",
+                                        alpha=1.0, linewidths=0, antialiased=False,
+                                        label="surface tooth")
+            axis_3d.add_collection3d(tooth_3d)
+            for axis, projection in ((axis_top, [0, 1]), (axis_back, [1, 2]),
+                                     (axis_side, [0, 2])):
+                artist = PolyCollection([], facecolors="saddlebrown", edgecolors="none",
+                                        alpha=1.0, linewidths=0, antialiased=False, label="soil pile")
+                axis.add_collection(artist)
+                pile_projections.append((projection, artist))
+                tooth = PolyCollection([], facecolors=soil_top_color, edgecolors="none",
+                                       alpha=1.0, linewidths=0, antialiased=False,
+                                       label="surface tooth")
+                axis.add_collection(tooth)
+                tooth_projections.append((projection, tooth))
+
+            def set_pile(frame_index):
+                vertices = pile_data[frame_index]
+                faces = self._pile_faces(vertices)
+                pile_3d.set_verts(faces)
+                for projection, artist in pile_projections:
+                    artist.set_verts([face[:, projection] for face in faces])
+                yaw = history[frame_index * 2][3] if len(history) == len(log_data) else 0.0
+                tooth_faces = self._surface_tooth_faces(
+                    blade_data[frame_index], grid_z_data[frame_index], yaw)
+                tooth_3d.set_verts(tooth_faces)
+                for projection, artist in tooth_projections:
+                    artist.set_verts([face[:, projection] for face in tooth_faces])
+
+            set_pile(0)
+
         arm_projections = []
         if enable_blade:
             initial_arms = arm_mesh_data[0][:, body_faces].reshape(-1, 4, 3)
@@ -760,17 +909,20 @@ class Visualization:
                 far_arm, near_arm = (4, 5) if eye_local[1] >= 0.0 else (5, 4)
                 order = [far_track, far_arm, rear, hood, near_arm, near_track]
                 face = vehicle_polygons(frame_index)[-1]
-                normal = np.cross(face[1] - face[0], face[3] - face[0])
                 body_center = body_data[frame_index].mean(axis=(0, 1))
-                body_side = np.dot(normal, body_center - face[0])
-                eye_side = np.dot(normal, eye_world - face[0])
-                # From behind the blade, the vehicle can obscure it; from
-                # the soil-facing side, the blade is in front of the vehicle.
-                if body_side * eye_side >= 0.0:
-                    order.insert(0, 6)
-                else:
+                pile_in_front = self._pile_in_front_of_blade(face, eye_world, body_center)
+                if pile_in_front:
                     order.append(6)
-            return [vehicle_parts[index] for index in order]
+                else:
+                    order.insert(0, 6)
+            artists = [vehicle_parts[index] for index in order]
+            if enable_blade:
+                # Render the soil-facing view over the blade; rear views behind it.
+                if pile_in_front:
+                    artists.extend([tooth_3d, pile_3d])
+                else:
+                    artists[0:0] = [tooth_3d, pile_3d]
+            return artists
 
         def set_neighbors(frame_index):
             points = (
@@ -910,10 +1062,10 @@ class Visualization:
         legend_labels = ["dozer body", "tracks", "q (center of mass)"]
         if enable_blade:
             legend_handles.extend([
-                blade_arrow_side, blade_face_side
+                blade_arrow_side, blade_face_side, pile_projections[-1][1]
             ])
             legend_labels.extend([
-                "blade contact points", "blade face"
+                "blade contact points", "blade face", "soil pile"
             ])
         if show_neighbors:
             legend_handles.append(green_side)
@@ -954,6 +1106,7 @@ class Visualization:
                 set_body_diagnostics(frame_index)
             set_q_and_blade(frame_index)
             if enable_blade:
+                set_pile(frame_index)
                 desired_depth_line.set_ydata([desired_cut_heights[frame_index]] * 2)
                 arms = arm_mesh_data[frame_index][:, body_faces].reshape(-1, 4, 3)
                 for projection, artist in arm_projections:
@@ -962,11 +1115,15 @@ class Visualization:
 
         flat_artists = [
             grid_back, grid_side, soil_walls_back, soil_walls_side,
+            *[artist for _, artist in tooth_projections],
+            *[artist for _, artist in pile_projections],
             *[artist for _, artist in arm_projections],
             *[artist for _, artist in body_projections],
             track_top, track_back, track_side,
         ]
         three_d_artists = [soil_top_3d, grid_3d, soil_walls_3d, *vehicle_parts]
+        if enable_blade:
+            three_d_artists.extend([tooth_3d, pile_3d])
         if show_neighbors:
             flat_artists.extend([green_back, green_side, green_top])
             three_d_artists.append(green_3d)
@@ -1032,7 +1189,9 @@ class Visualization:
                 dynamic_3d_artists.append(blade_arrow_3d[0])
             # Draw diagnostic arrows beneath the solid vehicle so they do not
             # appear through its opaque body and track faces.
-            scene_artists = [artist for artist in three_d_artists if artist not in vehicle_parts]
+            scene_artists = [artist for artist in three_d_artists
+                             if artist not in vehicle_parts
+                             and (not enable_blade or artist not in (pile_3d, tooth_3d))]
             for artist in scene_artists + dynamic_3d_artists + ordered_vehicle_parts(frame_index):
                 artist.do_3d_projection()
                 axis_3d.draw_artist(artist)

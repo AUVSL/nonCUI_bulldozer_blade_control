@@ -152,8 +152,8 @@ The returned array has secondary gain (Kd or Ki) rows and Kp columns.
 Use `--duration`, `--desired-depth`, and `--output-dir` to configure either mode.
 
 The runnable examples (`python util.py` and `python main.py`) start with a fixed
-blade roll of 0.05 rad (about 2.9 degrees), zero local pitch and yaw, and blade
+blade roll, pitch, and yaw of zero, and blade
 control disabled. For `DozerSimulation`, configure this with
-`blade_roll_pitch_yaw=np.array([0.05, 0.0, 0.0]), enable_blade_control=False`.
+`blade_roll_pitch_yaw=np.array([0.0, 0.0, 0.0]), enable_blade_control=False`.
 Body motion and soil interaction continue normally. Blade control remains enabled
 by default for programmatic simulations and tuning.

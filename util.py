@@ -47,7 +47,7 @@ class Control():
 
     def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
         """Return a PD angle increment using the existing angular depth error."""
-        # errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
+        errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
         # No previous sample exists on startup or after a reset.
         self.derivative_error = (np.zeros(3) if self.previous_blade_error is None
                                  else (errors - self.previous_blade_error) / self.dt)
@@ -146,13 +146,13 @@ class DozerSimulation():
         self.gamma_g = 1640 * gravity   # soil weight per cubic meter
         
         # ------------------------------- Surface parameters ------------------------------- 
-        self.division_factor = 4
+        self.division_factor = 4*2
         self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
         self.u_split         = 20  # u-value where the grid switches to surface_abg2
         self.v_split         = 20  # u-value where the grid switches to surface_abg2
 
         # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface -----         
-        self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2, 4*    self.b) 
+        self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2, 1/2*    self.b) 
         self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-1* self.b/2, 8 * self.b)
         self.us           = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs           = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
@@ -225,6 +225,7 @@ class DozerSimulation():
         # ----------------------- Write 1st entry to simulation logs ----------------------- 
         self.log          = []
         self.blade_log    = []
+        self.pile_log     = []  # H3, H4, blade-local roll and yaw; geometry is rendered later.
         self.neighbor_log = []
         self.grid_log     = []
         self.force_log    = []
@@ -244,6 +245,8 @@ class DozerSimulation():
         neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
         self.neighbor_log.append(np.array(neighbor_points))
         self.blade_log.append(blade_points)
+        self.pile_log.append((self.H3, self.H4, float(self.blade_roll_pitch_yaw[0]),
+                              float(self.blade_roll_pitch_yaw[2])))
 
     # ---------------------------- SURFACE GENERATION AND INFO ----------------------------     
     @property
@@ -986,6 +989,8 @@ class DozerSimulation():
             if self.enable_blade:
                 self.neighbor_log.append(np.array(neighbor_points))
                 self.blade_log.append(blade_points)
+                self.pile_log.append((self.H3, self.H4, float(self.blade_roll_pitch_yaw[0]),
+                                      float(self.blade_roll_pitch_yaw[2])))
                 self.grid_log.append(self._grid_heights())
             else:
                 self.neighbor_log.append(np.array(neighbor_points))
@@ -1046,8 +1051,8 @@ if __name__ == "__main__":
         is_surface_rolled    = False,
         is_backwards         = False,
         enable_blade         = True,
-        blade_roll_pitch_yaw = np.array([0.05, 0.0, 0.0]),
-        enable_blade_control = False
+        blade_roll_pitch_yaw = np.array([0.0, 0.0, 0.0]),
+        enable_blade_control = True
     )
 
     simulation.run_and_plot()

@@ -887,7 +887,7 @@ class BulldozerSimulation:
 
 def main():
     sim = BulldozerSimulation(enable_blade_control=False)
-    sim.bld_ang = np.array([0.05, 0.0, 0.0])
+    sim.bld_ang = np.array([0.0, 0.0, 0.0])
     sim.run_and_plot(use_path_controller = False, stop_time=2)
 
 

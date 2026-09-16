@@ -1915,3 +1915,118 @@ def test_fixed_rolled_blade_bypasses_control(mode, monkeypatch):
         assert sim.controller.previous_blade_error is None
         if mode == "pi":
             np.testing.assert_array_equal(sim.controller.integral_error, 0.0)
+
+
+# Soil pile visualization
+@pytest.mark.parametrize("roll", [0.0, 0.05, -0.05])
+def test_pile_geometry_follows_blade_and_snapshots_are_independent(roll):
+    sim = DozerSimulation(enable_blade_control=False)
+    assert sim.pile_log[0][:2] == (0.0, 0.0)
+    sim.H3, sim.H4 = 2.0, 2.0  # Must be capped at the exposed blade height.
+    sim.q[:] = [1., 2., 0., 0., 0., 0.4]
+    sim.blade_roll_pitch_yaw = np.array([roll, np.arcsin(0.2 / sim.L), -0.2])
+    vertices = Visualization(sim)._pile_vertices(
+        sim._blade_update(deform=False)[0],
+        (sim.H3, sim.H4, *sim.blade_roll_pitch_yaw[[0, 2]]))
+    assert vertices.shape == (6, 3)
+    for base, crest, toe in vertices.reshape(2, 3, 3):
+        assert base[2] == pytest.approx(sim._undeformed_height(base), abs=1e-10)
+        assert toe[2] == pytest.approx(sim._undeformed_height(toe), abs=1e-10)
+        assert crest[2] > base[2]
+    local = (vertices - sim._blade_bottom_center()) @ sim._blade_rotation_lg(sim.q[3:6])
+    np.testing.assert_allclose(local[[0, 1, 3, 4], 0], 0., atol=1e-10)
+    np.testing.assert_allclose(local[[1, 4], 2], sim.H, atol=1e-10)
+    assert np.all(local[[0, 3], 2] > 0.)  # Base is above the buried cutting edge.
+    saved = vertices.copy()
+    sim.H3 = 0.8
+    sim.q[0] += 1.
+    np.testing.assert_array_equal(vertices, saved)
+    sim.H3 = sim.H4 = 0.
+    assert Visualization(sim)._pile_vertices(
+        sim._blade_update(deform=False)[0],
+        (sim.H3, sim.H4, *sim.blade_roll_pitch_yaw[[0, 2]])).shape == (0, 3)
+
+
+@pytest.mark.parametrize("body_height", [-2.0, 2.0])
+def test_pile_hidden_when_blade_is_buried_or_clear_of_soil(body_height):
+    sim = DozerSimulation(enable_blade_control=False)
+    sim.H3 = sim.H4 = 0.5
+    sim.q[2] = body_height
+    assert Visualization(sim)._pile_vertices(
+        sim._blade_update(deform=False)[0],
+        (sim.H3, sim.H4, *sim.blade_roll_pitch_yaw[[0, 2]])).shape == (0, 3)
+
+
+def test_pile_renders_in_all_views(monkeypatch, tmp_path):
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.array([0.05, 0., 0.]),
+                          enable_blade_control=False)
+    sim.fill_distance = 0.01
+    sim.stop_time = 0.04
+    sim.run()
+    assert len(sim.pile_log) == len(sim.log)
+    assert sim.pile_log[0][:2] == (0.0, 0.0)
+    assert len(sim.pile_log[-1]) == 4
+    assert max(sim.pile_log[-1][:2]) > 0.0
+    captured = []
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(visualization_module.plt, "close", lambda fig: captured.append(fig))
+    monkeypatch.chdir(tmp_path)
+    try:
+        Visualization(sim).visualization()
+        figure = captured[-1]
+        for axis in figure.axes:
+            pile, = [artist for artist in axis.collections if artist.get_label() == "soil pile"]
+            assert len(pile.get_paths()) == 8
+            tooth, = [artist for artist in axis.collections if artist.get_label() == "surface tooth"]
+            assert len(tooth.get_paths()) > 0
+            np.testing.assert_allclose(np.asarray(tooth.get_facecolor())[0],
+                                       visualization_module.to_rgba("burlywood"))
+        with Image.open(tmp_path / "figures" / "simulation.gif") as gif:
+            assert gif.n_frames == 3
+    finally:
+        for figure in captured:
+            real_close(figure)
+
+
+def test_pile_visualizer_uses_logged_state_after_simulation_changes():
+    sim = DozerSimulation(enable_blade_control=False)
+    sim.blade_roll_pitch_yaw = np.array([0.05, np.arcsin(0.2 / sim.L), 0.1])
+    blade = sim._blade_update(deform=False)[0]
+    state = (0.3, 0.2, 0.05, 0.1)
+    visualizer = Visualization(sim)
+    expected = visualizer._pile_vertices(blade, state)
+    assert expected.shape == (6, 3)
+    sim.q[:] = 10.
+    sim.blade_roll_pitch_yaw[:] = 0.
+    sim.H3 = sim.H4 = 0.
+    np.testing.assert_array_equal(visualizer._pile_vertices(blade, state), expected)
+
+
+def test_surface_tooth_connects_blade_to_soil_without_pile():
+    sim = DozerSimulation(enable_blade_control=False)
+    visualizer = Visualization(sim)
+    blade = np.array([[0.1, -0.5, -0.2, 0., 0., 0.],
+                      [0.1, 0., -0.2, 0., 0., 0.],
+                      [0.1, 0.5, -0.2, 0., 0., 0.]])
+    heights = np.zeros_like(sim.starting_grid_heights)
+    faces = np.asarray(visualizer._surface_tooth_faces(blade, heights))
+    assert faces.shape == (4, 3, 3)
+    np.testing.assert_allclose(faces[::2, 0], blade[:-1, :3])
+    np.testing.assert_allclose(faces[::2, 1:, 2], 0.)
+    assert np.all(faces[::2, 1:, 0] > 0.1)
+    assert visualizer._pile_faces(np.empty((0, 3))) == []
+    lowered = np.asarray(visualizer._surface_tooth_faces(blade, heights - 0.3))
+    np.testing.assert_allclose(lowered[:, :, 2], -0.3)
+
+
+@pytest.mark.parametrize("yaw", [0., 0.6, 1.8])
+def test_pile_drawing_order_follows_camera_side(yaw):
+    sim = DozerSimulation(enable_blade_control=False)
+    rotation = sim._rotation_lg(0.1, 0.2, yaw)
+    face = np.array([[1., -1., 0.], [1., 1., 0.],
+                     [1., 1., 1.], [1., -1., 1.]]) @ rotation.T
+    body_center = rotation @ np.array([0., 0., 0.5])
+    front_eye = rotation @ np.array([5., 0., 2.])
+    rear_eye = rotation @ np.array([-5., 0., 2.])
+    assert Visualization._pile_in_front_of_blade(face, front_eye, body_center)
+    assert not Visualization._pile_in_front_of_blade(face, rear_eye, body_center)
