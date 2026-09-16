@@ -17,7 +17,10 @@ read side-by-side with the derivations.
   [math/s_derivative.nb](math/s_derivative.nb)).
 - **Blade–terrain interaction** — soil cutting forces and moments from the
   blade roll/pitch, plus a growing spoil pile whose fill fraction scales with
-  distance travelled.
+  distance travelled. Soil spill-over scales blade force and moment by
+  `clip(1 - abs(yaw_speed) / angular_velocity_limit, 0, 1)` for either turn
+  direction. With turning disabled (zero limit), resistance is unchanged.
+  The surface simulation's cut-depth stop force remains independent of spill-over.
 - **Track–terrain interaction** — per-track rolling resistance, lateral
   ground reaction, and turning moment, with an instantaneous-center-of-rotation
   (ICR) model saturated as in Ahmadi, Polotski & Hurteau (2000).
@@ -147,3 +150,10 @@ rmse = Tuning("pi").grid_search([0.002, 0.004], [0.0, 0.002], duration=5.0)
 
 The returned array has secondary gain (Kd or Ki) rows and Kp columns.
 Use `--duration`, `--desired-depth`, and `--output-dir` to configure either mode.
+
+The runnable examples (`python util.py` and `python main.py`) start with a fixed
+blade roll of 0.05 rad (about 2.9 degrees), zero local pitch and yaw, and blade
+control disabled. For `DozerSimulation`, configure this with
+`blade_roll_pitch_yaw=np.array([0.05, 0.0, 0.0]), enable_blade_control=False`.
+Body motion and soil interaction continue normally. Blade control remains enabled
+by default for programmatic simulations and tuning.

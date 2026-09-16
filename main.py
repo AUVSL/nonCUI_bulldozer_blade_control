@@ -18,7 +18,8 @@ matplotlib.use("Agg")   # headless; remove if running interactively
 os.makedirs("figures", exist_ok=True)
 
 class BulldozerSimulation:
-    def __init__(self):
+    def __init__(self, enable_blade_control=True):
+        self.enable_blade_control = enable_blade_control
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # simulation and control parameters
         self.dt            = 1/100
@@ -259,6 +260,13 @@ class BulldozerSimulation:
         yc2     = self.yc(     H3,      H4, self.B1)
         
         self.Mb = yc1 * F1 + yc2 * F2
+
+        # Turning spills soil off the blade equally in either direction.
+        # With turning disabled, retain the full soil resistance.
+        spill_factor = (float(np.clip(1.0 - abs(self.v[1]) / self.angular_velocity_limit, 0.0, 1.0))
+                        if self.angular_velocity_limit > 0.0 else 1.0)
+        self.Fb *= spill_factor
+        self.Mb *= spill_factor
        
     def track_terrain_interaction(self):
         self.vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
@@ -479,8 +487,9 @@ class BulldozerSimulation:
                 if max_idx > n_pts * 0.9 and self._nearest_path_idx < n_pts * 0.1:
                     break
             
-            errors, _     = self.controller_errors()
-            self.bld_ang += self.gain * self.Kp * errors
+            errors, _ = self.controller_errors()  # Retain error diagnostics when control is disabled.
+            if self.enable_blade_control:
+                self.bld_ang += self.gain * self.Kp * errors
 
             self.v_dot = self.vehicle_dynamics()
             self.v    += self.dt * self.v_dot
@@ -877,7 +886,8 @@ class BulldozerSimulation:
 
 
 def main():
-    sim = BulldozerSimulation() 
+    sim = BulldozerSimulation(enable_blade_control=False)
+    sim.bld_ang = np.array([0.05, 0.0, 0.0])
     sim.run_and_plot(use_path_controller = False, stop_time=2)
 
 

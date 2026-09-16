@@ -47,16 +47,12 @@ class Control():
 
     def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
         """Return a PD angle increment using the existing angular depth error."""
-        errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
+        # errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
         # No previous sample exists on startup or after a reset.
         self.derivative_error = (np.zeros(3) if self.previous_blade_error is None
                                  else (errors - self.previous_blade_error) / self.dt)
         self.previous_blade_error = errors.copy()
         return self.Kp * errors + self.Kd * self.derivative_error
-
-    def reset_derivative(self):
-        self.previous_blade_error = None
-        self.derivative_error[:] = 0.0
 
     def dummy_track_controlller(self, dozer_position_and_orientation):
         F_track_base = 600000.0
@@ -96,13 +92,14 @@ class DozerSimulation():
 
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
                  is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3),
-                 controller_type: str = "pd"):
+                 controller_type: str = "pd", enable_blade_control: bool = True):
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # ----------------------------- Load passed parameters ----------------------------- 
         self.is_surface_pitched   = is_surface_pitched
         self.is_surface_rolled    = is_surface_rolled
         self.is_backwards         = is_backwards
         self.enable_blade         = enable_blade
+        self.enable_blade_control = enable_blade_control
         self.blade_roll_pitch_yaw = blade_roll_pitch_yaw
                            
         # ------------------------- General simulation parameters -------------------------- 
@@ -149,20 +146,14 @@ class DozerSimulation():
         self.gamma_g = 1640 * gravity   # soil weight per cubic meter
         
         # ------------------------------- Surface parameters ------------------------------- 
-        self.division_factor = 8
+        self.division_factor = 4
         self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
         self.u_split         = 20  # u-value where the grid switches to surface_abg2
         self.v_split         = 20  # u-value where the grid switches to surface_abg2
 
-        # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface ----- 
-        self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2,     self.b/2) 
+        # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface -----         
+        self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2, 4*    self.b) 
         self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-1* self.b/2, 8 * self.b)
-        if is_backwards:
-            self.q_dot   *= -1
-            self.u_split *= self.q_dot[0] / np.linalg.norm(self.q_dot)
-            self.v_split *= self.q_dot[1] / np.linalg.norm(self.q_dot)
-            self.u_range  = (-2.5 * self.b, self.b/2) if is_surface_pitched else (-self.b/2,     self.b/2) 
-            self.v_range  = (-self.b/2,     self.b/2) if is_surface_pitched else (-2.5 * self.b, self.b/2)
         self.us           = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs           = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
         
@@ -489,6 +480,13 @@ class DozerSimulation():
         
         self.Mb  = (   soil_shear_force *  shear_moment_arm 
                     + soil_normal_force * normal_moment_arm)
+
+        # Turning spills soil off the blade equally in either direction.
+        # With turning disabled, retain the full soil resistance.
+        spill_factor = (float(np.clip(1.0 - abs(self.v[1]) / self.angular_velocity_limit, 0.0, 1.0))
+                        if self.angular_velocity_limit > 0.0 else 1.0)
+        self.Fb *= spill_factor
+        self.Mb *= spill_factor
 
         if self.enable_blade and self.cut_limit_reached:
             # The velocity clamp prevents resistance from reversing the vehicle.
@@ -842,7 +840,7 @@ class DozerSimulation():
 
     # ---------------------------- BLADE SURFACE DEFORMATION ------------------------------ 
     def _blade_update(self, deform=True):
-        if deform:
+        if deform and self.enable_blade_control:
             previous_angles   = np.array(self.blade_roll_pitch_yaw, dtype=float, copy=True)
             blade_center = self._blade_bottom_center()
             starting_height = self._undeformed_height(blade_center)
@@ -861,11 +859,13 @@ class DozerSimulation():
             if isinstance(self.controller, PIControl):
                 self.controller.apply_actuator_feedback(
                     controller_output, self.blade_roll_pitch_yaw - previous_angles)
-            # Apply the new blade command to the supported body pose before
-            # any soil is removed; the original terrain remains the constraint.
+        elif deform:
+            self.requested_blade_rates[:] = 0.0
+
+        if deform:
+            # Settle the body before cutting, including when blade angles are fixed.
             self._settle_tracks(self.q[3:6].copy())
-            #TODO: if performance is an issue I could just call settle track after the body acceleration update
-    
+
         body_R = self._rotation_lg(*self.q[3:6])
         p0, p1 = self.q[:3] + self._blade_edge_local() @ body_R.T
 
@@ -1046,7 +1046,8 @@ if __name__ == "__main__":
         is_surface_rolled    = False,
         is_backwards         = False,
         enable_blade         = True,
-        blade_roll_pitch_yaw = np.array([0.0, 0.0, 0.0])
+        blade_roll_pitch_yaw = np.array([0.05, 0.0, 0.0]),
+        enable_blade_control = False
     )
 
     simulation.run_and_plot()

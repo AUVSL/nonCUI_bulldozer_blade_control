@@ -1837,3 +1837,81 @@ def test_body_only_render_does_not_need_arm_offset(monkeypatch, tmp_path):
     finally:
         if "figure" in captured:
             real_close(captured["figure"])
+
+
+# Soil spill-over while turning
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+@pytest.mark.parametrize("speed_ratio, expected", [
+    (0.0, 1.0), (0.5, 0.5), (-0.5, 0.5),
+    (1.0, 0.0), (-1.0, 0.0), (1.5, 0.0), (-1.5, 0.0),
+])
+def test_soil_spill_scales_blade_force_and_moment(model, speed_ratio, expected):
+    sim = model()
+    angles = np.array([0.05, 0.1, 0.0])
+    if model is DozerSimulation:
+        sim.blade_roll_pitch_yaw = angles
+        interact = sim._blade_terrain_interaction
+    else:
+        sim.bld_ang = angles
+        interact = sim.blade_terrain_interaction
+    sim.total_distance = sim.fill_distance
+    sim.v[1] = 0.0
+    interact()
+    full_load = np.array([sim.Fb, sim.Mb])
+    assert np.all(np.abs(full_load) > 0.0)
+    sim.v[1] = speed_ratio * sim.angular_velocity_limit
+    interact()
+    np.testing.assert_allclose([sim.Fb, sim.Mb], full_load * expected)
+    # Recomputing forces must not compound the reduction.
+    interact()
+    np.testing.assert_allclose([sim.Fb, sim.Mb], full_load * expected)
+    sim.v[1] = 0.0
+    sim.angular_velocity_limit = 0.0
+    interact()
+    np.testing.assert_allclose([sim.Fb, sim.Mb], full_load)
+
+
+@pytest.mark.parametrize("backwards", [False, True])
+def test_soil_spill_preserves_cut_depth_stop(backwards):
+    sim = DozerSimulation()
+    sim.is_backwards = backwards
+    sim.cut_limit_reached = True
+    sim.v[1] = sim.angular_velocity_limit
+    sim._blade_terrain_interaction()
+    assert sim.Fb == (1e9 if backwards else -1e9)
+    assert sim.Mb == 0.0
+
+
+@pytest.mark.parametrize("mode", ["pd", "pi", "legacy"])
+def test_fixed_rolled_blade_bypasses_control(mode, monkeypatch):
+    angles = np.array([0.05, 0.0, 0.0])
+
+    def unexpected_control(*args):
+        pytest.fail("Fixed blade must not invoke its controller")
+
+    if mode == "legacy":
+        sim = BulldozerSimulation(enable_blade_control=False)
+        sim.bld_ang = angles.copy()
+    else:
+        sim = DozerSimulation(blade_roll_pitch_yaw=angles.copy(),
+                              controller_type=mode, enable_blade_control=False)
+        monkeypatch.setattr(sim.controller, "proportional_blade_controller", unexpected_control)
+        cuts = []
+        deform = sim._deform_blade_tiles
+
+        def record_cut(contacts):
+            cuts.append(contacts)
+            return deform(contacts)
+
+        monkeypatch.setattr(sim, "_deform_blade_tiles", record_cut)
+    sim.stop_time = 0.03
+    sim.run()
+    if mode == "legacy":
+        np.testing.assert_array_equal(sim.bld_ang, angles)
+    else:
+        np.testing.assert_array_equal(sim.blade_roll_pitch_yaw, angles)
+        assert cuts
+        np.testing.assert_array_equal(sim.requested_blade_rates, 0.0)
+        assert sim.controller.previous_blade_error is None
+        if mode == "pi":
+            np.testing.assert_array_equal(sim.controller.integral_error, 0.0)
