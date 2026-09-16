@@ -5,7 +5,12 @@ from visualization import Visualization
 
 
 class Control():
-    def __init__(self, L, dt, zero_to_max_angle_time):
+    """PD or PI blade control, including actuator feedback for PI anti-windup."""
+
+    def __init__(self, L, dt, zero_to_max_angle_time, controller_type="pd"):
+        if controller_type not in ("pd", "pi"):
+            raise ValueError("controller_type must be 'pd' or 'pi'")
+        self.controller_type = controller_type
         # controller reference
         self.L = L
         self.desired_depth = 0.3
@@ -19,6 +24,12 @@ class Control():
         self.Kd[1] = 0.32  # tuned pitch derivative gain; zero gives P-only
         self.previous_blade_error = None
         self.derivative_error = np.zeros(3)  # angular error change (rad/s)
+        self.Ki = np.zeros(3)
+        if controller_type == "pi":
+            self.Kp = np.array([0.01, 0.00025, 0.01])
+            self.Ki = np.array([0.0, 0.0001, 0.0])
+        self.integral_error = np.zeros(3)
+        self._previous_integral = self.integral_error.copy()
         
     def blade_controller_errors(self, blade_roll_pitch_yaw):
         """
@@ -46,8 +57,12 @@ class Control():
         return errors, errors.copy()
 
     def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
-        """Return a PD angle increment using the existing angular depth error."""
+        """Return the selected PD or PI angle increment from angular depth error."""
         errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
+        if self.controller_type == "pi":
+            self._previous_integral = self.integral_error.copy()
+            self.integral_error += np.where(self.Ki != 0., errors * self.dt, 0.)
+            return self.Kp * errors + self.Ki * self.integral_error
         # No previous sample exists on startup or after a reset.
         self.derivative_error = (np.zeros(3) if self.previous_blade_error is None
                                  else (errors - self.previous_blade_error) / self.dt)
@@ -59,32 +74,14 @@ class Control():
         return np.array([F_track_base, F_track_base])
 
 
-class PIControl(Control):
-    """Separate PI blade controller with conditional-integration anti-windup."""
-
-    def __init__(self, L, dt, zero_to_max_angle_time):
-        super().__init__(L, dt, zero_to_max_angle_time)
-        self.Kp = np.array([0.01, 0.00025, 0.01])  # tuned PI pitch gain
-        self.Ki = np.array([0.0, 0.0001, 0.0])  # tuned integral gain
-        self.integral_error = np.zeros(3)  # integral of angular depth error (rad s)
-        self._previous_integral = self.integral_error.copy()
-
-    def proportional_blade_controller(self, starting_surface_height, blade_bottom_height):
-        errors = self.blade_deformation_errors(starting_surface_height, blade_bottom_height)[0]
-        self._previous_integral = self.integral_error.copy()
-        self.integral_error += np.where(self.Ki != 0., errors * self.dt, 0.)
-        return self.Kp * errors + self.Ki * self.integral_error
-
     def apply_actuator_feedback(self, requested_increment, applied_increment):
         """Freeze integration into a limit, but permit unwinding out of it."""
+        if self.controller_type != "pi":
+            return
         blocked_increment = requested_increment - applied_increment
         integral_increment = self.Ki * (self.integral_error - self._previous_integral)
         blocked = (np.abs(blocked_increment) > 1e-12) & (blocked_increment * integral_increment > 0.)
         self.integral_error[blocked] = self._previous_integral[blocked]
-
-    def reset_integrator(self):
-        self.integral_error[:] = 0.
-        self._previous_integral[:] = 0.
 
 
 class DozerSimulation():
@@ -218,8 +215,7 @@ class DozerSimulation():
         # ----------------------------------- Controller ----------------------------------- 
         if controller_type not in ("pd", "pi"):
             raise ValueError("controller_type must be 'pd' or 'pi'")
-        controller_class = PIControl if controller_type == "pi" else Control
-        self.controller = controller_class(self.L, self.dt, zero_to_max_angle_time)
+        self.controller = Control(self.L, self.dt, zero_to_max_angle_time, controller_type)
         self.requested_blade_rates = np.zeros(3)  # roll, pitch, yaw before limiting (rad/s)
         
         # ----------------------- Write 1st entry to simulation logs ----------------------- 
@@ -859,9 +855,8 @@ class DozerSimulation():
                 requested_rates, -self.blade_roll_pitch_yaw_rate_limits, self.blade_roll_pitch_yaw_rate_limits)
             self.blade_roll_pitch_yaw = np.clip(
                 previous_angles + limited_rates * self.dt, -self.blade_roll_pitch_yaw_limits, self.blade_roll_pitch_yaw_limits)
-            if isinstance(self.controller, PIControl):
-                self.controller.apply_actuator_feedback(
-                    controller_output, self.blade_roll_pitch_yaw - previous_angles)
+            self.controller.apply_actuator_feedback(
+                controller_output, self.blade_roll_pitch_yaw - previous_angles)
         elif deform:
             self.requested_blade_rates[:] = 0.0
 

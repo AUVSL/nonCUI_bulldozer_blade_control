@@ -157,3 +157,7 @@ control disabled. For `DozerSimulation`, configure this with
 `blade_roll_pitch_yaw=np.array([0.0, 0.0, 0.0]), enable_blade_control=False`.
 Body motion and soil interaction continue normally. Blade control remains enabled
 by default for programmatic simulations and tuning.
+
+`Control` supports both blade controller modes via `controller_type="pd"` (default)
+or `controller_type="pi"`. `DozerSimulation(controller_type="pi")` uses the same
+class with PI gains, integral reset, and actuator anti-windup enabled.

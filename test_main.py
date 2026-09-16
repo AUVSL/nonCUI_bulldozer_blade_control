@@ -12,7 +12,7 @@ import tuning
 import util as surface_util
 import visualization as visualization_module
 from main import BulldozerSimulation
-from util import Control, PIControl, DozerSimulation, _DozerTrackSimulation, _Surface
+from util import Control, DozerSimulation, _DozerTrackSimulation, _Surface
 from visualization import Visualization
 # to run: pytest test_main.py
 
@@ -1708,7 +1708,7 @@ def test_pd_grid_search_uses_fresh_simulations_and_actual_gains(monkeypatch, tmp
 
 # Pi controller
 def test_pi_accumulates_and_resets():
-    controller = PIControl(1.2, .1, 1.)
+    controller = Control(1.2, .1, 1., controller_type="pi")
     error = controller.blade_deformation_errors(0., 0.)[0]
     for n in range(1, 4):
         output = controller.proportional_blade_controller(0., 0.)
@@ -1731,7 +1731,7 @@ def test_pi_limits_prevent_windup(limit):
 
 
 def test_pi_can_unwind_at_limit():
-    controller = PIControl(1.2, .1, 1.)
+    controller = Control(1.2, .1, 1., controller_type="pi")
     controller._previous_integral[1] = .5
     controller.integral_error[1] = .4
     controller.apply_actuator_feedback(np.array([0., .2, 0.]), np.array([0., .1, 0.]))
@@ -1741,7 +1741,8 @@ def test_pi_can_unwind_at_limit():
 def test_controller_selection_and_geometry_only_update():
     assert type(DozerSimulation().controller) is Control
     sim = DozerSimulation(controller_type="pi")
-    assert type(sim.controller) is PIControl
+    assert type(sim.controller) is Control
+    assert sim.controller.controller_type == "pi"
     sim._blade_update(deform=False)
     np.testing.assert_array_equal(sim.controller.integral_error, 0.)
     with pytest.raises(ValueError):
@@ -2073,3 +2074,17 @@ def test_pile_grows_outward_across_full_blade_width():
     assert np.all(small_reach > 0.)
     np.testing.assert_allclose(large_reach, 2 * small_reach)
     np.testing.assert_allclose(small[:, 0, 2], 0., atol=1e-10)
+
+
+def test_control_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="controller_type"):
+        Control(1.2, 0.1, 1.0, controller_type="pid")
+
+
+def test_control_pd_does_not_accumulate_pi_state():
+    controller = Control(1.2, 0.1, 1.0)
+    for _ in range(3):
+        controller.proportional_blade_controller(0., 0.)
+        controller.apply_actuator_feedback(np.ones(3), np.zeros(3))
+    np.testing.assert_array_equal(controller.integral_error, 0.)
+    assert controller.controller_type == "pd"
