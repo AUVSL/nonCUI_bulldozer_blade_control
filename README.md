@@ -127,3 +127,23 @@ models, and an integration smoke test. They run in CI on every push via
 ## License
 
 Released under the GNU General Public License v3.0 — see [LICENSE](LICENSE).
+
+### Controller tuning
+
+`tuning.py` provides one `Tuning` class for PD and PI pitch-gain searches.
+Each trial starts a fresh simulation and saves its depth RMSE to `results.csv`,
+with a heatmap in `figures/pd_tuning` or `figures/pi_tuning` by default.
+
+```bash
+python tuning.py pd --p-gains 0.16 0.32 --d-gains 0 0.16
+python tuning.py pi --p-gains 0.002 0.004 --i-gains 0 0.002
+```
+
+```python
+from tuning import Tuning
+
+rmse = Tuning("pi").grid_search([0.002, 0.004], [0.0, 0.002], duration=5.0)
+```
+
+The returned array has secondary gain (Kd or Ki) rows and Kp columns.
+Use `--duration`, `--desired-depth`, and `--output-dir` to configure either mode.
