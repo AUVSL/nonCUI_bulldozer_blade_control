@@ -42,6 +42,7 @@ read side-by-side with the derivations.
 |------|---------|
 | [main.py](main.py) | `BulldozerSimulation` — full dynamics, controllers, and the multi-panel GIF / force plots. |
 | [util.py](util.py) | `Surface` — surface-transition tracking of the track-contact points over a height-field grid. |
+| [controllers.py](controllers.py) | Blade and track controllers; `Control` supports PD and PI modes. |
 | [calibration.py](calibration.py) | `BulldozerCalibration` — track-force sweeps, straight-line threshold search, and angle→torque curve fitting. |
 | [test_main.py](test_main.py) | pytest unit tests for the kinematics, force models, and integration loop. |
 | [math/](math/) | Mathematica / MATLAB derivations of the `S` matrix and its derivative. |
@@ -158,6 +159,6 @@ control disabled. For `DozerSimulation`, configure this with
 Body motion and soil interaction continue normally. Blade control remains enabled
 by default for programmatic simulations and tuning.
 
-`Control` supports both blade controller modes via `controller_type="pd"` (default)
+`Control` (imported with `from controllers import Control`) supports both blade controller modes via `controller_type="pd"` (default)
 or `controller_type="pi"`. `DozerSimulation(controller_type="pi")` uses the same
 class with PI gains, integral reset, and actuator anti-windup enabled.
