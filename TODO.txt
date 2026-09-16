@@ -1,6 +1,0 @@
-1) blade update
-2) blade angle limits
-3) fixing max depth cuts to factor in roll
-4) visualize forces in gif
-5) implement soil fall off rate proportional to turning rate : linear rate
-6) docker container
