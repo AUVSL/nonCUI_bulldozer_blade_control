@@ -218,8 +218,8 @@ class Visualization:
         print(f"Saved {output}")
         return output
 
-    def visualization(self, show_neighbors: bool = False):
-        """Write the logged simulation to ``figures/simulation.gif``."""
+    def visualization(self, show_neighbors: bool = False, show_desired_depth: bool = False):
+        """Write the simulation GIF; optionally show the red desired-depth reference."""
         simulation = self.simulation
         enable_blade = simulation.enable_blade
 
@@ -755,18 +755,19 @@ class Visualization:
             return "grey" if signed_area >= 0.0 else body_yellow
 
         if enable_blade:
-            # Match the controller's reference at the blade bottom center.
-            # Use each logged target, so later reference changes are preserved.
-            depth_samples = simulation.force_log[::2]
-            desired_cut_heights = np.array([
-                sample["starting_surface_height"] - sample["desired_depth"]
-                for sample in depth_samples
-            ])
-            desired_depth_line = axis_back.axhline(
-                desired_cut_heights[0], color="red", linewidth=1.8, zorder=10,
-                label="Desired cutting depth",
-            )
-            axis_back.legend(handles=[desired_depth_line], loc="upper right", fontsize=8)
+            if show_desired_depth:
+                # Match the controller's reference at the blade bottom center.
+                # Use each logged target, so later reference changes are preserved.
+                depth_samples = simulation.force_log[::2]
+                desired_cut_heights = np.array([
+                    sample["starting_surface_height"] - sample["desired_depth"]
+                    for sample in depth_samples
+                ])
+                desired_depth_line = axis_back.axhline(
+                    desired_cut_heights[0], color="red", linewidth=1.8, zorder=10,
+                    label="Desired cutting depth",
+                )
+                axis_back.legend(handles=[desired_depth_line], loc="upper right", fontsize=8)
             initial_blade = blade_data[0]
             blade_arrow_top = axis_top.quiver(
                 initial_blade[:, 0], initial_blade[:, 1],
@@ -1119,7 +1120,8 @@ class Visualization:
             set_q_and_blade(frame_index)
             if enable_blade:
                 set_pile(frame_index)
-                desired_depth_line.set_ydata([desired_cut_heights[frame_index]] * 2)
+                if show_desired_depth:
+                    desired_depth_line.set_ydata([desired_cut_heights[frame_index]] * 2)
                 arms = arm_mesh_data[frame_index][:, body_faces].reshape(-1, 4, 3)
                 for projection, artist in arm_projections:
                     artist.set_verts(arms[:, :, projection])
@@ -1156,7 +1158,7 @@ class Visualization:
                 blade_arrow_top, blade_arrow_back, blade_arrow_side,
             ])
 
-        if enable_blade:
+        if enable_blade and show_desired_depth:
             # Draw the reference last so soil and vehicle faces cannot hide it.
             flat_artists.append(desired_depth_line)
 

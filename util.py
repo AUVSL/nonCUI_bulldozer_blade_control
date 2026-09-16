@@ -64,13 +64,13 @@ class DozerSimulation():
         self.gamma_g = 1640 * gravity   # soil weight per cubic meter
         
         # ------------------------------- Surface parameters ------------------------------- 
-        self.division_factor = 4*2
+        self.division_factor = 4
         self.surface_abg     = np.array([ 0.0, 0.0, 0.0])
         self.u_split         = 20  # u-value where the grid switches to surface_abg2
         self.v_split         = 20  # u-value where the grid switches to surface_abg2
 
         # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface -----         
-        self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2, 1/2*    self.b) 
+        self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2, 4*    self.b) 
         self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-1* self.b/2, 8 * self.b)
         self.us           = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs           = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
@@ -867,11 +867,11 @@ class DozerSimulation():
                 self.surf_grid.nodes[(i, j)]['z'] = blade_z
 
     # ------------------------------ MAIN/ ENTRY FUNCTIONS -------------------------------- 
-    def run_and_plot(self, show_neighbors: bool = False):
+    def run_and_plot(self, show_neighbors: bool = False, show_desired_depth: bool = False):
         """Run the simulation and visualize the active body/blade view."""
         self.run()
         visualizer = Visualization(self)
-        visualizer.visualization(show_neighbors)
+        visualizer.visualization(show_neighbors, show_desired_depth=show_desired_depth)
         visualizer.forces_visualization()
 
     def run(self):
@@ -967,8 +967,8 @@ if __name__ == "__main__":
         is_surface_rolled    = False,
         is_backwards         = False,
         enable_blade         = True,
-        blade_roll_pitch_yaw = np.array([0.0, 0.0, 0.0]),
-        enable_blade_control = True
+        blade_roll_pitch_yaw = np.array([0.05, 0.0, 0.0]),
+        enable_blade_control = False
     )
 
     simulation.run_and_plot()
