@@ -75,8 +75,8 @@ def grid_search(p_gains, d_gains, duration=5.0, desired_depth=0.3, output_dir="f
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--p-gains", nargs="+", type=float, default=[0.032, 0.064, 0.128, 0.256, 0.512, 1.024])
-    parser.add_argument("--d-gains", nargs="+", type=float, default=[0.0 , 0.016, 0.032, 0.064, 0.128, 0.256, 0.512])
+    parser.add_argument("--p-gains", nargs="+", type=float, default=[0.16, 0.32, 0.64, 1.28, 2.56, 5.12])
+    parser.add_argument("--d-gains", nargs="+", type=float, default=[0.00 , 0.16, 0.32, 0.64, 1.28, 2.56])
     parser.add_argument("--duration", type=float, default=5.)
     parser.add_argument("--desired-depth", type=float, default=0.3)
     parser.add_argument("--output-dir", default="figures/pd_tuning")

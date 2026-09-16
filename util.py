@@ -13,10 +13,10 @@ class Control():
         
         # Blade proportional and derivative controller gains
         self.Kp = np.ones(3) * dt * zero_to_max_angle_time
-        self.Kp[1] = 0.64  # tuned pitch gain, assigned directly (no dt scaling)
+        self.Kp[1] = 1.28  # tuned pitch gain, assigned directly (no dt scaling)
         self.dt = dt
         self.Kd = np.ones(3) * 0.1 * dt * zero_to_max_angle_time
-        self.Kd[1] = 0.128  # tuned pitch derivative gain; zero gives P-only
+        self.Kd[1] = 0.32  # tuned pitch derivative gain; zero gives P-only
         self.previous_blade_error = None
         self.derivative_error = np.zeros(3)  # angular error change (rad/s)
         
