@@ -59,6 +59,70 @@ pip install -r requirements.txt
 
 Dependencies: `numpy`, `matplotlib`, `networkx`, `pytest`.
 
+## Docker (Ubuntu 24.04)
+
+If you use VS Code and want to work inside the container, install Microsoft's
+**Dev Containers** extension (`ms-vscode-remote.remote-containers`). It lets you
+attach VS Code to a running container. The Docker commands below can also be
+run in VS Code's terminal without the extension.
+
+Review the base image before running the build commands below:
+
+- Source: [Docker Official Ubuntu image](https://hub.docker.com/_/ubuntu), maintained by Canonical.
+- Image: `docker.io/library/ubuntu:24.04`
+- Pinned image index digest: `sha256:69cecf4bbf72d2d44a9eef1b71fb98c7fb973d78af11399deccef19beb008ad9`.
+
+The Dockerfile pins this digest so changes to the tag do not silently replace
+the reviewed base. Future base updates require reviewing and changing the digest.
+It installs Python 3 and venv from Ubuntu's signed package repositories, then
+installs `requirements.txt` and its dependencies from PyPI into a virtual
+environment. Only binary Python packages are accepted. These Python dependencies
+are third-party packages, separate from the official base image; their versions
+retain the existing requirements ranges and are not locked. Official image
+provenance does not guarantee that all software is free of vulnerabilities.
+
+After image approval, start Docker Desktop with Linux containers enabled, then
+run from the repository root (PowerShell or a Linux shell):
+
+```bash
+docker compose build
+docker compose run --rm simulator python -m pytest -q -p no:cacheprovider
+docker compose run --rm simulator
+```
+
+Breaking down `docker compose run --rm simulator`:
+
+- `docker compose` uses the services defined in `compose.yaml`.
+- `run` creates and starts a new container for a one-time task.
+- `--rm` removes that container when the task finishes. The built image stays available.
+- `simulator` selects the service, which runs `python main.py` by default.
+
+Results remain in the host's `figures/` folder after the container is removed
+because that folder is mounted into the container.
+
+The default command runs `main.py`. Output is saved to the host `figures/`
+directory through a bind mount. Existing files with the same output names may
+be overwritten, as with running the scripts directly. The container runs as an
+unprivileged user with networking disabled at runtime. The build needs network
+access to Docker Hub, Ubuntu repositories, and PyPI.
+
+To run the surface-transition demo, append `python util.py` to override the default command:
+
+```bash
+docker compose run --rm simulator python util.py
+```
+
+Other entry points can be selected the same way without rebuilding:
+
+```bash
+docker compose run --rm simulator python calibration.py
+docker compose run --rm simulator python tuning.py pd --p-gains 0.16 0.32 --d-gains 0 0.16
+```
+
+Rebuild after editing code or requirements. On Linux, create `figures/` first
+and add `--user "$(id -u):$(id -g)"` after `run --rm` if needed for host output
+permissions. Docker Desktop on Windows normally handles bind-mount permissions.
+
 ## Usage
 
 Each script is runnable on its own and writes its output into a `figures/`

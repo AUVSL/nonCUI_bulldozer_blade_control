@@ -1,0 +1,14 @@
+services:
+  simulator:
+    build:
+      context: .
+    image: surface-aware-bulldozer-sim:local
+    pull_policy: never
+    init: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./figures:/app/figures
