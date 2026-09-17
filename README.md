@@ -95,31 +95,32 @@ Breaking down `docker compose run --rm simulator`:
 - `docker compose` uses the services defined in `compose.yaml`.
 - `run` creates and starts a new container for a one-time task.
 - `--rm` removes that container when the task finishes. The built image stays available.
-- `simulator` selects the service, which runs `python main.py` by default.
+- `simulator` selects the service, which runs `python util.py` by default.
 
 Results remain in the host's `figures/` folder after the container is removed
 because that folder is mounted into the container.
 
-The default command runs `main.py`. Output is saved to the host `figures/`
+The default command runs the surface-transition demo in `util.py`. Output is saved to the host `figures/`
 directory through a bind mount. Existing files with the same output names may
 be overwritten, as with running the scripts directly. The container runs as an
 unprivileged user with networking disabled at runtime. The build needs network
 access to Docker Hub, Ubuntu repositories, and PyPI.
 
-To run the surface-transition demo, append `python util.py` to override the default command:
+The default command can also be written explicitly:
 
 ```bash
 docker compose run --rm simulator python util.py
 ```
 
-Other entry points can be selected the same way without rebuilding:
+To run the dozer dynamics simulation in `main.py` or another entry point, override the default command:
 
 ```bash
+docker compose run --rm simulator python main.py
 docker compose run --rm simulator python calibration.py
 docker compose run --rm simulator python tuning.py pd --p-gains 0.16 0.32 --d-gains 0 0.16
 ```
 
-Rebuild after editing code or requirements. On Linux, create `figures/` first
+Run `docker compose build` again after editing the Dockerfile, code, or requirements so the image includes the changes. On Linux, create `figures/` first
 and add `--user "$(id -u):$(id -g)"` after `run --rm` if needed for host output
 permissions. Docker Desktop on Windows normally handles bind-mount permissions.
 
