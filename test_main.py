@@ -1847,7 +1847,7 @@ def test_body_only_render_does_not_need_arm_offset(monkeypatch, tmp_path):
     (0.0, 1.0), (0.5, 0.5), (-0.5, 0.5),
     (1.0, 0.0), (-1.0, 0.0), (1.5, 0.0), (-1.5, 0.0),
 ])
-def test_soil_spill_scales_blade_force_and_moment(model, speed_ratio, expected):
+def test_soil_spill_scales_stored_fill(model, speed_ratio, expected):
     sim = model()
     angles = np.array([0.05, 0.1, 0.0])
     if model is DozerSimulation:
@@ -1856,21 +1856,55 @@ def test_soil_spill_scales_blade_force_and_moment(model, speed_ratio, expected):
     else:
         sim.bld_ang = angles
         interact = sim.blade_terrain_interaction
-    sim.total_distance = sim.fill_distance
-    sim.v[1] = 0.0
+    interact()
+    empty_load = np.array([sim.Fb, sim.Mb])
+    sim.total_distance = 100.0
+    sim.fill_progress_distance = sim.fill_distance
     interact()
     full_load = np.array([sim.Fb, sim.Mb])
-    assert np.all(np.abs(full_load) > 0.0)
+    full_heights = np.array([sim.H3, sim.H4])
+    sim.dt = sim.spill_reference_seconds
     sim.v[1] = speed_ratio * sim.angular_velocity_limit
-    interact()
-    np.testing.assert_allclose([sim.Fb, sim.Mb], full_load * expected)
-    # Recomputing forces must not compound the reduction.
-    interact()
-    np.testing.assert_allclose([sim.Fb, sim.Mb], full_load * expected)
+    sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance * expected)
+    assert sim.total_distance == 100.0
+    expected_load = empty_load + (full_load - empty_load) * expected
+    for _ in range(2):
+        interact()
+        np.testing.assert_allclose([sim.Fb, sim.Mb], expected_load)
+        np.testing.assert_allclose([sim.H3, sim.H4], full_heights * expected)
+    # Straightening does not restore spilled soil; additional travel refills it.
     sim.v[1] = 0.0
+    sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance * expected)
+    sim._update_fill_progress(sim.fill_distance * 2)
+    assert sim.fill_progress_distance == sim.fill_distance
+
+
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+@pytest.mark.parametrize("dt", [0.01, 0.1, 0.25])
+def test_soil_spill_retention_over_reference_duration(model, dt):
+    sim = model()
+    sim.dt = dt
+    sim.spill_reference_seconds = 2.0
+    sim.fill_progress_distance = sim.fill_distance
+    sim.v[1] = sim.angular_velocity_limit / 2
+    for _ in range(round(sim.spill_reference_seconds / dt)):
+        sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance / 2)
+
+
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+def test_soil_fill_caps_before_spill_and_retains_when_turning_disabled(model):
+    sim = model()
+    sim.dt = sim.spill_reference_seconds
+    sim.fill_progress_distance = sim.fill_distance
+    sim.v[1] = sim.angular_velocity_limit / 2
+    sim._update_fill_progress(100.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance / 2)
     sim.angular_velocity_limit = 0.0
-    interact()
-    np.testing.assert_allclose([sim.Fb, sim.Mb], full_load)
+    sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance / 2)
 
 
 @pytest.mark.parametrize("backwards", [False, True])
@@ -1882,6 +1916,25 @@ def test_soil_spill_preserves_cut_depth_stop(backwards):
     sim._blade_terrain_interaction()
     assert sim.Fb == (1e9 if backwards else -1e9)
     assert sim.Mb == 0.0
+
+
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+def test_simulation_run_advances_fill_once_per_step(model):
+    sim = model()
+    sim.stop_time = 0.04
+    updates = []
+    update = sim._update_fill_progress
+
+    def record_update(distance_step):
+        updates.append(distance_step)
+        update(distance_step)
+
+    sim._update_fill_progress = record_update
+    sim.run()
+    assert len(updates) == round(sim.stop_time / sim.dt)
+    assert sum(updates) == pytest.approx(sim.total_distance)
+    assert sim.total_distance > 0.0
+    assert 0.0 <= sim.fill_progress_distance <= min(sim.fill_distance, sim.total_distance)
 
 
 @pytest.mark.parametrize("mode", ["pd", "pi", "legacy"])

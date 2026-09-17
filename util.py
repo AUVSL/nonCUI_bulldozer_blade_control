@@ -24,6 +24,8 @@ class DozerSimulation():
         self.dt             = 1/100
         gravity             = 9.81 
         self.total_distance = 0.0
+        self.fill_progress_distance = 0.0
+        self.spill_reference_seconds = 1.0  # positive duration over which spill_factor is retained
 
         # -------------------- Independent simulation limit parameters --------------------- 
         # change if tasks require move total distance to be traveled, still want it tight for fast tuning
@@ -371,8 +373,8 @@ class DozerSimulation():
         
         a_val = np.tan(abs(a_rel))**2
         c_val = (H3 + H4) / 2
-        
-        fill_percent = min(1.0, self.total_distance / self.fill_distance)
+
+        fill_percent = min(1.0, self.fill_progress_distance / self.fill_distance)
         
         # TODO: update to account for later dump c_ycles
         self.H3_sub = -H3_sub
@@ -400,13 +402,6 @@ class DozerSimulation():
         
         self.Mb  = (   soil_shear_force *  shear_moment_arm 
                     + soil_normal_force * normal_moment_arm)
-
-        # Turning spills soil off the blade equally in either direction.
-        # With turning disabled, retain the full soil resistance.
-        spill_factor = (float(np.clip(1.0 - abs(self.v[1]) / self.angular_velocity_limit, 0.0, 1.0))
-                        if self.angular_velocity_limit > 0.0 else 1.0)
-        self.Fb *= spill_factor
-        self.Mb *= spill_factor
 
         if self.enable_blade and self.cut_limit_reached:
             # The velocity clamp prevents resistance from reversing the vehicle.
@@ -874,6 +869,16 @@ class DozerSimulation():
         visualizer.visualization(show_neighbors, show_desired_depth=show_desired_depth)
         visualizer.forces_visualization()
 
+    def _update_fill_progress(self, distance_step):
+        # might not do all that much consider removal when get to fitting
+        """Accumulate travel and apply soil retention once per simulation step."""
+        spill_factor = (float(np.clip(1.0 - abs(self.v[1]) / self.angular_velocity_limit, 0.0, 1.0))
+                        if self.angular_velocity_limit > 0.0 else 1.0)
+        retention = spill_factor ** (self.dt / self.spill_reference_seconds)
+        self.fill_progress_distance = min(
+            self.fill_distance, self.fill_progress_distance + distance_step
+        ) * retention
+
     def run(self):
         """Advance either the blade-enabled or tracked-body simulation."""
         t = 0.0
@@ -895,7 +900,9 @@ class DozerSimulation():
             else:
                 neighbor_points = self._body_update()
 
-            self.total_distance += np.linalg.norm(self.q_dot[:3] * self.dt)
+            distance_step = np.linalg.norm(self.q_dot[:3] * self.dt)
+            self.total_distance += distance_step
+            self._update_fill_progress(distance_step)
 
             # log data for visualization and analysis
             self.log.append([t, *self.q])
@@ -968,7 +975,7 @@ if __name__ == "__main__":
         is_backwards         = False,
         enable_blade         = True,
         blade_roll_pitch_yaw = np.array([0.05, 0.0, 0.0]),
-        enable_blade_control = False
+        enable_blade_control = True
     )
 
     simulation.run_and_plot()
