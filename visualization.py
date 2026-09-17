@@ -416,6 +416,13 @@ class Visualization:
             bound_y.append(neighbor_points[:, 1])
             bound_z.append(neighbor_points[:, 2])
 
+        reference_path = None
+        if getattr(simulation, "use_path_controller", False):
+            reference_path = simulation.controller.path_points
+            bound_x.append(reference_path[:, 0])
+            bound_y.append(reference_path[:, 1])
+            bound_z.append(reference_path[:, 2])
+
         all_x = np.concatenate([data[:, 1], *bound_x])
         all_y = np.concatenate([data[:, 2], *bound_y])
         all_z = np.concatenate([data[:, 3], *bound_z])
@@ -602,6 +609,22 @@ class Visualization:
         axis_side.grid(False)
         axis_side.set_xlabel("X (m)")
         axis_side.set_ylabel("Z (m)")
+
+        reference_2d = []
+        reference_3d = []
+        if reference_path is not None:
+            closed_path = np.vstack([reference_path, reference_path[0]])
+            for axis, projection in ((axis_top, [0, 1]), (axis_back, [1, 2]),
+                                     (axis_side, [0, 2])):
+                line, = axis.plot(closed_path[:, projection[0]], closed_path[:, projection[1]],
+                                  "--", color="crimson", linewidth=1.0, label="reference path")
+                reference_2d.append(line)
+            # A collection participates in the renderer's manual 3D projection pass.
+            path_artist = Line3DCollection(np.stack([closed_path[:-1], closed_path[1:]], axis=1),
+                                           colors="crimson", linestyles="--", linewidths=1.0,
+                                           label="reference path")
+            axis_3d.add_collection3d(path_artist)
+            reference_3d.append(path_artist)
 
         initial_body_faces = body_data[0][:, body_faces].reshape(-1, 4, 3)
         body_yellow = "gold"
@@ -1128,14 +1151,14 @@ class Visualization:
             axis_top.set_title(f"t = {data[frame_index, 0]:.2f} s")
 
         flat_artists = [
-            grid_back, grid_side, soil_walls_back, soil_walls_side,
+            grid_back, grid_side, soil_walls_back, soil_walls_side, *reference_2d,
             *[artist for _, artist in tooth_projections],
             *[artist for _, artist in pile_projections],
             *[artist for _, artist in arm_projections],
             *[artist for _, artist in body_projections],
             track_top, track_back, track_side,
         ]
-        three_d_artists = [soil_top_3d, grid_3d, soil_walls_3d, *vehicle_parts]
+        three_d_artists = [soil_top_3d, grid_3d, soil_walls_3d, *reference_3d, *vehicle_parts]
         if enable_blade:
             three_d_artists.extend([tooth_3d, pile_3d])
         if show_neighbors:

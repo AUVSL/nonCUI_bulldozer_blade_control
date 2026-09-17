@@ -2089,3 +2089,97 @@ def test_control_pd_does_not_accumulate_pi_state():
         controller.apply_actuator_feedback(np.ones(3), np.zeros(3))
     np.testing.assert_array_equal(controller.integral_error, 0.)
     assert controller.controller_type == "pd"
+
+
+# Pure pursuit and calibrated track-force mapping
+@pytest.mark.parametrize("yaw", [-1.0, 0.0, 1.0])
+@pytest.mark.parametrize("tilted", [False, True])
+def test_path_controller_matches_main(yaw, tilted):
+    legacy = BulldozerSimulation()
+    legacy.surface_abg = np.array([0.1, -0.05, 0.2]) if tilted else np.zeros(3)
+    legacy.path_points = legacy.figure8_path()
+    legacy.q[:] = [1., 0.3, 0., 0.1, -0.05, yaw]
+    legacy.R_lg = legacy.rotation_lg(*legacy.q[3:6])
+    control = Control(1.2, .01, 1.)
+    control.configure_path(surface_rotation=legacy.rotation_lg(*legacy.surface_abg))
+    np.testing.assert_allclose(control.path_points, legacy.path_points)
+    actual = control.angular_path_controller(legacy.q, legacy.R_lg, legacy.F_track_base)
+    legacy.angular_path_controller()
+    np.testing.assert_allclose(actual, legacy.F_track)
+    assert control.heading_err == pytest.approx(legacy.heading_err)
+    assert control.cross_track_err == pytest.approx(legacy.cross_track_err)
+
+
+def test_path_mapping_is_bounded_and_symmetric():
+    control = Control(1.2, .01, 1.)
+    assert control.track_force_fraction(0.) == pytest.approx(.799)
+    values = [control.track_force_fraction(angle) for angle in np.linspace(0., np.pi, 30)]
+    assert np.all(np.diff(values) <= 0.)
+    assert min(values) >= 0. and max(values) <= 1.
+    assert control.track_force_fraction(-1.) == control.track_force_fraction(1.)
+    assert control.track_force_fraction(20.) == control.track_force_fraction(control._4pl_ang_max)
+
+
+@pytest.mark.parametrize("heading, weakened", [(-0.4, 0), (0.4, 1)])
+def test_path_controller_turn_direction_and_lookahead(heading, weakened):
+    control = Control(1.2, .01, 1.)
+    control.configure_path([[0., 0.], [10., 0.], [10., 10.], [0., 10.]], lookahead_dist=1.)
+    pose = np.array([2., 0., 0., 0., 0., heading])
+    rotation = BulldozerSimulation().rotation_lg(0., 0., heading)
+    forces = control.angular_path_controller(pose, rotation, 100.)
+    np.testing.assert_allclose(control.lookahead_point, [3., 0., 0.])
+    assert forces[weakened] < 100.
+    assert forces[1 - weakened] == 100.
+
+
+def test_path_repeated_waypoints_and_far_fallback():
+    control = Control(1.2, .01, 1.)
+    control.configure_path([[0., 0.], [0., 0.], [10., 0.], [10., 10.]], lookahead_dist=1.)
+    assert np.isfinite(control.pure_pursuit_heading_error(np.zeros(6), np.eye(3)))
+    assert np.isfinite(control.pure_pursuit_heading_error([100., 100., 0.], np.eye(3)))
+    np.testing.assert_array_equal(control.lookahead_point, [10., 10., 0.])
+
+
+@pytest.mark.parametrize("points", [[], [[0., 0.]], [[0., 0.]] * 3,
+                                    [[0., 0.], [1., 0.], [np.nan, 1.]]])
+def test_path_rejects_invalid_references(points):
+    with pytest.raises(ValueError):
+        Control(1.2, .01, 1.).configure_path(points)
+
+
+def test_path_progress_resets_with_reference():
+    control = Control(1.2, .01, 1.)
+    for index in (1950, 5):
+        pose = np.r_[control.path_points[index], np.zeros(3)]
+        control.angular_path_controller(pose, np.eye(3))
+    assert control.path_complete
+    control.configure_path()
+    assert not control.path_complete
+    assert control._nearest_path_idx == 0
+
+
+@pytest.mark.parametrize("mode", ["pd", "pi"])
+def test_path_surface_run_and_reference_rendering(mode, monkeypatch, tmp_path):
+    sim = DozerSimulation(controller_type=mode, use_path_controller=True,
+                          enable_blade_control=False, lookahead_dist=.9)
+    assert np.isinf(sim.stop_distance)
+    assert sim.us[0] < sim.controller.path_points[:, 0].min()
+    assert sim.vs[0] < sim.controller.path_points[:, 1].min()
+    sim.stop_time = .04
+    sim.run()
+    assert len(sim.log) == len(sim.force_log) == 5
+    assert any(row["drive_left"] != row["drive_right"] for row in sim.force_log)
+    assert np.all(np.isfinite([row["heading_error"] for row in sim.force_log]))
+    assert abs(sim.v[1]) <= sim.angular_velocity_limit
+    captured = []
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(visualization_module.plt, "close", lambda fig: captured.append(fig))
+    monkeypatch.chdir(tmp_path)
+    try:
+        Visualization(sim).visualization()
+        for axis in captured[-1].axes:
+            assert any(artist.get_label() == "reference path"
+                       for artist in list(axis.lines) + list(axis.collections))
+    finally:
+        for figure in captured:
+            real_close(figure)
