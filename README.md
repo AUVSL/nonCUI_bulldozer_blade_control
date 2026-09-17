@@ -63,7 +63,7 @@ Dependencies: `numpy`, `matplotlib`, `networkx`, `pytest`.
 
 If you use VS Code and want to work inside the container, install Microsoft's
 **Dev Containers** extension (`ms-vscode-remote.remote-containers`). It lets you
-attach VS Code to a running container. The Docker commands below can also be
+reopen this project inside a container using the configuration described below. The Docker commands below can also be
 run in VS Code's terminal without the extension.
 
 Review the base image before running the build commands below:
@@ -74,7 +74,7 @@ Review the base image before running the build commands below:
 
 The Dockerfile pins this digest so changes to the tag do not silently replace
 the reviewed base. Future base updates require reviewing and changing the digest.
-It installs Python 3 and venv from Ubuntu's signed package repositories, then
+It installs Python 3, venv, and Git from Ubuntu's signed package repositories, then
 installs `requirements.txt` and its dependencies from PyPI into a virtual
 environment. Only binary Python packages are accepted. These Python dependencies
 are third-party packages, separate from the official base image; their versions
@@ -123,6 +123,54 @@ docker compose run --rm simulator python tuning.py pd --p-gains 0.16 0.32 --d-ga
 Run `docker compose build` again after editing the Dockerfile, code, or requirements so the image includes the changes. On Linux, create `figures/` first
 and add `--user "$(id -u):$(id -g)"` after `run --rm` if needed for host output
 permissions. Docker Desktop on Windows normally handles bind-mount permissions.
+
+## Develop in VS Code with Dev Containers
+
+The configuration is in `.devcontainer/devcontainer.json` (a file inside the
+`.devcontainer` folder). It builds the existing Dockerfile using the same
+approved, digest-pinned official Ubuntu 24.04 image.
+
+1. Start Docker Desktop with Linux containers enabled.
+2. Open this repository folder in VS Code and install Microsoft's **Dev Containers** extension.
+3. Press **Ctrl+Shift+P** and select **Dev Containers: Reopen in Container**.
+4. Wait for the build and VS Code setup to finish, then open a new terminal in VS Code.
+
+The terminal now runs inside Ubuntu. Run Python directly:
+
+```bash
+python util.py
+python main.py
+python -m pytest test_main.py -v -p no:cacheprovider
+```
+
+The dev container stays running while you work; it does not launch the simulation
+automatically. Your repository is mounted at
+`/workspaces/surface_aware_bulldozer_sim`, so code edits take effect immediately
+and generated `figures/` files remain on your host. You do not need to rebuild
+for Python source edits in this workflow.
+
+VS Code uses `/opt/venv/bin/python` and installs Microsoft's Python and Pylance
+extensions inside the container. The development container has network access
+for VS Code setup and extensions; the separate Compose simulation service still
+has networking disabled. Docker commands should be run from a host terminal;
+Docker is not installed inside the development container.
+
+After changing requirements, the Dockerfile, or the dev container configuration,
+use **Dev Containers: Rebuild Container**. To return to your host environment,
+use **Dev Containers: Reopen Folder Locally**.
+
+The test command runs the existing suite. If collection reports missing
+`_DozerTrackSimulation` or `_Surface` imports, that is the existing mismatch
+between `test_main.py` and `util.py`, not a Dev Containers setup error.
+
+If reopening on Windows fails with an error mentioning a WSL distro mount
+service or `wayland-0`, open VS Code's **User Settings**, search for
+`dev.containers.mountWaylandSocket`, and disable **Dev Containers: Mount Wayland
+Socket**. Then retry **Dev Containers: Reopen in Container**. This optional
+Linux GUI socket is not needed for the simulation's headless plots. The setting
+must be changed in User Settings, not workspace or container settings.
+
+See the [official VS Code Dev Containers guide](https://code.visualstudio.com/docs/devcontainers/create-dev-container).
 
 ## Usage
 

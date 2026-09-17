@@ -124,3 +124,6 @@ coverage/
 simulation_3d_grt_rtw/
 *.gif
 
+
+# Track the VS Code Dev Containers configuration despite the JSON ignore rule.
+!.devcontainer/devcontainer.json
