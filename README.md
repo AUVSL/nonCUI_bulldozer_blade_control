@@ -135,7 +135,8 @@ approved, digest-pinned official Ubuntu 24.04 image.
 3. Press **Ctrl+Shift+P** and select **Dev Containers: Reopen in Container**.
 4. Wait for the build and VS Code setup to finish, then open a new terminal in VS Code.
 
-The terminal now runs inside Ubuntu. Run Python directly:
+The terminal now runs Bash inside Ubuntu, so VS Code's `source` command for
+virtual environment activation works. Run Python directly:
 
 ```bash
 python util.py

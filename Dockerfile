@@ -20,7 +20,7 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: \
     && python -m pip check
 
 RUN groupadd --gid 10001 simulator \
-    && useradd --uid 10001 --gid simulator --create-home simulator \
+    && useradd --uid 10001 --gid simulator --create-home --shell /bin/bash simulator \
     && mkdir -p /app/figures \
     && chown simulator:simulator /app/figures
 COPY *.py ./

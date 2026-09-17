@@ -19,6 +19,10 @@
     "vscode": {
       "extensions": ["ms-python.python", "ms-python.vscode-pylance"],
       "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": { "path": "/bin/bash" }
+        },
         "python.defaultInterpreterPath": "/opt/venv/bin/python",
         "python.testing.pytestEnabled": true,
         "python.testing.unittestEnabled": false,
