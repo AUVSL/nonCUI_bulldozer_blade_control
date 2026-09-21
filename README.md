@@ -276,3 +276,31 @@ by default for programmatic simulations and tuning.
 `Control` (imported with `from controllers import Control`) supports both blade controller modes via `controller_type="pd"` (default)
 or `controller_type="pi"`. `DozerSimulation(controller_type="pi")` uses the same
 class with PI gains, integral reset, and actuator anti-windup enabled.
+
+### Pure-pursuit path control
+
+`Control` also contains the figure-eight reference, pure-pursuit lookahead,
+signed cross-track error, and the calibrated four-segment heading-error-to-track-force
+mapping copied from `main.py`. The mapping outputs left/right track forces;
+angular velocity is produced by the vehicle dynamics, not commanded directly.
+The original calibration coefficients are preserved and are not retuned for the
+surface simulation.
+
+```python
+from util import DozerSimulation
+
+simulation = DozerSimulation(
+    controller_type="pi",
+    use_path_controller=True,
+    lookahead_dist=0.9,
+)
+simulation.stop_time = 30.0
+simulation.run_and_plot()
+```
+
+Path mode expands the terrain to include the reference with vehicle clearance,
+logs heading and cross-track errors in `force_log`, and draws the reference path.
+It stops at the time limit or when the closed path is completed. Pass `path_points`
+as an Nx2 or Nx3 array to use a custom closed reference. Path control is off by default.
+For standalone use, call `Control.configure_path(...)`, then
+`Control.angular_path_controller(pose, body_rotation, force_base)` each step.

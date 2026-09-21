@@ -10,7 +10,8 @@ class DozerSimulation():
 
     def __init__(self, is_uphill = True, is_surface_pitched: bool = False, is_surface_rolled: bool = False,
                  is_backwards: bool = False, enable_blade: bool = True, blade_roll_pitch_yaw = np.zeros(3),
-                 controller_type: str = "pd", enable_blade_control: bool = True):
+                 controller_type: str = "pd", enable_blade_control: bool = True,
+                 use_path_controller: bool = False, path_points=None, lookahead_dist=1.5):
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # ----------------------------- Load passed parameters ----------------------------- 
         self.is_surface_pitched   = is_surface_pitched
@@ -18,6 +19,7 @@ class DozerSimulation():
         self.is_backwards         = is_backwards
         self.enable_blade         = enable_blade
         self.enable_blade_control = enable_blade_control
+        self.use_path_controller = use_path_controller
         self.blade_roll_pitch_yaw = blade_roll_pitch_yaw
                            
         # ------------------------- General simulation parameters -------------------------- 
@@ -29,7 +31,7 @@ class DozerSimulation():
 
         # -------------------- Independent simulation limit parameters --------------------- 
         # change if tasks require move total distance to be traveled, still want it tight for fast tuning
-        self.stop_time              = 5.0
+        self.stop_time              = 15
         # contact-angle root-find tolerance (rad of angle / m of hang). Must stay
         # tighter than the settle loop's 1e-6 convergence check, or the pose it
         # returns is noisier than that check and the settle loop never converges
@@ -74,6 +76,24 @@ class DozerSimulation():
         # ----- Set up Center Of Mass (COM) position, COM velocity, simulation surface -----         
         self.u_range = (-1* self.b/2, 8 * self.b) if is_surface_pitched else (-self.b/2, 4*    self.b) 
         self.v_range = (-self.b/2,   self.b/2) if is_surface_pitched else (-1* self.b/2, 8 * self.b)
+        reference_rotation = self._rotation_lg(*self.surface_abg)
+        reference_path = (Control.figure8_path(surface_rotation=reference_rotation)
+                          if path_points is None else np.asarray(path_points, dtype=float))
+        # Set up the controller before the grid so reference bounds are available.
+        self.controller = Control(self.L, self.dt, zero_to_max_angle_time, controller_type)
+        self.controller.configure_path(reference_path, reference_rotation, lookahead_dist)
+        if use_path_controller:
+            # Fit the route itself instead of retaining the straight-run bounds.
+            # Allow the blade and tracks to turn anywhere on the route, plus 0.5 m.
+            blade_radius = np.hypot(self.L + abs(self.blade_arm_offset[0]),
+                                    self.B1 / 2 + abs(self.blade_arm_offset[1]))
+            track_radius = np.hypot(self.l / 2, (self.b + self.track_width) / 2)
+            margin = max(blade_radius, track_radius) + 0.5
+            path_xy = self.controller.path_points[:, :2]
+            lower = path_xy.min(axis=0) - margin
+            upper = path_xy.max(axis=0) + margin
+            self.u_range = (float(lower[0]), float(upper[0]))
+            self.v_range = (float(lower[1]), float(upper[1]))
         self.us           = np.arange(self.u_range[0], self.u_range[1] + self.subdivision, self.subdivision)
         self.vs           = np.arange(self.v_range[0], self.v_range[1] + self.subdivision, self.subdivision)
         
@@ -94,6 +114,8 @@ class DozerSimulation():
         self.max_world_cut_depth    = self.H
         stop_index                  = 0 if self.is_backwards else -1 
         self.stop_distance = abs(self.us[stop_index]) if is_surface_pitched else abs(self.vs[stop_index])
+        if use_path_controller:
+            self.stop_distance = np.inf  # Stop on time or completing the closed path.
         self.angular_velocity_limit = 2 * self.velocity_limit / self.b
 
         # ------------------------ Forces and moment Parameters --------------------------- 
@@ -135,10 +157,6 @@ class DozerSimulation():
         self.vtL       = 0.0
         self.vtR       = 0.0
         
-        # ----------------------------------- Controller ----------------------------------- 
-        if controller_type not in ("pd", "pi"):
-            raise ValueError("controller_type must be 'pd' or 'pi'")
-        self.controller = Control(self.L, self.dt, zero_to_max_angle_time, controller_type)
         self.requested_blade_rates = np.zeros(3)  # roll, pitch, yaw before limiting (rad/s)
         
         # ----------------------- Write 1st entry to simulation logs ----------------------- 
@@ -227,7 +245,11 @@ class DozerSimulation():
     # ------------------------------------ BODY UPDATE ------------------------------------     
     def _body_update(self):
         if self.is_initialized:
-            self.F_track = self.controller.dummy_track_controlller(self.q)
+            if self.use_path_controller:
+                self.F_track = self.controller.angular_path_controller(
+                    self.q, self._rotation_lg(*self.q[3:6]), self.F_track_base)
+            else:
+                self.F_track = self.controller.dummy_track_controlller(self.q)
             self._update_q_dot()
             self.q += self.dt * self.q_dot
             self.q[3:6] = (self.q[3:6] + np.pi) % (2 * np.pi) - np.pi
@@ -919,7 +941,8 @@ class DozerSimulation():
                 self.neighbor_log.append(np.array(neighbor_points))
 
             # Keep the terminal pose in the history and RMSE as well.
-            if self.total_distance >= self.stop_distance:
+            if (self.total_distance >= self.stop_distance
+                    or (self.use_path_controller and self.controller.path_complete)):
                 break
 
         self.blade_depth_rmse = float(np.sqrt(np.mean(np.square(depth_errors)))) if depth_errors else None
@@ -934,6 +957,8 @@ class DozerSimulation():
         desired_depth = float(self.controller.desired_depth)
         self.force_log.append({
             "time": float(t),
+            "heading_error": float(self.controller.heading_err),
+            "cross_track_error": float(self.controller.cross_track_err),
             "Fb": float(self.Fb), "Mb": float(self.Mb),
             "Rl_left": float(self.Rl[0]), "Rl_right": float(self.Rl[1]),
             "Fy": float(self.Fy), "Mr": float(self.Mr),
@@ -974,8 +999,9 @@ if __name__ == "__main__":
         is_surface_rolled    = False,
         is_backwards         = False,
         enable_blade         = True,
-        blade_roll_pitch_yaw = np.array([0.05, 0.0, 0.0]),
-        enable_blade_control = True
+        blade_roll_pitch_yaw = np.array([0.0, 0.0, 0.0]),
+        enable_blade_control = True,
+        use_path_controller  = True
     )
 
     simulation.run_and_plot()
