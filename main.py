@@ -179,7 +179,8 @@ class DozerSimulation():
         # seed the blade points the same way, so blade_log stays aligned frame
         # for frame with log/neighbor_log/grid_log
         blade_points, blade_neighbors = self._blade_update(deform=False)
-        neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
+        if self.enable_blade:
+            neighbor_points.extend(point for neighbors in blade_neighbors for point in neighbors)
         self.neighbor_log.append(np.array(neighbor_points))
         self.blade_log.append(blade_points)
         self.pile_log.append((self.H3, self.H4, float(self.blade_roll_pitch_yaw[0]),
@@ -470,14 +471,14 @@ class DozerSimulation():
         S_21 = -sB * sg * Bd + R[0, 0] * Gd
         S_31 = -cB * Bd
         
-        S_12 = -self.x_ICR * (R[0, 2] * Ad + R[2, 1] * cg * Bd - R[1, 1] * Gd) 
-        - self.x_ICR_dot * R[0, 1]
+        S_12 = (-self.x_ICR * (R[0, 2] * Ad + R[2, 1] * cg * Bd - R[1, 1] * Gd)
+                - self.x_ICR_dot * R[0, 1])
         
-        S_22 = -self.x_ICR * (R[1, 2] * Ad + R[2, 1] * sg * Bd + R[0, 1] * Gd) 
-        - self.x_ICR_dot * R[1, 1]
+        S_22 = (-self.x_ICR * (R[1, 2] * Ad + R[2, 1] * sg * Bd + R[0, 1] * Gd)
+                - self.x_ICR_dot * R[1, 1])
         
-        S_32 = -self.x_ICR * (R[2, 2] * Ad - sa * sB * Bd) 
-        - self.x_ICR_dot * R[2, 1]
+        S_32 = (-self.x_ICR * (R[2, 2] * Ad - sa * sB * Bd)
+                - self.x_ICR_dot * R[2, 1])
         
         S_42 = -sa * tB * Ad + ca / (cB**2) * Bd
         S_52 = -ca * Ad
