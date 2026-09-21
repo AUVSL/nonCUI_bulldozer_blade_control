@@ -13,7 +13,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from util import DozerSimulation
+from main import DozerSimulation
 
 
 class Tuning:

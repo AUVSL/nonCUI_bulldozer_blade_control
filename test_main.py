@@ -9,11 +9,11 @@ import pytest
 from PIL import Image
 
 import tuning
-import util as surface_util
+import main as surface_util
 import visualization as visualization_module
 from main import BulldozerSimulation
 from controllers import Control
-from util import DozerSimulation, _DozerTrackSimulation, _Surface
+from main import DozerSimulation, _DozerTrackSimulation, _Surface
 from visualization import Visualization
 # to run: pytest test_main.py
 
