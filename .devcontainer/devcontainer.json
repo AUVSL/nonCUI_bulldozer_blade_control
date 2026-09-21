@@ -1,0 +1,33 @@
+{
+  "name": "Bulldozer simulation (Ubuntu 24.04)",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/surface_aware_bulldozer_sim,type=bind",
+  "workspaceFolder": "/workspaces/surface_aware_bulldozer_sim",
+  "remoteUser": "simulator",
+  "postCreateCommand": {
+    "trustWorkspace": ["git", "config", "--global", "--add", "safe.directory", "${containerWorkspaceFolder}"],
+    "normalizeLineEndings": ["git", "config", "--global", "core.autocrlf", "input"]
+  },
+  "overrideCommand": true,
+  "shutdownAction": "stopContainer",
+  "init": true,
+  "runArgs": ["--cap-drop=ALL", "--security-opt=no-new-privileges:true"],
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-python.vscode-pylance"],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.profiles.linux": {
+          "bash": { "path": "/bin/bash" }
+        },
+        "python.defaultInterpreterPath": "/opt/venv/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.unittestEnabled": false,
+        "python.testing.pytestArgs": ["test_main.py", "-p", "no:cacheprovider"]
+      }
+    }
+  }
+}

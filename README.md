@@ -59,6 +59,120 @@ pip install -r requirements.txt
 
 Dependencies: `numpy`, `matplotlib`, `networkx`, `pytest`.
 
+## Docker (Ubuntu 24.04)
+
+If you use VS Code and want to work inside the container, install Microsoft's
+**Dev Containers** extension (`ms-vscode-remote.remote-containers`). It lets you
+reopen this project inside a container using the configuration described below. The Docker commands below can also be
+run in VS Code's terminal without the extension.
+
+Review the base image before running the build commands below:
+
+- Source: [Docker Official Ubuntu image](https://hub.docker.com/_/ubuntu), maintained by Canonical.
+- Image: `docker.io/library/ubuntu:24.04`
+- Pinned image index digest: `sha256:69cecf4bbf72d2d44a9eef1b71fb98c7fb973d78af11399deccef19beb008ad9`.
+
+The Dockerfile pins this digest so changes to the tag do not silently replace
+the reviewed base. Future base updates require reviewing and changing the digest.
+It installs Python 3, venv, and Git from Ubuntu's signed package repositories, then
+installs `requirements.txt` and its dependencies from PyPI into a virtual
+environment. Only binary Python packages are accepted. These Python dependencies
+are third-party packages, separate from the official base image; their versions
+retain the existing requirements ranges and are not locked. Official image
+provenance does not guarantee that all software is free of vulnerabilities.
+
+After image approval, start Docker Desktop with Linux containers enabled, then
+run from the repository root (PowerShell or a Linux shell):
+
+```bash
+docker compose build
+docker compose run --rm simulator python -m pytest -q -p no:cacheprovider
+docker compose run --rm simulator
+```
+
+Breaking down `docker compose run --rm simulator`:
+
+- `docker compose` uses the services defined in `compose.yaml`.
+- `run` creates and starts a new container for a one-time task.
+- `--rm` removes that container when the task finishes. The built image stays available.
+- `simulator` selects the service, which runs `python util.py` by default.
+
+Results remain in the host's `figures/` folder after the container is removed
+because that folder is mounted into the container.
+
+The default command runs the surface-transition demo in `util.py`. Output is saved to the host `figures/`
+directory through a bind mount. Existing files with the same output names may
+be overwritten, as with running the scripts directly. The container runs as an
+unprivileged user with networking disabled at runtime. The build needs network
+access to Docker Hub, Ubuntu repositories, and PyPI.
+
+The default command can also be written explicitly:
+
+```bash
+docker compose run --rm simulator python util.py
+```
+
+To run the dozer dynamics simulation in `main.py` or another entry point, override the default command:
+
+```bash
+docker compose run --rm simulator python main.py
+docker compose run --rm simulator python calibration.py
+docker compose run --rm simulator python tuning.py pd --p-gains 0.16 0.32 --d-gains 0 0.16
+```
+
+Run `docker compose build` again after editing the Dockerfile, code, or requirements so the image includes the changes. On Linux, create `figures/` first
+and add `--user "$(id -u):$(id -g)"` after `run --rm` if needed for host output
+permissions. Docker Desktop on Windows normally handles bind-mount permissions.
+
+## Develop in VS Code with Dev Containers
+
+The configuration is in `.devcontainer/devcontainer.json` (a file inside the
+`.devcontainer` folder). It builds the existing Dockerfile using the same
+approved, digest-pinned official Ubuntu 24.04 image.
+
+1. Start Docker Desktop with Linux containers enabled.
+2. Open this repository folder in VS Code and install Microsoft's **Dev Containers** extension.
+3. Press **Ctrl+Shift+P** and select **Dev Containers: Reopen in Container**.
+4. Wait for the build and VS Code setup to finish, then open a new terminal in VS Code.
+
+The terminal now runs Bash inside Ubuntu, so VS Code's `source` command for
+virtual environment activation works. Run Python directly:
+
+```bash
+python util.py
+python main.py
+python -m pytest test_main.py -v -p no:cacheprovider
+```
+
+The dev container stays running while you work; it does not launch the simulation
+automatically. Your repository is mounted at
+`/workspaces/surface_aware_bulldozer_sim`, so code edits take effect immediately
+and generated `figures/` files remain on your host. You do not need to rebuild
+for Python source edits in this workflow.
+
+VS Code uses `/opt/venv/bin/python` and installs Microsoft's Python and Pylance
+extensions inside the container. The development container has network access
+for VS Code setup and extensions; the separate Compose simulation service still
+has networking disabled. Docker commands should be run from a host terminal;
+Docker is not installed inside the development container.
+
+After changing requirements, the Dockerfile, or the dev container configuration,
+use **Dev Containers: Rebuild Container**. To return to your host environment,
+use **Dev Containers: Reopen Folder Locally**.
+
+The test command runs the existing suite. If collection reports missing
+`_DozerTrackSimulation` or `_Surface` imports, that is the existing mismatch
+between `test_main.py` and `util.py`, not a Dev Containers setup error.
+
+If reopening on Windows fails with an error mentioning a WSL distro mount
+service or `wayland-0`, open VS Code's **User Settings**, search for
+`dev.containers.mountWaylandSocket`, and disable **Dev Containers: Mount Wayland
+Socket**. Then retry **Dev Containers: Reopen in Container**. This optional
+Linux GUI socket is not needed for the simulation's headless plots. The setting
+must be changed in User Settings, not workspace or container settings.
+
+See the [official VS Code Dev Containers guide](https://code.visualstudio.com/docs/devcontainers/create-dev-container).
+
 ## Usage
 
 Each script is runnable on its own and writes its output into a `figures/`

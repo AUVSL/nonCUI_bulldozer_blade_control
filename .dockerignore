@@ -1,0 +1,7 @@
+# Only send files required by this image to the builder.
+**
+!Dockerfile
+!.dockerignore
+!requirements.txt
+!*.py
+!LICENSE
