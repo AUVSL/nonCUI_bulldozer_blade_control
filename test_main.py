@@ -1,7 +1,20 @@
-"""Unit tests for BulldozerSimulation in main.py."""
+"""Unit tests for the bulldozer simulation, controllers, terrain, and visualization."""
+import csv
+
+import matplotlib
+matplotlib.use("Agg")
+import networkx as nx
 import numpy as np
 import pytest
+from PIL import Image
+
+import tuning
+import util as surface_util
+import visualization as visualization_module
 from main import BulldozerSimulation
+from controllers import Control
+from util import DozerSimulation, _DozerTrackSimulation, _Surface
+from visualization import Visualization
 # to run: pytest test_main.py
 
 # ───────────────── Fixtures ─────────────────
@@ -540,3 +553,1686 @@ class TestRun:
         log_arr = np.array(sim.log)
         # At least one position coordinate must have changed
         assert not np.allclose(log_arr[-1, 1:4], np.zeros(3))
+
+
+# Surface utility and deformation tests
+SHARED_METHODS = (
+    "subdivision",
+    "_surface_grid",
+    "_rotation_lg",
+    "_rotation_gl",
+    "_point_orientation",
+    "_bilinear_gradient",
+    "_point_height",
+    "_grid_cell",
+    "_get_neighbor_points",
+    "_bilinear_height",
+    "_contact_angle",
+)
+
+
+def _grid_heights(surface):
+    return np.array([[point[2] for point in column] for column in surface.grid_pts])
+
+
+def _body_simulation(**kwargs):
+    return DozerSimulation(enable_blade=False, **kwargs)
+
+
+def test_dozer_simulation_combines_body_and_blade_modes():
+    enabled = DozerSimulation()
+    disabled = _body_simulation()
+
+    assert enabled.enable_blade is True
+    assert disabled.enable_blade is False
+    assert hasattr(enabled, "blade_log")
+    assert not hasattr(disabled, "blade_log")
+    assert "run" in DozerSimulation.__dict__
+    assert "run_and_plot" in DozerSimulation.__dict__
+    assert DozerSimulation._run is DozerSimulation.run
+
+
+def test_dozer_simulation_inherits_the_shared_surface_implementation():
+    assert issubclass(DozerSimulation, _DozerTrackSimulation)
+    assert issubclass(_DozerTrackSimulation, _Surface)
+    for method_name in SHARED_METHODS:
+        assert method_name in _Surface.__dict__
+        assert getattr(DozerSimulation, method_name) is getattr(_Surface, method_name)
+
+
+def test_subdivision_preserves_each_mode_output():
+    body = _body_simulation()
+    blade = DozerSimulation()
+
+    assert body.subdivision == pytest.approx(1.75 / 2)
+    assert blade.subdivision == pytest.approx(1.75 / 8)
+
+    # Body's old property always used a fixed factor of two, while Blade's
+    # implementation used the mutable division_factor attribute.
+    body.division_factor = blade.division_factor = 4
+    assert body.subdivision == pytest.approx(1.75 / 2)
+    assert blade.subdivision == pytest.approx(1.75 / 4)
+
+
+def test_body_grid_and_initial_logs_keep_their_previous_shapes_and_values():
+    body = _body_simulation()
+    heights = _grid_heights(body)
+
+    assert heights.shape == (3, 11)
+    assert heights.max() == pytest.approx(2.625)
+    assert heights.sum() == pytest.approx(38.5)
+    assert body.q[3] == pytest.approx(-0.4636476080008061)
+    assert not body.is_initalization
+    assert np.asarray(body.log).shape == (1, 7)
+    assert np.asarray(body.neighbor_log).shape == (1, 4, 3)
+    assert all(
+        node["visited_last"] is False
+        for _, node in body.surf_grid.nodes(data=True)
+    )
+
+
+def test_body_grid_keeps_two_axis_ramp_and_node_metadata():
+    unrolled = _body_simulation(is_surface_rolled=False)
+    rolled = _body_simulation(is_surface_rolled=True)
+    np.testing.assert_allclose(_grid_heights(unrolled), _grid_heights(rolled))
+
+    for _, node in unrolled.surf_grid.nodes(data=True):
+        assert node["visited_last"] is False
+
+
+def test_shared_orientation_uses_terrain_roll_for_both_modes():
+    body = _body_simulation(is_uphill=False)
+    blade = DozerSimulation(is_uphill=False)
+    corners = [
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.2),
+        (0.0, 1.0, 0.0),
+        (1.0, 1.0, 0.2),
+    ]
+    body.q[:2] = blade.q[:2] = [0.5, 0.5]
+
+    body_orientation = body._point_orientation(corners)
+    blade_orientation = blade._point_orientation(corners)
+
+    expected_roll = np.arctan2(-0.2, 1.0)
+    assert body_orientation[0] == pytest.approx(expected_roll)
+    assert blade_orientation[0] == pytest.approx(expected_roll)
+    np.testing.assert_allclose(body_orientation, blade_orientation)
+
+
+def test_body_update_advances_and_settles_without_building_track_points():
+    body = _body_simulation()
+    previous_xy = body.q[:2].copy()
+
+    neighbor_points = body._body_update()
+
+    np.testing.assert_allclose(
+        body.q[:2], previous_xy + body.dt * body.q_dot[:2]
+    )
+    assert np.asarray(neighbor_points).shape == (4, 3)
+    np.testing.assert_allclose(neighbor_points, body._get_neighbor_points(body.q))
+
+    orient = body.q[3:6].copy()
+    rotation = body._rotation_lg(*orient)
+    assert body.q[2] == pytest.approx(body._resting_height(rotation))
+
+
+def test_track_geometry_helper_uses_the_logged_rigid_body_pose():
+    surface = DozerSimulation(is_uphill=False)
+    pose = np.array([1.2, -0.7, 0.4, 0.17, -0.23, 0.41])
+
+    tracks = surface._track_xyz(pose)
+    local = np.einsum(
+        "ij,skj->ski",
+        surface._rotation_gl(*pose[3:6]),
+        tracks - pose[:3],
+    )
+    expected = np.array([
+        [
+            [surface.l / 2, -surface.b / 2, 0.0],
+            [0.0, -surface.b / 2, 0.0],
+            [-surface.l / 2, -surface.b / 2, 0.0],
+        ],
+        [
+            [surface.l / 2, surface.b / 2, 0.0],
+            [0.0, surface.b / 2, 0.0],
+            [-surface.l / 2, surface.b / 2, 0.0],
+        ],
+    ])
+
+    assert tracks.shape == (2, 3, 3)
+    np.testing.assert_allclose(local, expected, atol=1e-12)
+
+
+def test_visualization_draws_and_updates_tracks_in_every_view(monkeypatch):
+    surface = DozerSimulation(is_uphill=False, blade_local_roll=0.25)
+    surface.stop_time = 3 * surface.dt + 1e-12
+    surface.run()
+    captured = {}
+
+    monkeypatch.setattr(
+        visualization_module.Image.Image,
+        "save",
+        lambda *args, **kwargs: captured.setdefault("save_kwargs", kwargs),
+    )
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(
+        visualization_module.plt,
+        "close",
+        lambda fig: captured.setdefault("figure", fig),
+    )
+
+    Visualization(surface).visualization()
+    figure = captured["figure"]
+    expected = surface._track_xyz(np.asarray(surface.log)[::2][-1, 1:7])
+    projections = {
+        ("X (m)", "Y (m)"): (0, 1),
+        ("Y (m)", "Z (m)"): (1, 2),
+        ("X (m)", "Z (m)"): (0, 2),
+    }
+
+    try:
+        for axis in figure.axes:
+            track_collections = [
+                collection
+                for collection in axis.collections
+                if collection.get_label() == "tracks"
+            ]
+            assert len(track_collections) == 1
+
+            projection = (
+                None
+                if axis.name == "3d"
+                else projections.get((axis.get_xlabel(), axis.get_ylabel()))
+            )
+            if axis.name == "3d":
+                np.testing.assert_allclose(
+                    np.asarray(track_collections[0]._segments3d),
+                    expected,
+                )
+            elif projection is not None:
+                np.testing.assert_allclose(
+                    np.asarray(track_collections[0].get_segments()),
+                    expected[:, :, projection],
+                )
+
+        side_axis = next(
+            axis
+            for axis in figure.axes
+            if (axis.get_xlabel(), axis.get_ylabel()) == ("X (m)", "Z (m)")
+        )
+        labels = [text.get_text() for text in side_axis.get_legend().get_texts()]
+        assert "tracks" in labels
+        assert "blade face" in labels
+        assert "blade contact points" in labels
+        assert captured["save_kwargs"]["duration"] == int(1_000 / 30)
+
+        blade = np.asarray(surface.blade_log)[::2][-1]
+        blade_top = (
+            blade[[0, -1], :3]
+            + surface._blade_rotation_lg(blade[0, 3:6])[:, 2] * surface.H
+        )
+        expected_face = np.vstack([
+            blade[0, :3], blade[-1, :3], blade_top[-1], blade_top[0]
+        ])
+        blade_face = next(
+            patch
+            for patch in side_axis.patches
+            if patch.get_label() == "blade face"
+        )
+        np.testing.assert_allclose(
+            blade_face.get_xy()[:4],
+            expected_face[:, [0, 2]],
+        )
+    finally:
+        real_close(figure)
+
+
+def test_body_visualization_does_not_require_blade_logs(monkeypatch, tmp_path):
+    surface = DozerSimulation(enable_blade=False, is_uphill=False)
+    surface.stop_time = 3 * surface.dt + 1e-12
+    surface.run()
+    del surface.blade_log
+    del surface.grid_log
+    captured = {}
+
+    monkeypatch.setattr(
+        visualization_module.Image.Image,
+        "save",
+        lambda *args, **kwargs: captured.setdefault("save_kwargs", kwargs),
+    )
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(
+        visualization_module.plt,
+        "close",
+        lambda figure: captured.setdefault("figure", figure),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    Visualization(surface).visualization(show_neighbors=True)
+    figure = captured["figure"]
+
+    try:
+        assert (tmp_path / "figures").is_dir()
+        side_axis = next(
+            axis
+            for axis in figure.axes
+            if (axis.get_xlabel(), axis.get_ylabel()) == ("X (m)", "Z (m)")
+        )
+        labels = [text.get_text() for text in side_axis.get_legend().get_texts()]
+        collection_labels = {
+            collection.get_label() for collection in side_axis.collections
+        }
+        assert "tracks" in labels
+        assert "grid neighbors" in labels
+        assert "blade face" not in labels
+        assert "blade contact points" not in labels
+        assert "track orientations" in collection_labels
+        assert "track offsets" in collection_labels
+        assert captured["save_kwargs"]["duration"] == int(1_000 / 20)
+    finally:
+        real_close(figure)
+
+
+@pytest.mark.parametrize(
+    "body_kwargs",
+    ({}, {"is_surface_pitched": True}, {"is_backwards": True}),
+)
+def test_body_short_run_keeps_logs_aligned_without_deformation(body_kwargs):
+    body = _body_simulation(**body_kwargs)
+    starting_heights = body._grid_heights().copy()
+    body.stop_time = 3 * body.dt + 1e-12
+
+    body.run()
+
+    assert len(body.log) == len(body.neighbor_log) == 4
+    assert np.asarray(body.log).shape == (4, 7)
+    assert np.asarray(body.neighbor_log).shape == (4, 4, 3)
+    np.testing.assert_allclose(body._grid_heights(), starting_heights)
+
+
+def test_blade_enabled_short_run_keeps_logs_aligned_and_deforms():
+    surface = DozerSimulation(is_uphill=False)
+    starting_heights = surface._grid_heights().copy()
+    surface.stop_time = 3 * surface.dt + 1e-12
+
+    surface.run()
+
+    assert len(surface.log) == len(surface.blade_log) == 4
+    assert len(surface.grid_log) == len(surface.neighbor_log) == 4
+    assert np.asarray(surface.log).shape == (4, 7)
+    assert np.asarray(surface.blade_log).shape == (4, 15, 6)
+    assert np.asarray(surface.grid_log).shape == (4, 9, 41)
+    np.testing.assert_allclose(surface.grid_log[-1], surface._grid_heights())
+    assert np.max(starting_heights - surface._grid_heights()) > 0.0
+
+
+@pytest.mark.parametrize("enable_blade", (True, False))
+def test_run_and_plot_uses_one_mode_aware_visualization(monkeypatch, enable_blade):
+    surface = DozerSimulation(enable_blade=enable_blade)
+    calls = []
+    monkeypatch.setattr(surface, "run", lambda: calls.append("run"))
+
+    def visualization(instance, show_neighbors=False):
+        calls.append((
+            "visualization", instance.simulation.enable_blade, show_neighbors
+        ))
+
+    monkeypatch.setattr(
+        surface_util.Visualization, "visualization", visualization
+    )
+
+    surface.run_and_plot(show_neighbors=True)
+
+    assert calls == ["run", ("visualization", enable_blade, True)]
+
+
+def _reached_contact(surface, tile=(1, 1), depth=-10.0):
+    """A contact near the tile's leading edge for the default +Y motion."""
+    i, j = tile
+    x0, y0, _ = surface.grid_pts[i][j]
+    x1, y1, _ = surface.grid_pts[i + 1][j + 1]
+    return np.array([(x0 + x1) / 2, y1 - surface.subdivision * 0.01, depth])
+
+
+def test_duplicate_blade_contacts_cut_a_tile_once_per_frame():
+    surface = DozerSimulation(is_uphill=False)
+    surface.max_dig_depth_per_meter = 2.0
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]  # 0.1 m per step
+    contact = _reached_contact(surface)
+    before = surface.grid_pts[1][2][2]
+
+    surface._deform_blade_tiles({(1, 1): [contact, contact.copy()]})
+
+    assert surface.grid_pts[1][2][2] < before
+
+
+def test_dig_depth_depends_on_distance_not_step_count():
+    one_step = DozerSimulation(is_uphill=False)
+    split_steps = DozerSimulation(is_uphill=False)
+    for surface in (one_step, split_steps):
+        surface.max_dig_depth_per_meter = 2.0
+        surface.q_dot[:3] = [0.0, 10.0, 0.0]
+
+    one_contact = _reached_contact(one_step)
+    split_contact = _reached_contact(split_steps)
+    one_step._deform_blade_tiles({(1, 1): [one_contact]})
+    split_steps.dt = 0.005
+    split_steps._deform_blade_tiles({(1, 1): [split_contact]})
+    split_steps._deform_blade_tiles({(1, 1): [split_contact]})
+
+    assert split_steps.grid_pts[1][1][2] == pytest.approx(one_step.grid_pts[1][1][2])
+
+
+def test_initial_blade_geometry_does_not_deform_the_surface():
+    surface = DozerSimulation(is_uphill=False)
+
+    np.testing.assert_allclose(surface._grid_heights(), surface.grid_log[0])
+
+
+def test_blade_local_yaw_and_roll_are_composed_after_body_rotation():
+    local_yaw = 0.31
+    local_roll = -0.22
+    surface = DozerSimulation(
+        is_uphill=False,
+        blade_local_yaw=local_yaw,
+        blade_local_roll=local_roll,
+    )
+    surface.q[3:6] = [0.17, -0.13, 0.41]
+
+    blade_points, _ = surface._blade_update(deform=False)
+    body_R = surface._rotation_lg(*surface.q[3:6])
+    local_R = surface._rotation_lg(local_roll, 0.0, local_yaw)
+    expected_p0 = surface.q[:3] + body_R @ local_R @ np.array(
+        [surface.L, -surface.B1 / 2, -surface.blade_cut_depth]
+    )
+    expected_p1 = surface.q[:3] + body_R @ local_R @ np.array(
+        [surface.L, surface.B1 / 2, -surface.blade_cut_depth]
+    )
+
+    np.testing.assert_allclose(blade_points[0][:3], expected_p0, atol=1e-12)
+    np.testing.assert_allclose(blade_points[-1][:3], expected_p1, atol=1e-12)
+
+
+def test_blade_pitch_sets_cut_depth_without_tilting_local_rotation():
+    blade_pitch = 0.27
+    surface = DozerSimulation(is_uphill=False, blade_pitch=blade_pitch)
+    surface.q[3:6] = [0.0, 0.0, 0.0]
+
+    blade_points, _ = surface._blade_update(deform=False)
+    p0, p1 = np.asarray(blade_points)[[0, -1], :3]
+    expected_depth = surface.L * np.sin(blade_pitch)
+
+    assert surface.blade_cut_depth == pytest.approx(expected_depth)
+    np.testing.assert_allclose(p0 - surface.q[:3], [surface.L, -surface.B1 / 2, -expected_depth])
+    np.testing.assert_allclose(p1 - surface.q[:3], [surface.L, surface.B1 / 2, -expected_depth])
+    assert p0[2] == pytest.approx(p1[2])
+
+
+def test_only_forward_vertices_of_a_contacted_tile_deform():
+    surface = DozerSimulation(is_uphill=False)
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface)
+    before = surface._grid_heights()
+
+    surface._deform_blade_tiles({(1, 1): [contact]})
+
+    # +Y motion: j=2 is directly cut; j=1 remains untouched.
+    assert surface.grid_pts[1][1][2] == pytest.approx(before[1, 1])
+    assert surface.grid_pts[2][1][2] == pytest.approx(before[2, 1])
+    assert surface.grid_pts[1][2][2] < before[1, 2]
+    assert surface.grid_pts[2][2][2] < before[2, 2]
+
+
+def test_repeated_cuts_stop_at_each_vertex_starting_height_limit():
+    surface = DozerSimulation(is_uphill=False)
+    surface.max_dig_depth_per_meter = 100.0
+    surface.max_world_cut_depth = 0.25
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface)
+    starting_heights = surface.starting_grid_heights.copy()
+
+    for _ in range(3):
+        surface._deform_blade_tiles({(1, 1): [contact]})
+
+    for i, j in ((1, 2), (2, 2)):
+        assert surface.grid_pts[i][j][2] == pytest.approx(
+            starting_heights[i, j] - surface.max_world_cut_depth
+        )
+
+
+def test_blade_points_remain_interpolated_between_rigid_endpoints():
+    surface = DozerSimulation(is_uphill=False)
+    surface.max_world_cut_depth = 0.1
+    surface.q[2] = -10.0
+
+    blade_points, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade_points)[:, :3]
+    expected = np.array([
+        (1.0 - t) * blade[0] + t * blade[-1]
+        for t in np.linspace(0.0, 1.0, len(blade))
+    ])
+
+    np.testing.assert_allclose(blade, expected, atol=1e-12)
+
+
+def test_rolled_blade_points_interpolate_between_rolled_endpoints():
+    surface = DozerSimulation(is_uphill=False, blade_local_roll=0.25)
+    surface.max_world_cut_depth = 0.1
+    surface.q[2] = -1.0
+
+    blade_points, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade_points)[:, :3]
+    expected = np.array([
+        (1.0 - t) * blade[0] + t * blade[-1]
+        for t in np.linspace(0.0, 1.0, len(blade))
+    ])
+
+    np.testing.assert_allclose(blade, expected, atol=1e-12)
+    assert np.ptp(blade[:, 2]) > 0.0
+
+
+def test_whole_track_contact_updates_pose_on_forward_slope():
+    surface = DozerSimulation(is_uphill=False)
+    slope = 0.2
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            z = slope * y
+            surface.grid_pts[i][j] = (x, y, z)
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.starting_grid_heights = surface._grid_heights().copy()
+    surface.is_initalization = True
+    surface.q[3] = 0.17
+    surface.q[5] = np.pi / 2
+
+    surface._body_update()
+
+    R = surface._rotation_lg(*surface.q[3:6])
+    assert surface.q[2] == pytest.approx(surface._resting_height(R), abs=1e-8)
+    assert surface.q[4] != pytest.approx(0.0)
+    assert surface.q[3] == pytest.approx(0.0, abs=1e-9)
+    assert surface.q[5] == pytest.approx(np.pi / 2)
+
+
+def test_blade_keeps_local_offset_on_forward_slope():
+    surface = DozerSimulation(is_uphill=False)
+    slope = 0.2
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            z = slope * y
+            surface.grid_pts[i][j] = (x, y, z)
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.starting_grid_heights = surface._grid_heights().copy()
+    surface._body_update()
+
+    blade_points, _ = surface._blade_update(deform=False)
+
+    blade = np.asarray(blade_points)
+    midpoint = (blade[0, :3] + blade[-1, :3]) / 2
+    local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
+    np.testing.assert_allclose(
+        local_midpoint, [surface.L, 0.0, -surface.blade_cut_depth], atol=1e-12
+    )
+    R = surface._rotation_lg(*surface.q[3:6])
+    assert surface.q[2] == pytest.approx(surface._resting_height(R), abs=1e-8)
+
+
+def test_blade_enabled_pose_uses_complete_tracks_instead_of_q_contact():
+    surface = DozerSimulation(is_uphill=False)
+
+    # Flatten the terrain, then raise only the small patch beneath q. Both
+    # track centerlines are laterally clear of it, so q must not act as a
+    # third, artificial support point.
+    for i in range(len(surface.us)):
+        for j in range(len(surface.vs)):
+            x, y, _ = surface.grid_pts[i][j]
+            surface.grid_pts[i][j] = (x, y, 0.0)
+            surface.surf_grid.nodes[(i, j)]["z"] = 0.0
+
+    i, j = surface._grid_cell(surface.q)
+    for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)):
+        x, y, _ = surface.grid_pts[ci][cj]
+        surface.grid_pts[ci][cj] = (x, y, 1.0)
+        surface.surf_grid.nodes[(ci, cj)]["z"] = 1.0
+
+    surface.is_initalization = True
+    surface._body_update()
+
+    assert surface._point_height(surface.q)[1] == pytest.approx(1.0)
+    assert surface.q[2] == pytest.approx(0.0, abs=surface.contact_tol)
+    R = surface._rotation_lg(*surface.q[3:6])
+    assert surface.q[2] == pytest.approx(surface._resting_height(R))
+
+
+def test_blade_enabled_pose_balances_and_clears_entire_tracks():
+    surface = DozerSimulation(is_uphill=True)
+    R = surface._rotation_lg(*surface.q[3:6])
+    support = surface._support_heights(R)
+
+    assert surface.l == pytest.approx(2.349)
+    assert support.max() <= surface.q[2] + surface.contact_tol
+    assert surface.q[2] == pytest.approx(surface._resting_height(R))
+
+
+def test_commanded_blade_pitch_does_not_replace_whole_track_balance():
+    shallow = DozerSimulation(is_uphill=True, blade_pitch=0.0)
+    deep = DozerSimulation(is_uphill=True, blade_pitch=0.3)
+
+    np.testing.assert_allclose(shallow.q, deep.q, atol=1e-12)
+    assert shallow.blade_cut_depth != pytest.approx(deep.blade_cut_depth)
+
+
+def test_blade_descends_with_q_after_surface_is_cut():
+    surface = DozerSimulation(is_uphill=False)
+    surface.max_world_cut_depth = 1.0
+    before, _ = surface._blade_update(deform=False)
+
+    surface.q[2] -= 0.1
+    after, _ = surface._blade_update(deform=False)
+
+    np.testing.assert_allclose(
+        np.asarray(after)[:, 2], np.asarray(before)[:, 2] - 0.1
+    )
+
+
+def test_blade_midpoint_keeps_local_offsets_from_q_until_depth_limit():
+    surface = DozerSimulation(is_uphill=False)
+    surface.max_world_cut_depth = 10.0
+    surface.q[2] = -0.3
+    surface.q[4] = 0.4
+
+    blade, _ = surface._blade_update(deform=False)
+    blade = np.asarray(blade)
+    midpoint = (blade[0, :3] + blade[-1, :3]) / 2
+
+    local_midpoint = surface._rotation_gl(*surface.q[3:6]) @ (midpoint - surface.q[:3])
+    np.testing.assert_allclose(
+        local_midpoint, [surface.L, 0.0, -surface.blade_cut_depth], atol=1e-12
+    )
+
+
+def test_rigid_blade_vertical_motion_continues_below_soil_cut_limit():
+    surface = DozerSimulation(is_uphill=False)
+    surface.max_world_cut_depth = 0.25
+    surface.q[2] = -1.0
+
+    before, _ = surface._blade_update(deform=False)
+    surface.q[2] -= 0.2
+    after, _ = surface._blade_update(deform=False)
+
+    np.testing.assert_allclose(
+        np.asarray(after)[:, 2], np.asarray(before)[:, 2] - 0.2
+    )
+
+
+def test_normal_run_deepens_with_q_but_stops_at_maximum_depth():
+    surface = DozerSimulation(is_uphill=False)
+
+    surface.run()
+
+    depths = surface.starting_grid_heights - surface._grid_heights()
+    assert depths.max() > surface.blade_cut_depth
+    assert depths.max() <= surface.max_world_cut_depth + 2e-7
+
+
+def test_unrolled_transition_and_cut_are_uniform_across_blade_width():
+    surface = DozerSimulation(is_uphill=False, is_surface_rolled=False)
+    np.testing.assert_allclose(
+        np.ptp(surface.starting_grid_heights, axis=0), 0.0, atol=1e-12
+    )
+
+    surface.run()
+
+    depths = surface.starting_grid_heights - surface._grid_heights()
+    cut_columns = np.flatnonzero(depths.max(axis=0) > 1e-9)
+    for j in cut_columns:
+        np.testing.assert_allclose(depths[:, j], depths[0, j], atol=2e-7)
+
+
+def test_contact_pitch_still_balances_tracks_after_cutoff_depth():
+    surface = DozerSimulation(is_uphill=False)
+    cutoff_q_depth = (
+        surface.max_world_cut_depth - surface.blade_cut_depth
+    )
+    surface.grid_pts = [
+        [(x, y, z - cutoff_q_depth) for x, y, z in column]
+        for column in surface.grid_pts
+    ]
+    for i, column in enumerate(surface.grid_pts):
+        for j, (_, _, z) in enumerate(column):
+            surface.surf_grid.nodes[(i, j)]["z"] = z
+    surface.q[2] = surface._point_height(surface.q)[1]
+    surface_pitch = surface._point_orientation(surface._get_neighbor_points(surface.q))[1]
+    orient = surface.q[3:6].copy()
+    orient[1] = surface_pitch
+
+    pitch = surface._body_contact_pitch(orient)
+    R = surface._rotation_lg(orient[0], pitch, orient[2])
+    front, back = surface._half_resting_heights(R)
+    assert front == pytest.approx(back, abs=surface.contact_tol)
+
+
+def test_rolled_soil_is_never_cut_below_the_blade_plane():
+    surface = DozerSimulation(is_uphill=False, is_surface_rolled=True)
+    surface.q_dot[:3] = [0.0, 10.0, 0.0]
+    contact = _reached_contact(surface, tile=(4, 1), depth=-0.3)
+
+    surface._deform_blade_tiles({(4, 1): [contact]})
+
+    for i, j in ((4, 2), (5, 2)):
+        assert surface.grid_pts[i][j][2] == pytest.approx(contact[2])
+
+
+def test_rolled_soil_keeps_local_depth_limits_across_the_blade():
+    surface = DozerSimulation(is_uphill=False, is_surface_rolled=True)
+
+    surface.run()
+
+    heights = surface._grid_heights()
+    deformed = np.abs(heights - surface.starting_grid_heights) > 1e-9
+    for i, j in np.argwhere(deformed):
+        local_floor = (
+            surface.starting_grid_heights[i, j] - surface.max_world_cut_depth
+        )
+        assert heights[i, j] >= local_floor - 2e-7
+
+
+# Blade deformation
+@pytest.fixture
+def simulation():
+    sim = DozerSimulation(is_surface_pitched=True, blade_roll_pitch_yaw=np.array([0., .2, 0.]))
+    sim.division_factor = 7  # 0.25 m grid
+    sim.us = np.arange(-3., 4.01, sim.subdivision)
+    sim.vs = np.arange(-3., 3.01, sim.subdivision)
+    sim.surf_grid = nx.grid_2d_graph(len(sim.us), len(sim.vs))
+    sim.grid_pts = [[(x, y, 0.) for y in sim.vs] for x in sim.us]
+    nx.set_node_attributes(sim.surf_grid, 0., "z")
+    sim.starting_grid_heights = np.zeros((len(sim.us), len(sim.vs)))
+    sim.q[:] = 0.
+    sim.q_dot[:] = 0.
+    sim.blade_roll_pitch_yaw[:] = 0.
+    return sim
+
+
+def assert_clearance(sim):
+    rotation = sim._rotation_lg(*sim.q[3:6])
+    edge = sim.q[:3] + sim._blade_edge_local(top=True) @ rotation.T
+    for t in np.linspace(0., 1., 1001):
+        point = edge[0] + t * (edge[1] - edge[0])
+        assert point[2] >= sim._undeformed_height(point) - 1e-7
+    # Tracks still cannot pass below the current flat surface.
+    assert sim._track_xyz(sim.q)[:, :, 2].min() >= -1e-7
+
+
+def test_blade_with_clearance_does_not_lift_body(simulation):
+    simulation._settle_tracks(simulation.q[3:6].copy())
+    np.testing.assert_allclose(simulation.q, 0., atol=1e-7)
+    assert_clearance(simulation)
+
+
+def test_original_soil_supports_blade_after_surface_is_cut(simulation):
+    # Current surface is already cut to zero, original soil remains at 1.4 m.
+    simulation.starting_grid_heights[:] = 1.4
+    simulation._settle_tracks(simulation.q[3:6].copy())
+    assert simulation.q[2] > 0.1
+    assert simulation.q[4] < -0.1  # blade/front lifts; rear track ends support it
+    assert abs(simulation.q[3]) < 1e-7
+    assert abs(simulation._track_xyz(simulation.q)[:, -1, 2].min()) < 1e-7
+    assert_clearance(simulation)
+
+
+def test_asymmetric_soil_at_blade_changes_roll(simulation):
+    for i, x in enumerate(simulation.us):
+        for j, y in enumerate(simulation.vs):
+            if x > 1.25 and y > .25:
+                simulation.starting_grid_heights[i, j] = 1.4
+    simulation._settle_tracks(simulation.q[3:6].copy())
+    assert simulation.q[3] > .1
+    assert simulation.q[5] == 0.  # contact does not steer the vehicle
+    assert_clearance(simulation)
+
+
+@pytest.mark.parametrize("blade_angles", [[.06, .3, .3], [-.06, .3, -.3]])
+def test_rotated_offset_blade_clears_soil(simulation, blade_angles):
+    simulation.blade_roll_pitch_yaw[:] = blade_angles
+    simulation.blade_arm_offset = np.array([.7, .2, .1])
+    simulation.starting_grid_heights[:] = 1.4
+    simulation.q[5] = .4
+    simulation._settle_tracks(simulation.q[3:6].copy())
+    assert simulation.q[5] == .4
+    assert_clearance(simulation)
+
+
+def test_disabled_blade_does_not_support_vehicle(simulation):
+    simulation.enable_blade = False
+    simulation.starting_grid_heights[:] = 1.4
+    simulation._settle_tracks(simulation.q[3:6].copy())
+    np.testing.assert_allclose(simulation.q, 0., atol=1e-7)
+
+
+def test_blade_pose_is_valid_before_cutting(simulation, monkeypatch):
+    simulation.starting_grid_heights[:] = 1.4
+    simulation.q_dot[0] = 1.
+    called = []
+
+    def deform(contacts):
+        assert contacts
+        assert_clearance(simulation)
+        called.append(True)
+
+    monkeypatch.setattr(simulation, "_deform_blade_tiles", deform)
+    simulation._blade_update()
+    assert called == [True]
+
+
+def test_peak_between_blade_endpoints_supports_vehicle(simulation):
+    # A narrow ridge in the middle is missed by endpoint-only contact tests.
+    simulation.starting_grid_heights[:, len(simulation.vs) // 2] = 1.4
+    simulation._settle_tracks(simulation.q[3:6].copy())
+    assert simulation.q[2] > .1
+    assert_clearance(simulation)
+
+
+def test_bilinear_peak_inside_tile_is_included(simulation):
+    # A diagonal edge crosses a saddle tile: the largest required height is
+    # inside the tile, away from either endpoint or any grid-line crossing.
+    simulation.us = np.array([0., 1.])
+    simulation.vs = np.array([0., 1.])
+    simulation.grid_pts = [[(float(i), float(j), 0.) for j in range(2)] for i in range(2)]
+    simulation.starting_grid_heights = np.array([[0., 2.], [2., 0.]])
+    simulation._blade_edge_local = lambda top=False: np.array([[0., 0., 0.], [1., 1., 0.]])
+    support = simulation._blade_support_heights(np.eye(3))
+    assert support.max() == pytest.approx(1.)
+
+
+@pytest.mark.parametrize("offset, stopped", [(0.01, False), (0.0, True), (-0.01, True)])
+def test_track_cut_limit_before_blade_support(simulation, monkeypatch, offset, stopped):
+    sim = simulation
+    sim.blade_roll_pitch_yaw[:] = [0.1, 0.2, 0.0]
+    R = sim._rotation_lg(0.15, 0.1, 0.0)
+    local_R = sim._rotation_lg(0.1, 0.0, 0.0)
+    uncut_center = sim.blade_arm_offset + local_R @ np.array([sim.L, 0., 0.])
+    relative_edge = (sim._blade_edge_local() - uncut_center) @ R.T
+    deepest_depth = -relative_edge[:, 2].min()
+    # Measure track-only support for this orientation on the flat terrain.
+    sim.enable_blade = False
+    track_height = sim._support_heights(R).max()
+    sim.enable_blade = True
+    sim.starting_grid_heights[:] = (
+        track_height + sim.max_world_cut_depth
+        - deepest_depth - offset)
+
+    def blade_support(rotation):
+        assert sim.cut_limit_reached == stopped
+        return np.full((2, 2), 10.0)
+
+    monkeypatch.setattr(sim, "_blade_support_heights", blade_support)
+    sim._support_heights(R, check_cut_limit=True)
+    sim._blade_terrain_interaction()
+    assert (sim.Fb == -1e9) == stopped
+
+
+def test_cut_limit_force_stops_and_holds_vehicle(simulation):
+    sim = simulation
+    sim.starting_grid_heights[:] = sim.max_world_cut_depth
+    sim._settle_tracks(sim.q[3:6].copy())
+    assert sim.cut_limit_reached
+    sim.v[0] = sim.velocity_limit
+    sim.q_dot[0] = sim.velocity_limit
+    for _ in range(2):
+        sim._update_q_dot()
+        assert sim.Fb == -1e9
+        assert sim.v[0] == 0.0
+
+
+def test_disabled_blade_does_not_stop_at_cut_limit(simulation):
+    sim = simulation
+    sim.enable_blade = False
+    sim.starting_grid_heights[:] = sim.max_world_cut_depth
+    sim._settle_tracks(sim.q[3:6].copy())
+    assert not sim.cut_limit_reached
+
+
+def test_excessive_cut_command_stops_at_cut_limit():
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.zeros(3))
+    # Normal 0.2 m feedback can finish the course; deliberately request a cut
+    # beyond the terrain limit to exercise the independent stop protection.
+    sim.controller.desired_depth = sim.max_world_cut_depth + sim.H
+    sim.stop_time = 5.0
+    sim.run()
+    assert sim.total_distance < sim.stop_distance
+    assert sim.cut_limit_reached
+    assert sim.Fb == -1e9
+    assert sim.v[0] == 0.0
+
+
+@pytest.mark.parametrize("roll", [-0.2, 0.0, 0.2])
+def test_cut_limit_roll_depth_excludes_arm_lift(simulation, roll):
+    sim = simulation
+    sim.blade_roll_pitch_yaw[:] = [roll, 0.2, 0.0]
+    pitch = 0.15
+    R = sim._rotation_lg(0.0, pitch, 0.0)
+    sim.enable_blade = False
+    track_height = sim._support_heights(R).max()
+    sim.enable_blade = True
+    # Analytic depth below the uncut center; either roll sign lowers an end.
+    depth = np.cos(pitch) * (
+        np.cos(roll) * sim.blade_cut_depth() + abs(np.sin(roll)) * sim.B1 / 2)
+    sim.starting_grid_heights[:] = track_height + sim.max_world_cut_depth - depth
+    for arm_height in (0.0, 10.0):
+        sim.blade_arm_offset = np.array([5.0, 0.0, arm_height])
+        sim._support_heights(R, check_cut_limit=True)
+        assert sim.cut_limit_reached
+        sim.starting_grid_heights[:] -= 0.01
+        sim._support_heights(R, check_cut_limit=True)
+        assert not sim.cut_limit_reached
+        sim.starting_grid_heights[:] += 0.01
+
+
+@pytest.mark.parametrize("depth, expected", [(-0.1, 0.3), (0.1, 0.1), (0.2, 0.0), (0.3, -0.1)])
+def test_deformation_controller_signed_depth_error(simulation, depth, expected):
+    controller = simulation.controller
+    angles = np.array([0.04, 0.1, -0.03])
+    errors, plot_errors = controller.blade_deformation_errors(angles, 2.0, 2.0 - depth)
+    np.testing.assert_allclose(errors, [-0.04, expected, 0.03], atol=1e-12)
+    np.testing.assert_allclose(plot_errors, errors)
+    np.testing.assert_allclose(
+        controller.proportional_blade_controller(angles, 2.0, 2.0 - depth),
+        controller.Kp * errors)
+
+
+def test_blade_bottom_center_includes_body_and_offset(simulation):
+    sim = simulation
+    angle = np.pi / 6
+    depth = 0.2
+    sim.q[:] = [1.0, -1.0, 2.0, angle, 0.0, np.pi / 2]
+    sim.blade_arm_offset = np.array([0.4, 0.3, 0.1])
+    sim.blade_roll_pitch_yaw[:] = [angle, np.arcsin(depth / sim.L), 0.0]
+    expected = [
+        1.0 - (0.3 * np.cos(angle) - 0.1 * np.sin(angle) + depth * np.sin(2 * angle)),
+        -1.0 + 0.4 + sim.L,
+        2.0 + 0.3 * np.sin(angle) + 0.1 * np.cos(angle) - depth * np.cos(2 * angle),
+    ]
+    np.testing.assert_allclose(sim._blade_bottom_center(), expected, atol=1e-12)
+
+
+def test_controller_samples_original_surface_at_blade_center(simulation, monkeypatch):
+    sim = simulation
+    sim.starting_grid_heights[:] = 0.3 * sim.us[:, None] + 0.1 * sim.vs[None, :]
+    sim.blade_arm_offset = np.array([0.4, 0.2, 0.1])
+    observed = []
+
+    def capture(angles, starting_height, blade_height):
+        observed.append((starting_height, blade_height))
+        return np.zeros(3)
+
+    monkeypatch.setattr(sim.controller, "proportional_blade_controller", capture)
+    sim._blade_update()
+    np.testing.assert_allclose(observed, [[0.3 * (sim.L + 0.4) + 0.1 * 0.2, 0.1]])
+
+
+@pytest.mark.parametrize("initial_depth, direction", [(0.1, 1), (0.3, -1)])
+def test_deformation_feedback_moves_pitch_toward_target(simulation, initial_depth, direction):
+    sim = simulation
+    sim.blade_roll_pitch_yaw[1] = np.arcsin(initial_depth / sim.L)
+    before = sim.blade_roll_pitch_yaw[1]
+    sim._blade_update()
+    change = sim.blade_roll_pitch_yaw[1] - before
+    assert direction * change > 0
+    assert abs(change) <= sim.blade_roll_pitch_yaw_rate_limits[1] * sim.dt + 1e-12
+
+
+def test_deformation_controller_converges_on_flat_surface(simulation):
+    sim = simulation
+    for _ in range(300):
+        sim._blade_update()
+    measured_depth = sim._undeformed_height(sim._blade_bottom_center()) - sim._blade_bottom_center()[2]
+    assert measured_depth == pytest.approx(0.2, abs=1e-3)
+
+
+# Blade derivative
+def test_first_sample_and_reset_have_no_derivative_kick():
+    controller = Control(1.2, 0.1, 1.0)
+    error = controller.blade_deformation_errors(0., 0.)[0]
+    np.testing.assert_allclose(controller.proportional_blade_controller(0., 0.), controller.Kp * error)
+    np.testing.assert_array_equal(controller.derivative_error, 0.)
+    controller.proportional_blade_controller(0., -0.1)
+    controller.reset_derivative()
+    np.testing.assert_allclose(controller.proportional_blade_controller(0., 0.), controller.Kp * error)
+    np.testing.assert_array_equal(controller.derivative_error, 0.)
+
+
+@pytest.mark.parametrize("dt", [0.01, 0.1])
+def test_derivative_uses_error_difference_over_timestep(dt):
+    controller = Control(1.2, dt, 1.0)
+    previous = controller.blade_deformation_errors(0., 0.)[0]
+    controller.proportional_blade_controller(0., 0.)
+    current = controller.blade_deformation_errors(0., -0.1)[0]
+    command = controller.proportional_blade_controller(0., -0.1)
+    expected = (current - previous) / dt
+    np.testing.assert_allclose(controller.derivative_error, expected)
+    np.testing.assert_allclose(command, controller.Kp * current + controller.Kd * expected)
+    assert command[1] < (controller.Kp * current)[1]
+    controller.proportional_blade_controller(0., -0.1)
+    np.testing.assert_array_equal(controller.derivative_error, 0.)
+
+
+def test_zero_derivative_gain_preserves_proportional_output():
+    controller = Control(1.2, 0.1, 1.0)
+    controller.Kd[:] = 0.
+    controller.proportional_blade_controller(0., 0.)
+    command = controller.proportional_blade_controller(0., -0.1)
+    np.testing.assert_allclose(command, controller.Kp * controller.blade_deformation_errors(0., -0.1)[0])
+
+
+@pytest.mark.parametrize("limit", ["rate", "angle"])
+def test_actuator_limits_still_apply(limit):
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.zeros(3))
+    if limit == "rate":
+        sim.blade_roll_pitch_yaw_rate_limits[:] = 0.
+    else:
+        sim.blade_roll_pitch_yaw_limits[:] = 0.
+    sim._blade_update()
+    sim.controller.desired_depth = 1.0
+    sim._blade_update()
+    np.testing.assert_array_equal(sim.blade_roll_pitch_yaw, 0.)
+
+
+def test_geometry_refresh_does_not_update_derivative_history():
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.zeros(3))
+    sim._blade_update(deform=False)
+    assert sim.controller.previous_blade_error is None
+    sim._blade_update()
+    previous = sim.controller.previous_blade_error.copy()
+    sim._blade_update(deform=False)
+    np.testing.assert_array_equal(sim.controller.previous_blade_error, previous)
+
+
+# Blade rmse
+def test_rmse_uses_each_reference_and_includes_terminal_pose(monkeypatch, capsys):
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.zeros(3))
+    sim.controller.desired_depth = 0.2
+    sim.stop_time = 0.1
+    sim.stop_distance = 0.01
+    sim.q_dot[:3] = [1., 0., 0.]
+    monkeypatch.setattr(sim, "_blade_bottom_center", lambda: np.array([0., 0., 0.]))
+    monkeypatch.setattr(sim, "_undeformed_height", lambda _: 0.)
+    monkeypatch.setattr(sim, "_blade_update", lambda **_: (np.zeros((2, 3)), []))
+    def move():
+        sim.controller.desired_depth = 0.4
+        return []
+    monkeypatch.setattr(sim, "_body_update", move)
+    sim.run()
+    assert sim.blade_depth_rmse == pytest.approx(np.sqrt((0.2**2 + 0.4**2) / 2))
+    assert len(sim.force_log) == len(sim.log) == 2
+    assert sim.force_log[-1]["desired_depth"] == 0.4
+    assert sim.force_log[-1]["blade_depth_error"] == -0.4
+    assert "Blade depth RMSE:" in capsys.readouterr().out
+
+
+def test_zero_step_run_uses_current_initial_depth():
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.zeros(3))
+    sim.stop_time = 0.
+    center = sim._blade_bottom_center()
+    sim.controller.desired_depth = sim._undeformed_height(center) - center[2]
+    sim.run()
+    assert sim.blade_depth_rmse == pytest.approx(0.)
+
+
+def test_disabled_blade_has_no_depth_rmse(capsys):
+    sim = DozerSimulation(enable_blade=False)
+    sim.stop_time = 0.02
+    sim.run()
+    assert sim.blade_depth_rmse is None
+    assert "Blade depth RMSE:" not in capsys.readouterr().out
+
+
+# Forces
+@pytest.mark.parametrize("enable_blade", [True, False])
+def test_force_history_matches_logged_steps(enable_blade):
+    simulation = DozerSimulation(enable_blade=enable_blade)
+    simulation.stop_time = 0.04
+    simulation.run()
+    assert len(simulation.force_log) == len(simulation.log)
+    np.testing.assert_allclose(
+        [row["time"] for row in simulation.force_log],
+        np.asarray(simulation.log)[:, 0],
+    )
+    last = simulation.force_log[-1]
+    assert last["Fb"] == simulation.Fb
+    assert last["Mr"] == simulation.Mr
+    assert last["v_forward"] == simulation.v[0]
+    center = simulation._blade_bottom_center()
+    assert last["starting_surface_height"] == pytest.approx(simulation._undeformed_height(center))
+    assert last["blade_bottom_height"] == pytest.approx(center[2])
+    simulation.q[2] += 1.0
+    assert last["blade_bottom_height"] == pytest.approx(center[2])
+    original = last["drive_left"]
+    simulation.F_track[0] = -1
+    assert last["drive_left"] == original
+
+
+def test_force_gif_includes_final_sample_and_all_panels(monkeypatch, tmp_path):
+    simulation = DozerSimulation()
+    for index in range(1, 4):
+        simulation.Fb = -100.0 * index
+        simulation.Mb = 20.0 * index
+        simulation.requested_blade_rates = np.array([index, -2 * index, 3 * index], dtype=float)
+        simulation.q[2] += 0.1
+        simulation._log_forces(index * simulation.dt)
+    captured = []
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(visualization_module.plt, "close", lambda fig: captured.append(fig))
+    try:
+        output = Visualization(simulation).forces_visualization(tmp_path / "forces.gif")
+        with Image.open(output) as gif:
+            assert gif.n_frames == 3
+            assert gif.size == (1200, 1300)
+        figure = captured[-1]
+        assert len(figure.axes) == 10
+        height_axis = figure.axes[-2]
+        assert height_axis.get_title() == "Blade-center heights"
+        for line, key in zip(height_axis.lines[:2], ("starting_surface_height", "blade_bottom_height")):
+            np.testing.assert_allclose(line.get_ydata(), [row[key] for row in simulation.force_log])
+            np.testing.assert_allclose(line.get_xdata(), [0, .01, .02, .03])
+        rate_axis = figure.axes[-1]
+        assert rate_axis.get_title() == "Requested blade rates (before limiting)"
+        for line, scale in zip(rate_axis.lines[:3], (1, -2, 3)):
+            np.testing.assert_allclose(line.get_ydata(), np.arange(4) * scale)
+            np.testing.assert_allclose(line.get_xdata(), [0, .01, .02, .03])
+        assert np.ptp(height_axis.lines[1].get_ydata()) > 0.2
+        np.testing.assert_allclose(figure.axes[0].lines[0].get_ydata(), [0, -100, -200, -300])
+        np.testing.assert_allclose(figure.axes[0].lines[0].get_xdata(), [0, .01, .02, .03])
+    finally:
+        for figure in captured:
+            real_close(figure)
+
+
+def test_single_sample_force_gif(tmp_path):
+    output = Visualization(DozerSimulation()).forces_visualization(tmp_path / "initial.gif")
+    with Image.open(output) as gif:
+        assert gif.n_frames == 1
+
+
+def test_requested_rates_are_saved_before_limiting(monkeypatch):
+    simulation = DozerSimulation()
+    previous = simulation.blade_roll_pitch_yaw.copy()
+    command = np.array([2., -3., 4.])
+    monkeypatch.setattr(simulation.controller, "proportional_blade_controller", lambda *_: command)
+    simulation._blade_update()
+    expected = command / simulation.dt
+    np.testing.assert_allclose(simulation.requested_blade_rates, expected)
+    assert np.all(np.abs(expected) > simulation.blade_roll_pitch_yaw_rate_limits)
+    assert np.all(np.abs(simulation.blade_roll_pitch_yaw - previous)
+                  <= simulation.blade_roll_pitch_yaw_rate_limits * simulation.dt + 1e-12)
+    simulation._blade_update(deform=False)
+    simulation._log_forces(simulation.dt)
+    simulation.requested_blade_rates[:] = 0
+    for key, value in zip(("requested_roll_rate", "requested_pitch_rate", "requested_yaw_rate"), expected):
+        assert simulation.force_log[-1][key] == pytest.approx(value)
+        assert simulation.force_log[0][key] == 0
+
+
+# Pd tuning
+def test_pd_grid_search_uses_fresh_simulations_and_actual_gains(monkeypatch, tmp_path):
+    trials = []
+    class Simulation:
+        def __init__(self, blade_roll_pitch_yaw, controller_type):
+            assert controller_type == "pd"
+            np.testing.assert_array_equal(blade_roll_pitch_yaw, 0.)
+            self.controller = type("Controller", (), {"Kp": np.zeros(3), "Kd": np.zeros(3)})()
+            self.total_distance = 1.
+            self.cut_limit_reached = False
+            trials.append(self)
+        def run(self):
+            assert np.isinf(self.stop_distance)
+            assert self.controller.desired_depth == 0.3
+            assert self.stop_time == 1.0
+            self.blade_depth_rmse = self.controller.Kp[1] + 10 * self.controller.Kd[1]
+            self.force_log = [{"time": self.stop_time}]
+    monkeypatch.setattr(tuning, "DozerSimulation", Simulation)
+    result = tuning.Tuning("pd").grid_search([1., 2.], [0., 0.1], duration=1., output_dir=tmp_path)
+    np.testing.assert_allclose(result, [[1., 2.], [2., 3.]])
+    assert len(trials) == 4
+    assert (tmp_path / "rmse_heatmap.png").is_file()
+    with (tmp_path / "results.csv").open() as stream:
+        reader = csv.DictReader(stream)
+        assert reader.fieldnames == ["kp", "kd", "rmse_m", "desired_depth_m",
+                                    "duration_s", "distance_m", "cut_limit_reached"]
+        rows = list(reader)
+        np.testing.assert_allclose([float(row["rmse_m"]) for row in rows], result.ravel())
+        np.testing.assert_allclose([float(row["kp"]) for row in rows], [1., 2., 1., 2.])
+        np.testing.assert_allclose([float(row["kd"]) for row in rows], [0., 0., .1, .1])
+
+
+# Pi controller
+def test_pi_accumulates_and_resets():
+    controller = Control(1.2, .1, 1., controller_type="pi")
+    error = controller.blade_deformation_errors(0., 0.)[0]
+    for n in range(1, 4):
+        output = controller.proportional_blade_controller(0., 0.)
+        np.testing.assert_allclose(controller.integral_error, error * n * .1)
+        np.testing.assert_allclose(output, controller.Kp * error + controller.Ki * error * n * .1)
+    controller.reset_integrator()
+    np.testing.assert_array_equal(controller.integral_error, 0.)
+
+
+@pytest.mark.parametrize("limit", ["rate", "angle"])
+def test_pi_limits_prevent_windup(limit):
+    sim = DozerSimulation(controller_type="pi", blade_roll_pitch_yaw=np.zeros(3))
+    if limit == "rate":
+        sim.blade_roll_pitch_yaw_rate_limits[:] = 0.
+    else:
+        sim.blade_roll_pitch_yaw_limits[:] = 0.
+    for _ in range(3):
+        sim._blade_update()
+    np.testing.assert_array_equal(sim.controller.integral_error, 0.)
+
+
+def test_pi_can_unwind_at_limit():
+    controller = Control(1.2, .1, 1., controller_type="pi")
+    controller._previous_integral[1] = .5
+    controller.integral_error[1] = .4
+    controller.apply_actuator_feedback(np.array([0., .2, 0.]), np.array([0., .1, 0.]))
+    assert controller.integral_error[1] == .4
+
+
+def test_controller_selection_and_geometry_only_update():
+    assert type(DozerSimulation().controller) is Control
+    sim = DozerSimulation(controller_type="pi")
+    assert type(sim.controller) is Control
+    assert sim.controller.controller_type == "pi"
+    sim._blade_update(deform=False)
+    np.testing.assert_array_equal(sim.controller.integral_error, 0.)
+    with pytest.raises(ValueError):
+        DozerSimulation(controller_type="unknown")
+
+
+# Pi tuning
+def test_pi_grid_search_uses_fresh_simulations_and_actual_gains(monkeypatch, tmp_path):
+    trials = []
+    class Simulation:
+        def __init__(self, blade_roll_pitch_yaw, controller_type):
+            assert controller_type == "pi"
+            np.testing.assert_array_equal(blade_roll_pitch_yaw, 0.)
+            self.controller = type("Controller", (), {"Kp": np.zeros(3), "Ki": np.zeros(3)})()
+            self.total_distance = 1.
+            self.cut_limit_reached = False
+            trials.append(self)
+        def run(self):
+            assert np.isinf(self.stop_distance)
+            assert self.controller.desired_depth == 0.3
+            assert self.stop_time == 1.0
+            self.blade_depth_rmse = self.controller.Kp[1] + 10 * self.controller.Ki[1]
+            self.force_log = [{"time": self.stop_time}]
+    monkeypatch.setattr(tuning, "DozerSimulation", Simulation)
+    result = tuning.Tuning("pi").grid_search([1., 2.], [0., 0.1], duration=1., output_dir=tmp_path)
+    np.testing.assert_allclose(result, [[1., 2.], [2., 3.]])
+    assert len(trials) == 4
+    assert (tmp_path / "rmse_heatmap.png").is_file()
+    with (tmp_path / "results.csv").open() as stream:
+        reader = csv.DictReader(stream)
+        assert reader.fieldnames == ["kp", "ki", "rmse_m", "desired_depth_m",
+                                    "duration_s", "distance_m", "cut_limit_reached"]
+        rows = list(reader)
+        np.testing.assert_allclose([float(row["rmse_m"]) for row in rows], result.ravel())
+        np.testing.assert_allclose([float(row["kp"]) for row in rows], [1., 2., 1., 2.])
+        np.testing.assert_allclose([float(row["ki"]) for row in rows], [0., 0., .1, .1])
+
+
+# Visualization
+@pytest.mark.parametrize("offset", ([0.5, 0, 0], [0, 0, 0], [0.4, -0.3, 8.0]))
+def test_offset_blade_renders_without_arm_overlay(monkeypatch, tmp_path, offset):
+    simulation = DozerSimulation(blade_roll_pitch_yaw=np.array([0.2, 0.1, -0.3]))
+    simulation.blade_arm_offset = np.array(offset)
+    simulation.log = []
+    simulation.blade_log = []
+    simulation.grid_log = []
+    simulation.neighbor_log = []
+    for i in range(3):
+        simulation.q = np.array([0.1 * i, 0.2 * i, 0.3, 0.1 * i, -0.05 * i, 0.4 * i])
+        simulation.log.append(np.r_[i * simulation.dt, simulation.q])
+        blade, _ = simulation._blade_update(deform=False)
+        simulation.blade_log.append(blade)
+        simulation.grid_log.append(simulation._grid_heights())
+        simulation.neighbor_log.append([])
+    captured = {}
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(visualization_module.plt, "close", lambda fig: captured.setdefault("figure", fig))
+    monkeypatch.chdir(tmp_path)
+    try:
+        visualization_module.Visualization(simulation).visualization()
+        figure = captured["figure"]
+        blade = np.asarray(simulation.blade_log[-1])
+        top = blade[[0, -1], :3] + simulation._blade_rotation_lg(blade[0, 3:6])[:, 2] * simulation.H
+        expected = np.vstack([blade[0, :3], blade[-1, :3], top[-1], top[0]])
+        projections = {("X (m)", "Y (m)"): [0, 1],
+                       ("Y (m)", "Z (m)"): [1, 2],
+                       ("X (m)", "Z (m)"): [0, 2]}
+        for axis in figure.axes:
+            assert all(line.get_label() != "offset blade arm" for line in axis.lines)
+            if axis.name == "3d":
+                continue
+            projection = projections[(axis.get_xlabel(), axis.get_ylabel())]
+            face, = axis.patches
+            np.testing.assert_allclose(face.get_xy()[:4], expected[:, projection])
+        assert (tmp_path / "figures" / "simulation.gif").is_file()
+    finally:
+        if "figure" in captured:
+            real_close(captured["figure"])
+
+
+def test_body_only_render_does_not_need_arm_offset(monkeypatch, tmp_path):
+    simulation = DozerSimulation(enable_blade=False)
+    del simulation.blade_arm_offset
+    captured = {}
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(visualization_module.plt, "close", lambda fig: captured.setdefault("figure", fig))
+    monkeypatch.chdir(tmp_path)
+    try:
+        visualization_module.Visualization(simulation).visualization()
+        assert all(line.get_label() != "offset blade arm"
+                   for axis in captured["figure"].axes for line in axis.lines)
+        assert (tmp_path / "figures" / "simulation.gif").is_file()
+    finally:
+        if "figure" in captured:
+            real_close(captured["figure"])
+
+
+# Soil spill-over while turning
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+@pytest.mark.parametrize("speed_ratio, expected", [
+    (0.0, 1.0), (0.5, 0.5), (-0.5, 0.5),
+    (1.0, 0.0), (-1.0, 0.0), (1.5, 0.0), (-1.5, 0.0),
+])
+def test_soil_spill_scales_stored_fill(model, speed_ratio, expected):
+    sim = model()
+    angles = np.array([0.05, 0.1, 0.0])
+    if model is DozerSimulation:
+        sim.blade_roll_pitch_yaw = angles
+        interact = sim._blade_terrain_interaction
+    else:
+        sim.bld_ang = angles
+        interact = sim.blade_terrain_interaction
+    interact()
+    empty_load = np.array([sim.Fb, sim.Mb])
+    sim.total_distance = 100.0
+    sim.fill_progress_distance = sim.fill_distance
+    interact()
+    full_load = np.array([sim.Fb, sim.Mb])
+    full_heights = np.array([sim.H3, sim.H4])
+    sim.dt = sim.spill_reference_seconds
+    sim.v[1] = speed_ratio * sim.angular_velocity_limit
+    sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance * expected)
+    assert sim.total_distance == 100.0
+    expected_load = empty_load + (full_load - empty_load) * expected
+    for _ in range(2):
+        interact()
+        np.testing.assert_allclose([sim.Fb, sim.Mb], expected_load)
+        np.testing.assert_allclose([sim.H3, sim.H4], full_heights * expected)
+    # Straightening does not restore spilled soil; additional travel refills it.
+    sim.v[1] = 0.0
+    sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance * expected)
+    sim._update_fill_progress(sim.fill_distance * 2)
+    assert sim.fill_progress_distance == sim.fill_distance
+
+
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+@pytest.mark.parametrize("dt", [0.01, 0.1, 0.25])
+def test_soil_spill_retention_over_reference_duration(model, dt):
+    sim = model()
+    sim.dt = dt
+    sim.spill_reference_seconds = 2.0
+    sim.fill_progress_distance = sim.fill_distance
+    sim.v[1] = sim.angular_velocity_limit / 2
+    for _ in range(round(sim.spill_reference_seconds / dt)):
+        sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance / 2)
+
+
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+def test_soil_fill_caps_before_spill_and_retains_when_turning_disabled(model):
+    sim = model()
+    sim.dt = sim.spill_reference_seconds
+    sim.fill_progress_distance = sim.fill_distance
+    sim.v[1] = sim.angular_velocity_limit / 2
+    sim._update_fill_progress(100.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance / 2)
+    sim.angular_velocity_limit = 0.0
+    sim._update_fill_progress(0.0)
+    assert sim.fill_progress_distance == pytest.approx(sim.fill_distance / 2)
+
+
+@pytest.mark.parametrize("backwards", [False, True])
+def test_soil_spill_preserves_cut_depth_stop(backwards):
+    sim = DozerSimulation()
+    sim.is_backwards = backwards
+    sim.cut_limit_reached = True
+    sim.v[1] = sim.angular_velocity_limit
+    sim._blade_terrain_interaction()
+    assert sim.Fb == (1e9 if backwards else -1e9)
+    assert sim.Mb == 0.0
+
+
+@pytest.mark.parametrize("model", [BulldozerSimulation, DozerSimulation])
+def test_simulation_run_advances_fill_once_per_step(model):
+    sim = model()
+    sim.stop_time = 0.04
+    updates = []
+    update = sim._update_fill_progress
+
+    def record_update(distance_step):
+        updates.append(distance_step)
+        update(distance_step)
+
+    sim._update_fill_progress = record_update
+    sim.run()
+    assert len(updates) == round(sim.stop_time / sim.dt)
+    assert sum(updates) == pytest.approx(sim.total_distance)
+    assert sim.total_distance > 0.0
+    assert 0.0 <= sim.fill_progress_distance <= min(sim.fill_distance, sim.total_distance)
+
+
+@pytest.mark.parametrize("mode", ["pd", "pi", "legacy"])
+def test_fixed_rolled_blade_bypasses_control(mode, monkeypatch):
+    angles = np.array([0.05, 0.0, 0.0])
+
+    def unexpected_control(*args):
+        pytest.fail("Fixed blade must not invoke its controller")
+
+    if mode == "legacy":
+        sim = BulldozerSimulation(enable_blade_control=False)
+        sim.bld_ang = angles.copy()
+    else:
+        sim = DozerSimulation(blade_roll_pitch_yaw=angles.copy(),
+                              controller_type=mode, enable_blade_control=False)
+        monkeypatch.setattr(sim.controller, "proportional_blade_controller", unexpected_control)
+        cuts = []
+        deform = sim._deform_blade_tiles
+
+        def record_cut(contacts):
+            cuts.append(contacts)
+            return deform(contacts)
+
+        monkeypatch.setattr(sim, "_deform_blade_tiles", record_cut)
+    sim.stop_time = 0.03
+    sim.run()
+    if mode == "legacy":
+        np.testing.assert_array_equal(sim.bld_ang, angles)
+    else:
+        np.testing.assert_array_equal(sim.blade_roll_pitch_yaw, angles)
+        assert cuts
+        np.testing.assert_array_equal(sim.requested_blade_rates, 0.0)
+        assert sim.controller.previous_blade_error is None
+        if mode == "pi":
+            np.testing.assert_array_equal(sim.controller.integral_error, 0.0)
+
+
+# Soil pile visualization
+@pytest.mark.parametrize("roll", [0.0, 0.05, -0.05])
+def test_pile_geometry_follows_blade_and_snapshots_are_independent(roll):
+    sim = DozerSimulation(enable_blade_control=False)
+    assert sim.pile_log[0][:2] == (0.0, 0.0)
+    sim.H3, sim.H4 = 2.0, 2.0  # Must be capped at the exposed blade height.
+    sim.q[:] = [1., 2., 0., 0., 0., 0.4]
+    sim.blade_roll_pitch_yaw = np.array([roll, np.arcsin(0.2 / sim.L), -0.2])
+    vertices = Visualization(sim)._pile_vertices(
+        sim._blade_update(deform=False)[0],
+        (sim.H3, sim.H4, *sim.blade_roll_pitch_yaw[[0, 2]]))
+    assert vertices.shape[0] > 6 and vertices.shape[1] == 3
+    for base, crest, toe in vertices.reshape(-1, 3, 3):
+        assert base[2] == pytest.approx(sim._undeformed_height(base), abs=1e-10)
+        assert toe[2] == pytest.approx(sim._undeformed_height(toe), abs=1e-10)
+        assert crest[2] > base[2]
+    local = (vertices - sim._blade_bottom_center()) @ sim._blade_rotation_lg(sim.q[3:6])
+    np.testing.assert_allclose(local.reshape(-1, 3, 3)[:, :2, 0], 0., atol=1e-10)
+    np.testing.assert_allclose(local[1::3, 2], sim.H, atol=1e-10)
+    assert np.all(local[::3, 2] > 0.)  # Base is above the buried cutting edge.
+    saved = vertices.copy()
+    sim.H3 = 0.8
+    sim.q[0] += 1.
+    np.testing.assert_array_equal(vertices, saved)
+    sim.H3 = sim.H4 = 0.
+    assert Visualization(sim)._pile_vertices(
+        sim._blade_update(deform=False)[0],
+        (sim.H3, sim.H4, *sim.blade_roll_pitch_yaw[[0, 2]])).shape == (0, 3)
+
+
+def test_pile_hidden_when_blade_is_buried():
+    sim = DozerSimulation(enable_blade_control=False)
+    sim.H3 = sim.H4 = 0.5
+    sim.q[2] = -2.0
+    assert Visualization(sim)._pile_vertices(
+        sim._blade_update(deform=False)[0],
+        (sim.H3, sim.H4, *sim.blade_roll_pitch_yaw[[0, 2]])).shape == (0, 3)
+
+
+def test_pile_renders_in_all_views(monkeypatch, tmp_path):
+    sim = DozerSimulation(blade_roll_pitch_yaw=np.array([0.05, 0., 0.]),
+                          enable_blade_control=False)
+    sim.fill_distance = 0.01
+    sim.stop_time = 0.04
+    sim.run()
+    assert len(sim.pile_log) == len(sim.log)
+    assert sim.pile_log[0][:2] == (0.0, 0.0)
+    assert len(sim.pile_log[-1]) == 4
+    assert max(sim.pile_log[-1][:2]) > 0.0
+    captured = []
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(visualization_module.plt, "close", lambda fig: captured.append(fig))
+    monkeypatch.chdir(tmp_path)
+    try:
+        Visualization(sim).visualization()
+        figure = captured[-1]
+        for axis in figure.axes:
+            pile, = [artist for artist in axis.collections if artist.get_label() == "soil pile"]
+            assert len(pile.get_paths()) > 8
+            tooth, = [artist for artist in axis.collections if artist.get_label() == "surface tooth"]
+            assert len(tooth.get_paths()) > 0
+            np.testing.assert_allclose(np.asarray(tooth.get_facecolor())[0],
+                                       visualization_module.to_rgba("burlywood"))
+        with Image.open(tmp_path / "figures" / "simulation.gif") as gif:
+            assert gif.n_frames == 3
+    finally:
+        for figure in captured:
+            real_close(figure)
+
+
+def test_pile_visualizer_uses_logged_state_after_simulation_changes():
+    sim = DozerSimulation(enable_blade_control=False)
+    sim.blade_roll_pitch_yaw = np.array([0.05, np.arcsin(0.2 / sim.L), 0.1])
+    blade = sim._blade_update(deform=False)[0]
+    state = (0.3, 0.2, 0.05, 0.1)
+    visualizer = Visualization(sim)
+    expected = visualizer._pile_vertices(blade, state)
+    assert expected.shape[0] > 6 and expected.shape[1] == 3
+    sim.q[:] = 10.
+    sim.blade_roll_pitch_yaw[:] = 0.
+    sim.H3 = sim.H4 = 0.
+    np.testing.assert_array_equal(visualizer._pile_vertices(blade, state), expected)
+
+
+def test_surface_tooth_connects_blade_to_soil_without_pile():
+    sim = DozerSimulation(enable_blade_control=False)
+    visualizer = Visualization(sim)
+    blade = np.array([[0.1, -0.5, -0.2, 0., 0., 0.],
+                      [0.1, 0., -0.2, 0., 0., 0.],
+                      [0.1, 0.5, -0.2, 0., 0., 0.]])
+    heights = np.zeros_like(sim.starting_grid_heights)
+    faces = np.asarray(visualizer._surface_tooth_faces(blade, heights))
+    assert faces.shape == (4, 3, 3)
+    np.testing.assert_allclose(faces[::2, 0], blade[:-1, :3])
+    np.testing.assert_allclose(faces[::2, 1:, 2], 0.)
+    assert np.all(faces[::2, 1:, 0] > 0.1)
+    assert visualizer._pile_faces(np.empty((0, 3))) == []
+    lowered = np.asarray(visualizer._surface_tooth_faces(blade, heights - 0.3))
+    np.testing.assert_allclose(lowered[:, :, 2], -0.3)
+
+
+@pytest.mark.parametrize("yaw", [0., 0.6, 1.8])
+def test_pile_drawing_order_follows_camera_side(yaw):
+    sim = DozerSimulation(enable_blade_control=False)
+    rotation = sim._rotation_lg(0.1, 0.2, yaw)
+    face = np.array([[1., -1., 0.], [1., 1., 0.],
+                     [1., 1., 1.], [1., -1., 1.]]) @ rotation.T
+    body_center = rotation @ np.array([0., 0., 0.5])
+    front_eye = rotation @ np.array([5., 0., 2.])
+    rear_eye = rotation @ np.array([-5., 0., 2.])
+    assert Visualization._pile_in_front_of_blade(face, front_eye, body_center)
+    assert not Visualization._pile_in_front_of_blade(face, rear_eye, body_center)
+
+
+def test_pile_contact_boundary_grows_continuously():
+    sim = DozerSimulation(enable_blade_control=False)
+    visualizer = Visualization(sim)
+    sim.blade_roll_pitch_yaw = np.array([0.05, 0., 0.])
+    state = (0.8, 0.8, 0.05, 0.)
+
+    def geometry(body_height):
+        sim.q[:] = [0., 0., body_height, 0., 0., 0.]
+        blade = sim._blade_update(deform=False)[0]
+        return visualizer._pile_vertices(blade, state)
+
+    before = geometry(1e-6)
+    after = geometry(-1e-6)
+    assert before.shape == after.shape
+    assert np.max(np.abs(after - before)) < 1e-4
+    strips = after.reshape(-1, 3, 3)
+    heights = np.linalg.norm(strips[:, 1] - strips[:, 0], axis=1)
+    np.testing.assert_allclose(heights, 0.8)  # No sideways contact taper.
+    # Ground contact must not suddenly reveal a previously hidden endpoint.
+    end_height = -sim.B1 / 2 * np.sin(0.05)
+    before = geometry(end_height + 1e-6)
+    after = geometry(end_height - 1e-6)
+    assert before.shape == after.shape
+    assert np.max(np.abs(after - before)) < 1e-4
+    faces = np.asarray(visualizer._pile_faces(after))
+    assert faces.shape[1:] == (3, 3)
+    assert len(faces) == 2 + 6 * (len(after) // 3 - 1)
+
+
+def test_pile_grows_outward_across_full_blade_width():
+    sim = DozerSimulation(enable_blade_control=False)
+    sim.blade_roll_pitch_yaw = np.array([0.05, 0., 0.])
+    blade = sim._blade_update(deform=False)[0]
+    visualizer = Visualization(sim)
+    small = visualizer._pile_vertices(blade, (0.1, 0.1, 0.05, 0.)).reshape(-1, 3, 3)
+    large = visualizer._pile_vertices(blade, (0.2, 0.2, 0.05, 0.)).reshape(-1, 3, 3)
+    np.testing.assert_allclose(small[:, 0], large[:, 0])
+    small_reach = np.linalg.norm(small[:, 2, :2] - small[:, 0, :2], axis=1)
+    large_reach = np.linalg.norm(large[:, 2, :2] - large[:, 0, :2], axis=1)
+    assert np.all(small_reach > 0.)
+    np.testing.assert_allclose(large_reach, 2 * small_reach)
+    np.testing.assert_allclose(small[:, 0, 2], 0., atol=1e-10)
+
+
+def test_control_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="controller_type"):
+        Control(1.2, 0.1, 1.0, controller_type="pid")
+
+
+def test_control_pd_does_not_accumulate_pi_state():
+    controller = Control(1.2, 0.1, 1.0)
+    for _ in range(3):
+        controller.proportional_blade_controller(0., 0.)
+        controller.apply_actuator_feedback(np.ones(3), np.zeros(3))
+    np.testing.assert_array_equal(controller.integral_error, 0.)
+    assert controller.controller_type == "pd"
+
+
+# Pure pursuit and calibrated track-force mapping
+@pytest.mark.parametrize("yaw", [-1.0, 0.0, 1.0])
+@pytest.mark.parametrize("tilted", [False, True])
+def test_path_controller_matches_main(yaw, tilted):
+    legacy = BulldozerSimulation()
+    legacy.surface_abg = np.array([0.1, -0.05, 0.2]) if tilted else np.zeros(3)
+    legacy.path_points = legacy.figure8_path()
+    legacy.q[:] = [1., 0.3, 0., 0.1, -0.05, yaw]
+    legacy.R_lg = legacy.rotation_lg(*legacy.q[3:6])
+    control = Control(1.2, .01, 1.)
+    control.configure_path(surface_rotation=legacy.rotation_lg(*legacy.surface_abg))
+    np.testing.assert_allclose(control.path_points, legacy.path_points)
+    actual = control.angular_path_controller(legacy.q, legacy.R_lg, legacy.F_track_base)
+    legacy.angular_path_controller()
+    np.testing.assert_allclose(actual, legacy.F_track)
+    assert control.heading_err == pytest.approx(legacy.heading_err)
+    assert control.cross_track_err == pytest.approx(legacy.cross_track_err)
+
+
+def test_path_mapping_is_bounded_and_symmetric():
+    control = Control(1.2, .01, 1.)
+    assert control.track_force_fraction(0.) == pytest.approx(.799)
+    values = [control.track_force_fraction(angle) for angle in np.linspace(0., np.pi, 30)]
+    assert np.all(np.diff(values) <= 0.)
+    assert min(values) >= 0. and max(values) <= 1.
+    assert control.track_force_fraction(-1.) == control.track_force_fraction(1.)
+    assert control.track_force_fraction(20.) == control.track_force_fraction(control._4pl_ang_max)
+
+
+@pytest.mark.parametrize("heading, weakened", [(-0.4, 0), (0.4, 1)])
+def test_path_controller_turn_direction_and_lookahead(heading, weakened):
+    control = Control(1.2, .01, 1.)
+    control.configure_path([[0., 0.], [10., 0.], [10., 10.], [0., 10.]], lookahead_dist=1.)
+    pose = np.array([2., 0., 0., 0., 0., heading])
+    rotation = BulldozerSimulation().rotation_lg(0., 0., heading)
+    forces = control.angular_path_controller(pose, rotation, 100.)
+    np.testing.assert_allclose(control.lookahead_point, [3., 0., 0.])
+    assert forces[weakened] < 100.
+    assert forces[1 - weakened] == 100.
+
+
+def test_path_repeated_waypoints_and_far_fallback():
+    control = Control(1.2, .01, 1.)
+    control.configure_path([[0., 0.], [0., 0.], [10., 0.], [10., 10.]], lookahead_dist=1.)
+    assert np.isfinite(control.pure_pursuit_heading_error(np.zeros(6), np.eye(3)))
+    assert np.isfinite(control.pure_pursuit_heading_error([100., 100., 0.], np.eye(3)))
+    np.testing.assert_array_equal(control.lookahead_point, [10., 10., 0.])
+
+
+@pytest.mark.parametrize("points", [[], [[0., 0.]], [[0., 0.]] * 3,
+                                    [[0., 0.], [1., 0.], [np.nan, 1.]]])
+def test_path_rejects_invalid_references(points):
+    with pytest.raises(ValueError):
+        Control(1.2, .01, 1.).configure_path(points)
+
+
+def test_path_progress_resets_with_reference():
+    control = Control(1.2, .01, 1.)
+    for index in (1950, 5):
+        pose = np.r_[control.path_points[index], np.zeros(3)]
+        control.angular_path_controller(pose, np.eye(3))
+    assert control.path_complete
+    control.configure_path()
+    assert not control.path_complete
+    assert control._nearest_path_idx == 0
+
+
+@pytest.mark.parametrize("mode", ["pd", "pi"])
+def test_path_surface_run_and_reference_rendering(mode, monkeypatch, tmp_path):
+    sim = DozerSimulation(controller_type=mode, use_path_controller=True,
+                          enable_blade_control=False, lookahead_dist=.9)
+    assert np.isinf(sim.stop_distance)
+    assert sim.us[0] < sim.controller.path_points[:, 0].min()
+    assert sim.vs[0] < sim.controller.path_points[:, 1].min()
+    sim.stop_time = .04
+    sim.run()
+    assert len(sim.log) == len(sim.force_log) == 5
+    assert any(row["drive_left"] != row["drive_right"] for row in sim.force_log)
+    assert np.all(np.isfinite([row["heading_error"] for row in sim.force_log]))
+    assert abs(sim.v[1]) <= sim.angular_velocity_limit
+    captured = []
+    real_close = visualization_module.plt.close
+    monkeypatch.setattr(visualization_module.plt, "close", lambda fig: captured.append(fig))
+    monkeypatch.chdir(tmp_path)
+    try:
+        Visualization(sim).visualization()
+        for axis in captured[-1].axes:
+            assert any(artist.get_label() == "reference path"
+                       for artist in list(axis.lines) + list(axis.collections))
+    finally:
+        for figure in captured:
+            real_close(figure)

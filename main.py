@@ -7,24 +7,28 @@ from xml.parsers.expat import errors
 import os
 
 import numpy as np
+import networkx as nx
 import matplotlib.pyplot as plt
 import matplotlib
 import matplotlib.animation as animation
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 from matplotlib.patches import Polygon as MplPolygon
 matplotlib.use("Agg")   # headless; remove if running interactively
 
 os.makedirs("figures", exist_ok=True)
 
 class BulldozerSimulation:
-    def __init__(self):
+    def __init__(self, enable_blade_control=True):
+        self.enable_blade_control = enable_blade_control
         #TODO: add comments with parameter descriptions and units (maybe change names to be more descriptive?)
         # simulation and control parameters
         self.dt            = 1/100
         self.stop_time     = 0.7
         grav               = 9.81
         # TODO: limit surface angle by soil slope max angle self.beta0
-        self.surface_abg   = np.array([ 0, 0, 0])
+        self.surface_abg   = np.array([ 0.1, 0, 0])
+        self.surface_abg2  = np.array([ 0.2, 0, 0])  # optional roll angle applied beyond u_split
+        self.u_split       = 1  # u-value where the grid switches to surface_abg2
         self.desired_depth = -0.05
         self.desired_abg   = np.array([ 0, 0, 0])
         self.fill_distance = 8.0
@@ -39,7 +43,7 @@ class BulldozerSimulation:
         self.laterial_velocity_limit = 0.0     # this governs how much the dozer can "slide" laterally
         self.angular_velocity_limit  = 2 * self.velocity_limit / self.b
         self.F_track_base            = 600000.0
-        self.F_track                 = np.array([self.F_track_base, self.F_track_base])
+        self.F_track                 = np.array([self.F_track_base, self.F_track_base *0.5])
 
         # Bulldozer blade parameters
         self.B1   = 2.921
@@ -126,7 +130,12 @@ class BulldozerSimulation:
         if (D1 == 0 and D2 == 0):
             return 0.0
         return (2*D1 + D2) / (3 * (D1 + D2)) * B1 - B1 / 2
-    
+ 
+    @property
+    def subdivision(self, division_factor: float = 1.0):
+        """Grid spacing, sized relative to the dozer width self.b."""
+        return self.b / division_factor
+
     # ---------------- Kinematics ----------------
     def rotation_gl(self, a, B, g):
         """Rotation matrix: global → local frame"""
@@ -184,6 +193,26 @@ class BulldozerSimulation:
             return 0.0
         return float(np.clip(-self.dxyz[1] / self.daBg[2], -self.l / 2, self.l / 2))
     
+    def surface_grid(self, u_range, v_range, spacing):
+        """
+        4-connected NetworkX grid of vertices evenly spaced (by `spacing`)
+        over in-plane coordinates (u, v) on the surface plane defined by
+        surface_abg. Nodes are keyed by (i, j) and hold world-frame x, y, z
+        plus a visited_last flag, initialized to False.
+        """
+        R_surf = self.rotation_lg(*self.surface_abg)
+        e1, e2 = R_surf[:, 0], R_surf[:, 1]
+        us = np.arange(u_range[0], u_range[1] + spacing / 2, spacing)
+        vs = np.arange(v_range[0], v_range[1] + spacing / 2, spacing)
+        G = nx.grid_2d_graph(len(us), len(vs))
+        for i, u in enumerate(us):
+            for j, v in enumerate(vs):
+                x, y, z = u * e1 + v * e2
+                node = G.nodes[(i, j)]
+                node["x"], node["y"], node["z"] = float(x), float(y), float(z)
+                node["visited_last"] = False
+        return G
+
     # ---------------- Dynamics ----------------
     def blade_terrain_interaction(self):
         # TODO: update this to be surface - body angle + blade angle, to account for non-flat surfaces
@@ -231,6 +260,13 @@ class BulldozerSimulation:
         yc2     = self.yc(     H3,      H4, self.B1)
         
         self.Mb = yc1 * F1 + yc2 * F2
+
+        # Turning spills soil off the blade equally in either direction.
+        # With turning disabled, retain the full soil resistance.
+        spill_factor = (float(np.clip(1.0 - abs(self.v[1]) / self.angular_velocity_limit, 0.0, 1.0))
+                        if self.angular_velocity_limit > 0.0 else 1.0)
+        self.Fb *= spill_factor
+        self.Mb *= spill_factor
        
     def track_terrain_interaction(self):
         self.vtL = self.saturation(self.dxyz[0] - self.b / 2 * self.daBg[2], self.velocity_limit)
@@ -451,17 +487,19 @@ class BulldozerSimulation:
                 if max_idx > n_pts * 0.9 and self._nearest_path_idx < n_pts * 0.1:
                     break
             
-            errors, _     = self.controller_errors()
-            self.bld_ang += self.gain * self.Kp * errors
+            errors, _ = self.controller_errors()  # Retain error diagnostics when control is disabled.
+            if self.enable_blade_control:
+                self.bld_ang += self.gain * self.Kp * errors
 
             self.v_dot = self.vehicle_dynamics()
             self.v    += self.dt * self.v_dot
             self.v[0]  = max(min(self.v[0], self.velocity_limit), 0)
             self.v[1]  = self.saturation(self.v[1], self.angular_velocity_limit)
             self.q_dot = self.S_matrix() @ self.v
-
+            
             self.q   += self.dt * self.q_dot
             self.total_distance += np.linalg.norm(self.dt * self.q_dot[0:3])
+            
             self.q[3:6] = self.wrap_angles(self.q[3:6])
             a, B, g         = self.q[3:6]
             self.R_lg       = self.rotation_lg(a, B, g)
@@ -562,9 +600,9 @@ class BulldozerSimulation:
         sa, ca = np.sin(a_s), np.cos(a_s)
         sB, cB = np.sin(B_s), np.cos(B_s)
         sg, cg = np.sin(g_s), np.cos(g_s)
-        nx = ca * sB * cg + sa * sg
-        ny = ca * sB * sg - sa * cg
-        nz = ca * cB
+        n_x = ca * sB * cg + sa * sg
+        n_y = ca * sB * sg - sa * cg
+        n_z = ca * cB
 
         margin = 2.0
         cx   = (data[:, 1].max() + data[:, 1].min()) / 2
@@ -577,12 +615,40 @@ class BulldozerSimulation:
         xs = np.linspace(cx - half, cx + half, 30)
         ys = np.linspace(cy - half, cy + half, 30)
         Xs, Ys = np.meshgrid(xs, ys)
-        Zs = -(nx * Xs + ny * Ys) / nz
-        ax.plot_surface(Xs, Ys, Zs, alpha=0.3, color='tan', zorder=0)
+        Zs = -(n_x * Xs + n_y * Ys) / n_z
+        ax.plot_surface(Xs, Ys, Zs, color='none', edgecolor='none', zorder=0)
+
+        grid_spacing = max(2 * half / 10, 0.5)
+        surf_grid = sim.surface_grid((cx - half, cx + half), (cy - half, cy + half), grid_spacing)
+        grid_segments = [
+            [(surf_grid.nodes[u]['x'], surf_grid.nodes[u]['y'], surf_grid.nodes[u]['z']),
+             (surf_grid.nodes[v]['x'], surf_grid.nodes[v]['y'], surf_grid.nodes[v]['z'])]
+            for u, v in surf_grid.edges()
+        ]
+        ax.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
+
+        fig_grid = plt.figure(figsize=(7, 7))
+        ax_grid  = fig_grid.add_subplot(projection='3d')
+        ax_grid.add_collection3d(Line3DCollection(grid_segments, colors='saddlebrown', linewidths=0.5, alpha=0.5, zorder=0))
+        ax_grid.set_xlim(cx - half, cx + half)
+        ax_grid.set_ylim(cy - half, cy + half)
+        ax_grid.set_zlim(cz - half, cz + half)
+        ax_grid.set_box_aspect([1, 1, 1])
+        ax_grid.grid(False)
+        ax_grid.xaxis.pane.fill = False
+        ax_grid.yaxis.pane.fill = False
+        ax_grid.zaxis.pane.fill = False
+        ax_grid.set_xlabel("X (m)")
+        ax_grid.set_ylabel("Y (m)")
+        ax_grid.set_zlabel("Z (m)")
+        fig_grid.savefig("figures/surface_grid.png", dpi=120)
+        plt.close(fig_grid)
+
         ax.set_xlim(cx - half, cx + half)
         ax.set_ylim(cy - half, cy + half)
         ax.set_zlim(cz - half, cz + half)
         ax.set_box_aspect([1, 1, 1])
+        ax.grid(False)
         ax.set_xlabel("X (m)")
         ax.set_ylabel("Y (m)")
         ax.set_zlabel("Z (m)")
@@ -621,7 +687,7 @@ class BulldozerSimulation:
 
         x_line = np.array([cx - half, cx + half])
         ax_top.axhline(cy, color='tan', linewidth=2, alpha=0.7)
-        ax_side.plot(x_line, -(nx * x_line + ny * cy) / nz, color='tan', linewidth=2, alpha=0.7)
+        ax_side.plot(x_line, -(n_x * x_line + n_y * cy) / n_z, color='tan', linewidth=2, alpha=0.7)
 
         hl, hb = sim.l / 2, sim.b / 2
         c_local = np.array([
@@ -731,9 +797,9 @@ class BulldozerSimulation:
                     blade_lines_side[k] = None
 
             # Blade corners in global frame
-            R_bld = sim.rotation_lg(data[i, 17], data[i, 18], data[i, 19])
+            R_bld            = sim.rotation_lg(data[i, 17], data[i, 18], data[i, 19])
             corners_body_rel = (R_bld @ blade_corners_blade.T).T + blade_pivot_body
-            blade_g = data[i, 1:4] + (R @ corners_body_rel.T).T
+            blade_g          = data[i, 1:4] + (R @ corners_body_rel.T).T
 
             poly = Poly3DCollection([blade_g.tolist()], alpha=0.5,
                                     facecolor='gold', edgecolor='goldenrod', linewidth=1.5)
@@ -801,7 +867,7 @@ class BulldozerSimulation:
                 center  = pts_xz.mean(axis=0)
                 angles  = np.arctan2(pts_xz[:, 1] - center[1], pts_xz[:, 0] - center[0])
                 side_xz = pts_xz[np.argsort(angles)]
-                ps = MplPolygon(side_xz, alpha=0.4, closed=True,
+                ps      = MplPolygon(side_xz, alpha=0.4, closed=True,
                                 facecolor='saddlebrown', edgecolor='sienna', linewidth=0.8)
                 ax_side.add_patch(ps)
                 pile_patch_side[0] = ps
@@ -820,7 +886,8 @@ class BulldozerSimulation:
 
 
 def main():
-    sim = BulldozerSimulation() 
+    sim = BulldozerSimulation(enable_blade_control=False)
+    sim.bld_ang = np.array([0.0, 0.0, 0.0])
     sim.run_and_plot(use_path_controller = False, stop_time=2)
 
 
