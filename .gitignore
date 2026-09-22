@@ -1,0 +1,126 @@
+############################################
+# MATLAB / Simulink Core
+############################################
+
+# Autosave / backup files
+*.asv
+*.m~
+*.autosave
+
+# Simulink models autosave backups
+*.slx.autosave
+*.mdl.autosave
+
+# Simulink cache and build artifacts
+*.slxc
+*.slxp
+*.slxc.lock
+
+# Simulink Project metadata (optional: ignore if not collaborating via MATLAB Projects)
+*.prj
+*.prj.bak
+
+############################################
+# Code Generation (VERY IMPORTANT)
+############################################
+
+# Simulink Coder / Embedded Coder
+slprj/
+sccprj/
+codegen/
+
+# Rapid Accelerator / simulation cache
+*.rtw
+*.tmwinternal
+*.binfo
+*.d
+*.mk
+
+# Generated C/C++/object files
+*.o
+*.obj
+*.dll
+*.exe
+*.out
+
+############################################
+# MATLAB App Designer / Toolboxes
+############################################
+
+*.mlappinstall
+*.mltbx
+
+############################################
+# MATLAB Path / Preferences (User-specific)
+############################################
+
+pathdef.m
+startup.m
+
+# MATLAB preferences folder (sometimes committed accidentally)
+prefdir/
+
+############################################
+# Help / Documentation Build Artifacts
+############################################
+
+helpsearch*/
+
+############################################
+# OS-Specific Junk
+############################################
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+############################################
+# Octave (if mixed environments)
+############################################
+
+octave-workspace
+
+############################################
+# Logs / Temporary Files
+############################################
+
+*.log
+*.tmp
+
+############################################
+# Parallel Computing Toolbox
+############################################
+
+# Job storage location (can explode in size)
+parallel_cluster_jobs/
+
+############################################
+# Simulink Data Inspector / Simulation Outputs
+############################################
+
+*.mldatx
+*.dmr
+
+############################################
+# Coverage / Testing
+############################################
+
+coverage/
+*.cvdata
+
+############################################
+# Misc
+############################################
+
+*.bak
+*.old
+*.swp
+*.json
+*.pyc
+*.png
+simulation_3d_grt_rtw/
+*.gif
+
