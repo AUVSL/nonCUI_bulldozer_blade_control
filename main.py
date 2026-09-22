@@ -1,4 +1,5 @@
 from __future__ import annotations
+from time import perf_counter
 from typing import Callable, Optional, Sequence
 from numpy.typing import ArrayLike
 from sim_types import TerrainGrid, ForceSample, PileState, BladeFrame, ContactMap, FloatArray, GridCell, Point3, Scalar, VectorLike
@@ -909,6 +910,9 @@ class DozerSimulation():
 
     def run(self) -> None:
         """Advance either the blade-enabled or tracked-body simulation."""
+        run_start = perf_counter()
+        total_step_real_time = 0.0
+        completed_steps = 0
         t = 0.0
         # Include the initial pose and every completed step of this run.
         # Read the reference now in case it was changed after construction.
@@ -916,7 +920,8 @@ class DozerSimulation():
         if self.enable_blade:
             center = self._blade_bottom_center()
             depth_errors.append(self._undeformed_height(center) - center[2] - self.controller.desired_depth)
-        for _ in range(int(self.stop_time / self.dt)):
+        for step_index in range(int(self.stop_time / self.dt)):
+            step_start = perf_counter()
             t += self.dt
 
             if self.enable_blade:
@@ -946,10 +951,20 @@ class DozerSimulation():
             else:
                 self.neighbor_log.append(np.array(neighbor_points))
 
+            total_step_real_time += perf_counter() - step_start
+            completed_steps = step_index + 1
+
             # Keep the terminal pose in the history and RMSE as well.
             if (self.total_distance >= self.stop_distance
                     or (self.use_path_controller and self.controller.path_complete)):
                 break
+
+        final_real_time = perf_counter() - run_start
+        average_step_real_time = (
+            total_step_real_time / completed_steps if completed_steps else 0.0
+        )
+        print(f"Average real time per simulation step: {average_step_real_time:.6f} s")
+        print(f"Final simulation time: {t:.3f} s | Final real time: {final_real_time:.6f} s")
 
         self.blade_depth_rmse = float(np.sqrt(np.mean(np.square(depth_errors)))) if depth_errors else None
         if self.blade_depth_rmse is not None:
