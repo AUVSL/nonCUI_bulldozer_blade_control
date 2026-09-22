@@ -4,6 +4,11 @@ Examples:
     python tuning.py pd --p-gains 0.16 0.32 --d-gains 0 0.16
     python tuning.py pi --p-gains 0.002 0.004 --i-gains 0 0.002
 """
+from __future__ import annotations
+from typing import Optional, Union
+from numpy.typing import ArrayLike
+from sim_types import FloatArray
+
 import argparse
 import csv
 from pathlib import Path
@@ -19,13 +24,13 @@ from main import DozerSimulation
 class Tuning:
     """Search pitch Kp and Kd (PD) or Ki (PI) using fresh simulations."""
 
-    def __init__(self, controller_type="pd"):
+    def __init__(self, controller_type: str="pd") -> None:
         if controller_type not in ("pd", "pi"):
             raise ValueError("Controller type must be 'pd' or 'pi'.")
-        self.controller_type = controller_type
-        self.gain_attribute = "Kd" if controller_type == "pd" else "Ki"
+        self.controller_type: str = controller_type
+        self.gain_attribute: str = "Kd" if controller_type == "pd" else "Ki"
 
-    def grid_search(self, p_gains, secondary_gains, duration=5.0, desired_depth=0.3, output_dir=None):
+    def grid_search(self, p_gains: ArrayLike, secondary_gains: ArrayLike, duration: float=5.0, desired_depth: float=0.3, output_dir: Optional[Union[str, Path]]=None) -> FloatArray:
         """Return RMSE[secondary_index, p_index]; save trial data and a heatmap.
 
         Gains are assigned directly to controller.Kp[1] and the selected controller.Kd[1] or controller.Ki[1],
@@ -83,7 +88,7 @@ class Tuning:
         return rmse
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_subparsers(dest="controller_type", required=True)
     for mode, p_defaults, secondary_defaults in (

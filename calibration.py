@@ -2,6 +2,10 @@
 Calibration and model-fitting utilities for BulldozerSimulation.
 These are legacy / analysis tools kept separate to reduce clutter in main.py.
 """
+from __future__ import annotations
+from typing import Optional
+from sim_types import FloatArray, Scalar
+
 import os
 from math import comb as _comb
 
@@ -14,7 +18,7 @@ os.makedirs("figures", exist_ok=True)
 class BulldozerCalibration:
     """Inherits from BulldozerSimulation; adds sweep, threshold, and torque-fit tools."""
 
-    def plot_track_force_sweep(self):
+    def plot_track_force_sweep(self) -> None:
         """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
         from main import BulldozerSimulation
 
@@ -45,7 +49,7 @@ class BulldozerCalibration:
         plt.close(fig)
         print("Saved track_force_sweep.png")
 
-    def threshold_run(self, fraction):
+    def threshold_run(self, fraction: Scalar) -> Scalar:
         from main import BulldozerSimulation
 
         sim = BulldozerSimulation()
@@ -55,7 +59,7 @@ class BulldozerCalibration:
         data = np.array(sim.log)
         return np.max(np.abs(data[:, 2]))   # peak |y| displacement
 
-    def find_straight_threshold(self, tol=1e-4, n_iter=1000):
+    def find_straight_threshold(self, tol: float=1e-4, n_iter: int=1000) -> float:
         """Binary search for the largest fraction where peak |y| > tol."""
         lo, hi = 0.0, 1.0
         for _ in range(n_iter):
@@ -67,7 +71,7 @@ class BulldozerCalibration:
         print(f"Converged to straight threshold: {(lo + hi) / 2}")
         return (lo + hi) / 2
 
-    def build_4pl(self, threshold=0.799, n_samples=100):
+    def build_4pl(self, threshold: float=0.799, n_samples: int=100) -> tuple[FloatArray, tuple[Scalar, Scalar, Scalar], float, Scalar]:
         """Fit 4PL-q25/50/75 piecewise-linear model and return (coeffs, knots, threshold, ang_max)."""
         from main import BulldozerSimulation
 
@@ -94,7 +98,7 @@ class BulldozerCalibration:
               f"coeffs={np.array2string(coeffs, precision=4)}")
         return coeffs, (k1, k2, k3), threshold, ang_max
 
-    def fit_torque(self, threshold=0.799, n_samples=600):
+    def fit_torque(self, threshold: float=0.799, n_samples: int=600) -> None:
         """
         Fit angle→torque-fraction mappings using three approaches:
           1. Single-term basis functions (power/log/exp/trig)
@@ -119,7 +123,7 @@ class BulldozerCalibration:
         ang_max = ang.max()
 
         # ── 1. Single-term basis fits ──────────────────────────────────────────
-        def _b(x, name):
+        def _b(x: FloatArray, name: str) -> FloatArray:
             return {
                 "ang^0.25":             x ** 0.25,
                 "ang^0.5":              x ** 0.5,
@@ -214,10 +218,10 @@ class BulldozerCalibration:
         ax1.grid(True)
 
         # ── 2. Piecewise fits ──────────────────────────────────────────────────
-        def H(x, k):
+        def H(x: FloatArray, k: Scalar) -> FloatArray:
             return np.maximum(x - k, 0)
 
-        def _fit(X):
+        def _fit(X: FloatArray) -> tuple[FloatArray, Scalar, Scalar]:
             c, _, _, _ = np.linalg.lstsq(X, T, rcond=None)
             r = T - X @ c
             return c, np.sqrt(np.mean(r**2)), np.mean(np.abs(r))
@@ -263,7 +267,7 @@ class BulldozerCalibration:
         best_pw = ranked_pw[0]
         print(f"\nBest: {best_pw}  RMSE={results_pw[best_pw][1]:.6f}")
 
-        def build_X(name, x):
+        def build_X(name: str, x: FloatArray) -> Optional[FloatArray]:
             ftype, extra = results_pw[name][3], results_pw[name][4]
             k = extra
             if ftype == '2PL':   return np.c_[x,           H(x, k)           ]
@@ -294,7 +298,7 @@ class BulldozerCalibration:
         # ── 3. Bezier fits ─────────────────────────────────────────────────────
         t = ang / ang_max
 
-        def bernstein(t_vec, n):
+        def bernstein(t_vec: FloatArray, n: int) -> FloatArray:
             B = np.zeros((len(t_vec), n + 1))
             for i in range(n + 1):
                 B[:, i] = _comb(n, i) * t_vec**i * (1 - t_vec)**(n - i)

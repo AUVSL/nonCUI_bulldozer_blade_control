@@ -1,4 +1,9 @@
 """Mode-aware visualization for the surface-aware bulldozer simulation."""
+from __future__ import annotations
+from typing import Optional, Sequence, Union, TYPE_CHECKING
+from sim_types import FloatArray, MatrixLike, PileState, Scalar, VectorLike
+from matplotlib.artist import Artist
+
 
 from pathlib import Path
 
@@ -14,6 +19,10 @@ from mpl_toolkits.mplot3d import proj3d
 from PIL import Image
 
 
+if TYPE_CHECKING:
+    from main import DozerSimulation
+
+
 class Visualization:
     """Visualize a simulation with optional blade-specific layers.
 
@@ -21,10 +30,10 @@ class Visualization:
     selecting blade geometry, deforming terrain, and output timing.
     """
 
-    def __init__(self, simulation):
-        self.simulation = simulation
+    def __init__(self, simulation: DozerSimulation) -> None:
+        self.simulation: DozerSimulation = simulation
 
-    def _pile_vertices(self, blade, pile_state):
+    def _pile_vertices(self, blade: MatrixLike, pile_state: PileState) -> FloatArray:
         """Build a full-width pile that grows outward from the blade with soil load."""
         simulation = self.simulation
         h3, h4, roll, yaw = pile_state
@@ -45,7 +54,7 @@ class Visualization:
             load_height = (1 - fraction) * h3 + fraction * h4
             bottom = center + (0.5 - fraction) * simulation.B1 * rotation[:, 1]
 
-            def clearance(distance):
+            def clearance(distance: Scalar) -> Scalar:
                 point = bottom + distance * up
                 return point[2] - simulation._undeformed_height(point)
 
@@ -80,7 +89,7 @@ class Visualization:
             vertices.extend([base, crest, toe])
         return np.asarray(vertices) if visible else np.empty((0, 3))
 
-    def _pile_faces(self, vertices, terrain_heights=None):
+    def _pile_faces(self, vertices: MatrixLike, terrain_heights: Optional[FloatArray]=None) -> list[FloatArray]:
         """Triangulate only the above-ground brown pile."""
         if not len(vertices):
             return []
@@ -93,7 +102,7 @@ class Visualization:
                 faces.append(np.array([left[first], right[second], right[first]]))
         return faces
 
-    def _surface_tooth_faces(self, blade, terrain_heights, blade_yaw=0.0):
+    def _surface_tooth_faces(self, blade: MatrixLike, terrain_heights: FloatArray, blade_yaw: float=0.0) -> list[FloatArray]:
         """Bridge the cutting edge to the next soil grid boundary ahead of it."""
         simulation = self.simulation
         blade = np.asarray(blade)
@@ -103,7 +112,7 @@ class Visualization:
         forward[2] = 0.0
         forward /= max(np.linalg.norm(forward), 1e-12)
 
-        def height(point):
+        def height(point: VectorLike) -> Scalar:
             i, j = simulation._grid_cell(point)
             corners = [(*simulation.grid_pts[ci][cj][:2], terrain_heights[ci, cj])
                        for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))]
@@ -131,12 +140,12 @@ class Visualization:
         return faces
 
     @staticmethod
-    def _pile_in_front_of_blade(face, eye, body_center):
+    def _pile_in_front_of_blade(face: FloatArray, eye: FloatArray, body_center: FloatArray) -> bool:
         """The pile is on the opposite side of the blade plane from the body."""
         normal = np.cross(face[1] - face[0], face[3] - face[0])
-        return np.dot(normal, body_center - face[0]) * np.dot(normal, eye - face[0]) < 0.0
+        return bool(np.dot(normal, body_center - face[0]) * np.dot(normal, eye - face[0]) < 0.0)
 
-    def forces_visualization(self, filename="figures/forces.gif"):
+    def forces_visualization(self, filename: Union[str, Path]="figures/forces.gif") -> Path:
         """Animate logged forces, blade pitch, blade-center heights, and requested rates.
 
         Uses the same frame stride and playback rate as the geometry GIF.
@@ -196,7 +205,7 @@ class Visualization:
             cursors.append(axis.axvline(times[0], color="gray", linestyle="--", linewidth=0.8))
         figure.tight_layout(rect=(0, 0, 1, 0.96))
 
-        def update(index):
+        def update(index: int) -> list[Artist]:
             for line, history in traces:
                 line.set_data(times[:index + 1], history[:index + 1])
             for cursor in cursors:
@@ -218,7 +227,7 @@ class Visualization:
         print(f"Saved {output}")
         return output
 
-    def visualization(self, show_neighbors: bool = False, show_desired_depth: bool = False):
+    def visualization(self, show_neighbors: bool = False, show_desired_depth: bool = False) -> None:
         """Write the simulation GIF; optionally show the red desired-depth reference."""
         simulation = self.simulation
         enable_blade = simulation.enable_blade
@@ -474,7 +483,7 @@ class Visualization:
         ia, ja = edge_a[:, 0], edge_a[:, 1]
         ib, jb = edge_b[:, 0], edge_b[:, 1]
 
-        def grid_segments(z):
+        def grid_segments(z: FloatArray) -> FloatArray:
             return np.stack([
                 np.column_stack([
                     grid_x[ia, ja], grid_y[ia, ja], z[ia, ja]
@@ -492,7 +501,7 @@ class Visualization:
                           | ((ja == last_j) & (jb == last_j)))
         terrain_center = np.array([grid_x.mean(), grid_y.mean(), soil_base_height])
 
-        def soil_wall_faces(z):
+        def soil_wall_faces(z: FloatArray) -> FloatArray:
             upper = grid_segments(z)[boundary_edges]
             lower = upper.copy()
             lower[:, :, 2] = soil_base_height
@@ -502,7 +511,7 @@ class Visualization:
             faces[inward] = faces[inward, ::-1]
             return faces
 
-        def soil_top_faces(z):
+        def soil_top_faces(z: FloatArray) -> FloatArray:
             points = np.stack([grid_x, grid_y, z], axis=-1)
             return np.stack([
                 points[:-1, :-1], points[1:, :-1],
@@ -572,7 +581,7 @@ class Visualization:
         axis_back.add_collection(soil_walls_back)
         axis_side.add_collection(soil_walls_side)
 
-        def set_grid(frame_index):
+        def set_grid(frame_index: int) -> None:
             soil_top_3d.set_verts(soil_top_faces(grid_z_data[frame_index]))
             frame_segments = grid_segments(grid_z_data[frame_index])
             grid_3d.set_segments(frame_segments)
@@ -645,7 +654,7 @@ class Visualization:
             axis.add_collection(faces)
             body_projections.append((projection, faces))
 
-        def set_body(frame_index):
+        def set_body(frame_index: int) -> None:
             faces = body_data[frame_index][:, body_faces].reshape(-1, 4, 3)
             for projection, artist in body_projections:
                 artist.set_verts(faces[:, :, projection])
@@ -653,7 +662,7 @@ class Visualization:
         # Keep the contact lines for diagnostics; render the rounded tracks.
         initial_tracks = track_data[0]
 
-        def track_polygons(frame_index):
+        def track_polygons(frame_index: int) -> list[FloatArray]:
             return [vertices[face] for vertices in track_mesh_data[frame_index]
                     for face in track_faces]
 
@@ -675,7 +684,7 @@ class Visualization:
         axis_back.add_collection(track_back)
         axis_side.add_collection(track_side)
 
-        def set_tracks(frame_index):
+        def set_tracks(frame_index: int) -> None:
             faces = track_polygons(frame_index)
             track_top.set_verts([face[:, [0, 1]] for face in faces])
             track_back.set_verts([face[:, [1, 2]] for face in faces])
@@ -690,7 +699,7 @@ class Visualization:
 
         arrow_length = simulation.subdivision * 0.6
 
-        def forward(frame_index):
+        def forward(frame_index: int) -> FloatArray:
             return simulation._rotation_lg(*data[frame_index, 4:7])[:, 0]
 
         initial_forward = forward(0)
@@ -766,7 +775,7 @@ class Visualization:
             )
             q_lateral_3d = [None]
 
-        def blade_face_color(face, projection=None):
+        def blade_face_color(face: FloatArray, projection: Optional[Sequence[int]]=None) -> str:
             # The vertex order faces blade-local +x (toward the soil).
             # Counterclockwise screen winding exposes the front; clockwise
             # exposes the back. Projection also handles the isometric camera.
@@ -861,7 +870,7 @@ class Visualization:
                 axis.add_collection(tooth)
                 tooth_projections.append((projection, tooth))
 
-            def set_pile(frame_index):
+            def set_pile(frame_index: int) -> None:
                 vertices = pile_data[frame_index]
                 faces = self._pile_faces(vertices)
                 pile_3d.set_verts(faces)
@@ -891,7 +900,7 @@ class Visualization:
 
         # Gather the vehicle faces and colors in rear/hood/right-track/left-track
         # order, followed by two arms and the blade when enabled.
-        def vehicle_polygons(frame_index):
+        def vehicle_polygons(frame_index: int) -> list[FloatArray]:
             faces = list(body_data[frame_index][:, body_faces].reshape(-1, 4, 3))
             faces.extend(track_polygons(frame_index))
             if enable_blade:
@@ -926,7 +935,7 @@ class Visualization:
             axis_3d.add_collection3d(artist)
             vehicle_parts.append(artist)
 
-        def ordered_vehicle_parts(frame_index):
+        def ordered_vehicle_parts(frame_index: int) -> list[Artist]:
             # Recover the camera in world coordinates from the projection.
             eye = np.linalg.solve(axis_3d.get_proj(), [0.0, 0.0, -1.0, 0.0])
             pose = data[frame_index, 1:7]
@@ -960,7 +969,7 @@ class Visualization:
                     artists[0:0] = [tooth_3d, pile_3d]
             return artists
 
-        def set_neighbors(frame_index):
+        def set_neighbors(frame_index: int) -> None:
             points = (
                 np.asarray(neighbor_data[frame_index])
                 if len(neighbor_data[frame_index])
@@ -971,7 +980,7 @@ class Visualization:
             green_back.set_offsets(points[:, [1, 2]])
             green_side.set_offsets(points[:, [0, 2]])
 
-        def set_body_diagnostics(frame_index):
+        def set_body_diagnostics(frame_index: int) -> None:
             points = track_data[frame_index].reshape(-1, 3)
             direction = forward(frame_index)
             body_arrow_top.set_offsets(points[:, [0, 1]])
@@ -1026,7 +1035,7 @@ class Visualization:
                 length=1, color="purple", zorder=7,
             )
 
-        def set_q_and_blade(frame_index):
+        def set_q_and_blade(frame_index: int) -> None:
             x, y, z = data[frame_index, 1:4]
             direction = forward(frame_index)
             q_arrow_top.set_offsets([[x, y]])
@@ -1129,7 +1138,7 @@ class Visualization:
             figure.canvas.draw()
         figure.set_layout_engine("none")
 
-        def update(frame_index):
+        def update(frame_index: int) -> None:
             polygons = vehicle_polygons(frame_index)
             for artist, section in zip(vehicle_parts, part_slices):
                 artist.set_verts(polygons[section])
