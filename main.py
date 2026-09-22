@@ -8,6 +8,7 @@ import numpy as np
 import networkx as nx
 
 from controllers import Control
+from contact_kernels import blade_support_heights, track_support_heights
 from visualization import Visualization
 
 
@@ -108,13 +109,17 @@ class DozerSimulation():
 
         self.surf_grid: nx.Graph = self._surface_grid()
 
-        # node (x, y, z) cached as plain Python floats, indexed [i][j], so the
-        # hot height lookups skip the networkx attribute dicts entirely.
-        self.grid_pts: TerrainGrid = [[(self.surf_grid.nodes[(i, j)]['x'],
-                           self.surf_grid.nodes[(i, j)]['y'],
-                           self.surf_grid.nodes[(i, j)]['z'])
-                          for j in range(len(self.vs))] for i in range(len(self.us))]
+        # Contiguous numeric storage lets the contact solver operate in compiled
+        # code while preserving the existing grid_pts[i][j] interface.
+        self.grid_pts: TerrainGrid = np.array([[(self.surf_grid.nodes[(i, j)]["x"],
+                           self.surf_grid.nodes[(i, j)]["y"],
+                           self.surf_grid.nodes[(i, j)]["z"])
+                          for j in range(len(self.vs))] for i in range(len(self.us))], dtype=float)
         self.starting_grid_heights: FloatArray = self._grid_heights().copy()
+        self._terrain_geometry: FloatArray = self._build_terrain_geometry()
+        self._undeformed_coefficients: FloatArray = np.empty((0, 0, 4))
+        self._undeformed_cache_source: FloatArray = np.empty((0, 0))
+        self._refresh_undeformed_coefficients()
 
         # --------------------- Dependent simulation limit parameters ----------------------
         self.max_world_cut_depth: float    = self.H
@@ -217,14 +222,45 @@ class DozerSimulation():
                     weight += v_clip if self.is_surface_pitched else u_clip
 
                 x, y, z = u * e1 + v * e2 + weight * self.offset * e3
-
                 node = grid.nodes[(i, j)]
                 node["x"], node["y"], node["z"] = float(x), float(y), float(z)
         return grid
 
     def _grid_heights(self) -> FloatArray:
-        """Snapshot of every node height, indexed [i][j], for the GIF's surface."""
-        return np.array([[pt[2] for pt in col] for col in self.grid_pts])
+        """Snapshot every node height, normalizing externally replaced grids."""
+        if not isinstance(self.grid_pts, np.ndarray):
+            self.grid_pts = np.asarray(self.grid_pts, dtype=float)
+            if hasattr(self, "_terrain_geometry"):
+                self._terrain_geometry = self._build_terrain_geometry()
+        return self.grid_pts[:, :, 2].copy()
+
+    def _build_terrain_geometry(self) -> FloatArray:
+        """Cache each cell origin and horizontal interpolation axes."""
+        origins = self.grid_pts[:-1, :-1, :2]
+        es = self.grid_pts[1:, :-1, :2] - origins
+        et = self.grid_pts[:-1, 1:, :2] - origins
+        return np.dstack((origins, es, np.sum(es * es, axis=2),
+                          et, np.sum(et * et, axis=2)))
+
+    def _refresh_undeformed_coefficients(self) -> None:
+        """Cache bilinear height coefficients for the original soil."""
+        heights = np.asarray(self.starting_grid_heights)
+        h00 = heights[:-1, :-1]
+        h10 = heights[1:, :-1]
+        h01 = heights[:-1, 1:]
+        h11 = heights[1:, 1:]
+        self._undeformed_coefficients = np.stack(
+            (h00, h10 - h00, h01 - h00, h11 - h10 - h01 + h00), axis=2
+        )
+        self._undeformed_cache_source = heights.copy()
+
+    def _ensure_undeformed_coefficients(self) -> None:
+        """Refresh after callers replace or directly edit starting heights."""
+        if (self._undeformed_cache_source.shape != self.starting_grid_heights.shape
+                or not np.array_equal(self._undeformed_cache_source,
+                                      self.starting_grid_heights)):
+            self._refresh_undeformed_coefficients()
+
 
     def _get_neighbor_points(self, point: VectorLike) -> list[Point3]:
         i, j = self._grid_cell(point)
@@ -539,152 +575,45 @@ class DozerSimulation():
         support = self._support_heights(R)
         return float(support[1].max()), float(support[0].max())
 
+    def _ensure_terrain_arrays(self) -> None:
+        """Normalize externally replaced terrain grids before compiled calls."""
+        if not isinstance(self.grid_pts, np.ndarray):
+            self.grid_pts = np.asarray(self.grid_pts, dtype=float)
+            self._terrain_geometry = self._build_terrain_geometry()
+        expected = (len(self.us) - 1, len(self.vs) - 1, 8)
+        if self._terrain_geometry.shape != expected:
+            self._terrain_geometry = self._build_terrain_geometry()
+
     def _support_heights(self, R: FloatArray, check_cut_limit: bool=False) -> FloatArray:
-        """
-        Lowest body height each quarter of the contact patch calls for, as a
-        [right, left] x [back, front] array. Tracks use current soil; the enabled
-        blade top uses the original soil surface. The body rests at the highest
-        of the four, so any quarter asking for less hangs clear of the
-        ground unless the pose balances them: _body_contact_roll balances left
-        against right, _contact_pitch front against back.
-
-        The halves overlap at the track midpoint, so a body pivoting on a peak
-        directly beneath its center reads as balanced from every direction --
-        which it is, since no rotation can bring anything else down onto the
-        ground without driving that peak through the belly.
-
-        The surface is piecewise planar with kinks only on the grid lines, so a
-        straight track's deepest penetration always occurs at an endpoint or a
-        grid-line crossing; between those the clearance varies linearly. Sampling
-        the ends plus every grid crossing therefore finds the true deepest point
-        exactly (a uniform scan would step over the kinks).
-        """
-        fwd     = R[:, 0]
-        lat     = R[:, 1] * (self.b / 2)      # body center -> track lateral offset (local +y)
-        half_l  = self.l / 2
-        support = np.full((2, 2), -np.inf)    # [right, left] x [back, front]
-        for i, side in enumerate((-1.0, 1.0)):   # right (-lat) and left (+lat) tracks
-            base  = self.q[:3] + side * lat
-            ss    = {-half_l, 0, half_l}         # track ends
-
-            # the track only spans the tiles between its two ends, so search that
-            # neighborhood of grid lines instead of the whole grid
-            back_cell  = self._grid_cell(base - half_l * fwd)
-            front_cell = self._grid_cell(base + half_l * fwd)
-            # seach x axis tiles via (self.us, 0) then y axis tiles via (self.vs, 1)
-            for grid, axis in ((self.us, 0), (self.vs, 1)):
-                # skip if the track runs parallel to this axis' lines (fwd[axis] ~ 0) since it never crosses
-                # plus avoid divide by zero error later
-                if abs(fwd[axis]) > 1e-12:
-                    # grid lines bounding the tiles the ends fall in (+1 stop, +1 for the far tile's upper line)
-                    lo, hi = sorted((back_cell[axis], front_cell[axis]))
-                    #TODO: could super sample for smaller grid sizes so that surfaces difference above a certain size
-                    # are treated as "real" surface differnces
-                    near   = grid[lo:hi + 2]
-                    # solve grid = base[axis] + s*fwd[axis] for every nearby grid value at once
-                    for s in (near - base[axis]) / fwd[axis]:
-                        if -half_l < s < half_l:   # keep only crossings within the track
-                            ss.add(float(s))
-
-            for s in ss:
-                grid_crossing_point = base + s * fwd
-                neighbor_points = self._get_neighbor_points(grid_crossing_point)
-                height_to_surface = self._bilinear_height(grid_crossing_point, neighbor_points)
-                delta = height_to_surface - grid_crossing_point[2]
-                needed = delta + self.q[2]
-                # the midpoint (s == 0) is the last point of both halves
-                if s <= 0:
-                    support[i, 0] = max(support[i, 0], needed)
-                if s >= 0:
-                    support[i, 1] = max(support[i, 1], needed)
-
+        """Return exact track/blade support heights using compiled kernels."""
+        self._ensure_terrain_arrays()
+        support = track_support_heights(
+            self.q, R, self.b, self.l, self.us, self.vs, self.subdivision,
+            self._terrain_geometry, self.grid_pts
+        )
         if self.enable_blade:
             if check_cut_limit:
                 blade_R = R @ self._rotation_lg(
                     self.blade_roll_pitch_yaw[0], 0.0, self.blade_roll_pitch_yaw[2])
-                deepest_depth = (blade_R[2, 2] * self.blade_cut_depth() + abs(blade_R[2, 1]) * self.B1 / 2)
-                stop_height = (self._undeformed_height(self.q) - self.max_world_cut_depth + deepest_depth)
-                self.cut_limit_reached = bool(support.max() <= stop_height + self.contact_tol)
+                deepest_depth = (blade_R[2, 2] * self.blade_cut_depth()
+                                 + abs(blade_R[2, 1]) * self.B1 / 2)
+                stop_height = (self._undeformed_height(self.q)
+                               - self.max_world_cut_depth + deepest_depth)
+                self.cut_limit_reached = bool(
+                    support.max() <= stop_height + self.contact_tol
+                )
             support = np.maximum(support, self._blade_support_heights(R))
         return support
 
     def _blade_support_heights(self, R: FloatArray) -> FloatArray:
-        """Required body heights for the blade top above undeformed soil.
-
-        Classify support by body-local left/right and front/back, like the
-        tracks. Partition the full edge at grid and body-axis crossings. Within
-        each tile the interpolated clearance is quadratic, so also check its
-        interior maximum instead of relying only on the blade's endpoints.
-        """
-        edge        = self._blade_edge_local(top=True)
-        local_delta = edge[1] - edge[0]
-        start       = self.q[:3] + R @ edge[0]
-        delta       = R @ local_delta
-        breaks      = {0.0, 0.5, 1.0}
-        # seach x axis tiles via (self.us, 0) then y axis tiles via (self.vs, 1)
-        for grid, axis in ((self.us, 0), (self.vs, 1)):
-            # skip if the track runs parallel to this axis' lines (fwd[axis] ~ 0)
-            # to avoid divide by zero issue
-            if abs(delta[axis]) > 1e-12:
-                # log splits along the local normal blade length where x and y grid crossings are
-                lower, upper = sorted((start[axis], start[axis] + delta[axis]))
-                for coordinate in grid[(grid > lower) & (grid < upper)]:
-                    breaks.add(float((coordinate - start[axis]) / delta[axis]))
-
-        def needed(t: Scalar) -> Scalar:
-            point = start + t * delta
-            return self._undeformed_height(point) - (R @ (edge[0] + t * local_delta))[2]
-
-        # Support holds the highest requirement found for each region.
-        # Starting at negative infinity lets the first real value replace it;
-        # regions with no blade coverage remain -np.inf.
-        support = np.full((2, 2), -np.inf)
-        sorted_breaks = sorted(breaks)
-        # This visits consecutive intervals: [0, 0.3], [0.3, 0.5], and so on.
-        for lo, hi in zip(sorted_breaks[:-1], sorted_breaks[1:]):
-            left, middle, right = needed(lo), needed((lo + hi) / 2), needed(hi)
-            maximum             = max(left, right)
-            # A bilinear tile's maximum is at a corner, but the blade may miss that
-            # corner and encounter its highest terrain point inside the interval.
-            # For example, this unit tile has h(x, y) = x + y - 2*x*y:
-            #
-            #   y = 1    1 ------- 0
-            #            |         |
-            #   y = 0    0 ------- 1
-            #           x = 0     x = 1
-            #
-            # Along x = y = t, h(t) = 2*t - 2*t**2: both endpoints have height 0,
-            # but the midpoint has height 0.5. Other oblique paths can also have
-            # interior peaks, so check the quadratic's maximum, not just endpoints.
-            # Fit f(s) = A*s**2 + B*s + C, where s spans this interval:
-            # t = lo + s*(hi - lo). The samples give:
-            #   f(0)   = left   => C = left
-            #   f(1)   = right  => B = right - left - A
-            #   f(0.5) = middle => middle = (left + right)/2 - A/4
-            # Hence A = 2*(left + right - 2*middle).
-            #
-            # If A < 0, the curve bends downward and may have an interior maximum.
-            # Setting f'(s) = 2*A*s + B = 0 gives s = -B/(2*A).
-            # If 0 < s < 1, evaluate needed(lo + s*(hi - lo)) and compare it
-            # with the endpoint maximum. Otherwise, the endpoints suffice.
-            # The tolerance avoids dividing by a nearly zero A.
-            quadratic = 2 * (left + right - 2 * middle)
-            linear    = right - left - quadratic
-            if quadratic < -1e-12:
-                fraction = -linear / (2 * quadratic)
-                if 0.0 < fraction < 1.0:
-                    maximum = max(maximum, needed(lo + fraction * (hi - lo)))
-
-            # Splitting at center of tile ensures each local coordinate is non-zero since we include local x=0
-            local  = edge[0] + (lo + hi) / 2 * local_delta
-
-            sides = [i for i, sign in enumerate((-1, 1)) if sign * local[1] >= -1e-12]
-
-            # The blade edge always stays in front of the body origin (local x > 0),
-            # so update only the front support column (index 1).
-            for i in sides:
-                support[i, 1] = max(support[i, 1], maximum)
-        return support
+        """Return blade-top support with cached endpoints and terrain coefficients."""
+        self._ensure_terrain_arrays()
+        self._ensure_undeformed_coefficients()
+        return blade_support_heights(
+            self.q, R, self._blade_edge_local(top=True), self.us, self.vs,
+            self.subdivision, self._terrain_geometry,
+            self._undeformed_coefficients
+        )
 
     def _blade_edge_local(self, top: bool=False) -> FloatArray:
         """Blade edge endpoints in the body frame, including the arm offset."""
@@ -703,13 +632,18 @@ class DozerSimulation():
         return self.q[:3] + body_R @ self._blade_edge_local().mean(axis=0)
 
     def _undeformed_height(self, point: VectorLike) -> Scalar:
-        """Original soil height, unaffected by cuts made during the run."""
+        """Original soil height from cached per-cell bilinear coefficients."""
+        self._ensure_terrain_arrays()
+        self._ensure_undeformed_coefficients()
         i, j = self._grid_cell(point)
-        corners = [
-            (*self.grid_pts[ci][cj][:2], self.starting_grid_heights[ci, cj])
-            for ci, cj in ((i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1))
-        ]
-        return self._bilinear_height(point, corners)
+        geom = self._terrain_geometry[i, j]
+        dx, dy = point[0] - geom[0], point[1] - geom[1]
+        s = (dx * geom[2] + dy * geom[3]) / geom[4]
+        t = (dx * geom[5] + dy * geom[6]) / geom[7]
+        s = 0.0 if s < 0.0 else 1.0 if s > 1.0 else s
+        t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+        c = self._undeformed_coefficients[i, j]
+        return c[0] + c[1] * s + c[2] * t + c[3] * s * t
 
     def _bilinear_height(self, point: VectorLike, corners: Sequence[VectorLike]) -> Scalar:
         """Bilinearly interpolate height from a tile's four corner vertices."""
