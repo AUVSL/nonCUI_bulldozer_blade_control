@@ -1,5 +1,5 @@
 """
-Calibration and model-fitting utilities for BulldozerSimulation.
+Calibration and model-fitting utilities for DozerSimulation.
 These are legacy / analysis tools kept separate to reduce clutter in main.py.
 """
 from __future__ import annotations
@@ -16,11 +16,11 @@ os.makedirs("figures", exist_ok=True)
 
 
 class BulldozerCalibration:
-    """Inherits from BulldozerSimulation; adds sweep, threshold, and torque-fit tools."""
+    """Inherits from DozerSimulation; adds sweep, threshold, and torque-fit tools."""
 
     def plot_track_force_sweep(self) -> None:
         """Overlay XY trajectories: left track fixed at F_track_base, right track swept over 100 steps from 0 to 1 x F_track_base."""
-        from main import BulldozerSimulation
+        from main import DozerSimulation
 
         fractions = np.linspace(0, 1, 100)
         colors = plt.cm.viridis(np.linspace(0, 1, 100))
@@ -28,7 +28,7 @@ class BulldozerCalibration:
         fig, ax = plt.subplots(figsize=(10, 8))
 
         for i, fraction in enumerate(fractions):
-            sim = BulldozerSimulation()
+            sim = DozerSimulation()
             sim.F_track[0] = sim.F_track_base
             sim.F_track[1] = fraction * sim.F_track_base
             sim.run()
@@ -50,9 +50,9 @@ class BulldozerCalibration:
         print("Saved track_force_sweep.png")
 
     def threshold_run(self, fraction: Scalar) -> Scalar:
-        from main import BulldozerSimulation
+        from main import DozerSimulation
 
-        sim = BulldozerSimulation()
+        sim = DozerSimulation()
         sim.F_track[0] = sim.F_track_base
         sim.F_track[1] = fraction * sim.F_track_base
         sim.run()
@@ -73,12 +73,12 @@ class BulldozerCalibration:
 
     def build_4pl(self, threshold: float=0.799, n_samples: int=100) -> tuple[FloatArray, tuple[Scalar, Scalar, Scalar], float, Scalar]:
         """Fit 4PL-q25/50/75 piecewise-linear model and return (coeffs, knots, threshold, ang_max)."""
-        from main import BulldozerSimulation
+        from main import DozerSimulation
 
         fractions = np.linspace(0.0, threshold, n_samples)
         yaws = []
         for frac in fractions:
-            sim = BulldozerSimulation()
+            sim = DozerSimulation()
             sim.stop_time  = 0.5
             sim.F_track[0] = sim.F_track_base
             sim.F_track[1] = frac * sim.F_track_base
@@ -106,13 +106,13 @@ class BulldozerCalibration:
           3. Bezier (Bernstein) curves degrees 2–8
         Simulation data is generated once and shared across all three fits.
         """
-        from main import BulldozerSimulation
+        from main import DozerSimulation
 
         # ── Shared data generation ─────────────────────────────────────────────
         fractions = np.linspace(0.0, threshold, n_samples)
         yaws = []
         for frac in fractions:
-            sim = BulldozerSimulation()
+            sim = DozerSimulation()
             sim.F_track[0] = sim.F_track_base
             sim.F_track[1] = frac * sim.F_track_base
             sim.run()
@@ -357,9 +357,9 @@ class BulldozerCalibration:
 
 # ── convenience entry point ────────────────────────────────────────────────────
 if __name__ == "__main__":
-    from main import BulldozerSimulation
+    from main import DozerSimulation
 
-    class _Runner(BulldozerCalibration, BulldozerSimulation):
+    class _Runner(BulldozerCalibration, DozerSimulation):
         pass
 
     r = _Runner()
