@@ -27,4 +27,4 @@ COPY *.py ./
 COPY LICENSE ./
 
 USER simulator
-CMD ["python", "util.py"]
+CMD ["python", "main.py"]
