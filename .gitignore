@@ -127,3 +127,8 @@ simulation_3d_grt_rtw/
 
 # Track the VS Code Dev Containers configuration despite the JSON ignore rule.
 !.devcontainer/devcontainer.json
+
+
+*.nbc
+*.nbi
+__pycache__/

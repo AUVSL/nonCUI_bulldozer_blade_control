@@ -225,6 +225,8 @@ Visualization behavior remains covered by the pytest suite.
 
 ## Design notes
 
+- Terrain-contact loops are compiled with Numba and cached after their first use.
+  The first simulation in a fresh environment includes a one-time compilation cost.
 - The default time step is `0.01` seconds. Larger steps can make the integration
   and blade controller oscillate.
 - Lateral velocity is clamped by `lateral_velocity_limit`, which defaults to zero.
