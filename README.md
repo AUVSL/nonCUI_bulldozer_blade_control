@@ -23,3 +23,24 @@ Design Considerations:
 5) The driving force is really low to the point the vehicle cannot turn. This was done to make the forces in line with the sandy loam soil parameters the author, Sam Dekhterman, found in the literature. You will need need to increase the torque commands by at least x10 the base values to effectly turn.
 6) The block strucure is a little odd. Partically how the track control and initalizaion are set at once in the 'track_control_and_stopping' block. Feel free to alter this structure when modifying/ porting the simulation code.
 7) Lastly, please be carefull with the time step in simulink. If it is too large you will see oscillation in the integrators and thus postion. For that reason the ode4 Runge-Kutta solver with a step size of 0.0001 was used. Using a smaller step size dramatlly increased the run time. 
+
+## Reference
+
+This repository contains the code associated with the following paper:
+
+S. R. Dekhterman, M. Juston, W. R. Norris, D. Nottage, and A. Soylemezoglu,  
+**"A Human Decision Making Model for Bulldozer 3D Blade Control,"**  
+*Robotics and Autonomous Systems*, 2026.  
+https://doi.org/10.1016/j.robot.2026.105771
+
+### BibTeX
+
+```bibtex
+@article{dekhterman2026bulldozer,
+  title   = {A Human Decision Making Model for Bulldozer 3D Blade Control},
+  author  = {Dekhterman, Samuel R. and Juston, Marius and Norris, William R. and Nottage, Dustin and Soylemezoglu, Ahmet},
+  journal = {Robotics and Autonomous Systems},
+  year    = {2026},
+  doi     = {10.1016/j.robot.2026.105771}
+}
+```
