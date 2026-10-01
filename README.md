@@ -39,14 +39,3 @@ S. R. Dekhterman, M. Juston, W. R. Norris, D. Nottage, and A. Soylemezoglu,
 *Robotics and Autonomous Systems*, 2026.  
 https://doi.org/10.1016/j.robot.2026.105771
 
-### BibTeX
-
-```bibtex
-@article{dekhterman2026bulldozer,
-  title   = {A Human Decision Making Model for Bulldozer 3D Blade Control},
-  author  = {Dekhterman, Samuel R. and Juston, Marius and Norris, William R. and Nottage, Dustin and Soylemezoglu, Ahmet},
-  journal = {Robotics and Autonomous Systems},
-  year    = {2026},
-  doi     = {10.1016/j.robot.2026.105771}
-}
-```
