@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the associated paper below."
+type: software
+title: "nonCUI_bulldozer_blade_control"
+abstract: "Code associated with a 3D bulldozer blade controller and simulation."
+authors:
+  - family-names: "Dekhterman"
+    given-names: "Samuel R."
+repository-code: "https://github.com/AUVSL/nonCUI_bulldozer_blade_control"
+url: "https://github.com/AUVSL/nonCUI_bulldozer_blade_control"
+preferred-citation:
+  type: article
+  title: "A Human Decision Making Model for Bulldozer 3D Blade Control"
+  authors:
+    - family-names: "Dekhterman"
+      given-names: "Samuel R."
+    - family-names: "Juston"
+      given-names: "Marius"
+    - family-names: "Norris"
+      given-names: "William R."
+    - family-names: "Nottage"
+      given-names: "Dustin"
+    - family-names: "Soylemezoglu"
+      given-names: "Ahmet"
+  journal: "Robotics and Autonomous Systems"
+  year: 2026
+  doi: "10.1016/j.robot.2026.105771"
+  url: "https://doi.org/10.1016/j.robot.2026.105771"

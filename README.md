@@ -24,7 +24,13 @@ Design Considerations:
 6) The block strucure is a little odd. Partically how the track control and initalizaion are set at once in the 'track_control_and_stopping' block. Feel free to alter this structure when modifying/ porting the simulation code.
 7) Lastly, please be carefull with the time step in simulink. If it is too large you will see oscillation in the integrators and thus postion. For that reason the ode4 Runge-Kutta solver with a step size of 0.0001 was used. Using a smaller step size dramatlly increased the run time. 
 
-## Reference
+## Citation
+
+If you use this code in your research, please cite the associated paper below.
+The repository's [CITATION.cff](CITATION.cff) includes the software metadata and
+sets the paper as the preferred citation. Once this file is on GitHub's default
+branch, you can use **Cite this repository** in the repository sidebar to copy
+the citation in APA or BibTeX format.
 
 This repository contains the code associated with the following paper:
 
